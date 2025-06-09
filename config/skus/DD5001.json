@@ -1,0 +1,96 @@
+{
+  "sku": "DD5001",
+  "description": "Product Beta - SS3 Max High Output",
+  "pod_type": "SS3",
+  "power_level": "Max",
+  "available_modes": ["Offroad", "SMT", "WeightChecking"],
+  
+  "backlight": {
+    "template": "dual",
+    "relay_pins": [3, 4],
+    "test_duration_ms": 500
+  },
+  
+  "offroad_testing": {
+    "current": {
+      "min_mainbeam_A": 2.0,
+      "max_mainbeam_A": 2.5,
+      "min_backlight_A": 0.08,
+      "max_backlight_A": 0.18
+    },
+    "lux": {
+      "min_mainbeam": 4800,
+      "max_mainbeam": 5800
+    },
+    "color": {
+      "center_x_main": 0.430,
+      "center_y_main": 0.400,
+      "radius_x_main": 0.010,
+      "radius_y_main": 0.010,
+      "angle_deg_main": 5
+    }
+  },
+  
+  "weight_testing": {
+    "min_weight_g": 210.0,
+    "max_weight_g": 215.0,
+    "tare_g": 0.5
+  },
+  
+  "smt_testing": {
+    "power": {
+      "sequence": "SMT_SEQ_B",
+      "min_mainbeam_A": 1.8,
+      "max_mainbeam_A": 2.3
+    },
+    "programming": {
+      "enabled": true,
+      "programmers": {
+        "stm8_main": {
+          "type": "STM8",
+          "path": "C:/Program Files (x86)/STMicroelectronics/st_toolset/stvp/STVP_CmdLine.exe",
+          "boards": ["main_controller", "led_driver_1", "led_driver_2"]
+        },
+        "pic_control": {
+          "type": "PIC",
+          "path": "C:/Program Files/Microchip/MPLABX/v6.25/mplab_platform/mplab_ipe/pk3cmd.exe",
+          "boards": ["thermal_controller"]
+        }
+      },
+      "device_types": {
+        "main_controller": "STM8S003F3",
+        "led_driver_1": "STM8S105K6",
+        "led_driver_2": "STM8S105K6",
+        "thermal_controller": "PIC18F47J53"
+      },
+      "hex_files": {
+        "main_controller": "firmware/DD5001/main_v2.1.hex",
+        "led_driver_1": "firmware/DD5001/led_driver_v1.5.hex",
+        "led_driver_2": "firmware/DD5001/led_driver_v1.5.hex",
+        "thermal_controller": "firmware/DD5001/thermal_v1.0.hex"
+      },
+      "programming_sequence": [
+        {
+          "board": "main_controller",
+          "pre_program_commands": ["SMT:POWER:PROG", "SMT:SELECT:MAIN"],
+          "post_program_commands": ["SMT:DESELECT:MAIN"]
+        },
+        {
+          "board": "led_driver_1",
+          "pre_program_commands": ["SMT:SELECT:LED1"],
+          "post_program_commands": ["SMT:DESELECT:LED1"]
+        },
+        {
+          "board": "led_driver_2",
+          "pre_program_commands": ["SMT:SELECT:LED2"],
+          "post_program_commands": ["SMT:DESELECT:LED2"]
+        },
+        {
+          "board": "thermal_controller",
+          "pre_program_commands": ["SMT:SELECT:THERMAL"],
+          "post_program_commands": ["SMT:DESELECT:THERMAL", "SMT:POWER:OFF"]
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,54 @@
+{
+  "sku": "DD5003",
+  "description": "Product Delta - SS3 Pro Balanced",
+  "pod_type": "SS3",
+  "power_level": "Pro", 
+  "available_modes": ["Offroad", "SMT"],
+  
+  "backlight": {
+    "template": "single",
+    "relay_pins": [3],
+    "test_duration_ms": 500
+  },
+  
+  "offroad_testing": {
+    "current": {
+      "min_mainbeam_A": 1.8,
+      "max_mainbeam_A": 2.3,
+      "min_backlight_A": 0.12,
+      "max_backlight_A": 0.18
+    },
+    "lux": {
+      "min_mainbeam": 3000,
+      "max_mainbeam": 3600,
+      "min_backlight": 120,
+      "max_backlight": 180
+    },
+    "color": {
+      "center_x_main": 0.440,
+      "center_y_main": 0.405,
+      "radius_x_main": 0.013,
+      "radius_y_main": 0.013,
+      "angle_deg_main": -5,
+      "center_x_back": 0.580,
+      "center_y_back": 0.390,
+      "radius_x_back": 0.020,
+      "radius_y_back": 0.020,
+      "angle_deg_back": 0
+    }
+  },
+  
+  "smt_testing": {
+    "power": {
+      "sequence": "SMT_SS3_SINGLE",
+      "min_mainbeam_A": 2.6,
+      "max_mainbeam_A": 3.2,
+      "min_backlight_A": 0.015,
+      "max_backlight_A": 0.035
+    },
+    "programming": {
+      "enabled": false,
+      "note": "Pre-programmed components - no ISP required"
+    }
+  }
+}

@@ -1,0 +1,128 @@
+{
+  "SMT_C1R_DUAL_BACKLIGHT": {
+    "description": "SMT panel test for boards with dual backlight configuration",
+    "panel_layout": {
+      "rows": 2,
+      "columns": 2,
+      "boards": 4
+    },
+    "light_configuration": {
+      "mainbeam": {
+        "type": "standard",
+        "relay_offset": 0,
+        "description": "White LED mainbeam"
+      },
+      "backlight1": {
+        "type": "standard",
+        "relay_offset": 4,
+        "description": "First backlight (amber)"
+      },
+      "backlight2": {
+        "type": "standard",
+        "relay_offset": 8,
+        "description": "Second backlight (white)"
+      }
+    },
+    "steps": [
+      {"action": "test_light", "light": "mainbeam", "state": "on", "duration_ms": 500, "description": "Test mainbeam"},
+      {"action": "test_light", "light": "mainbeam", "state": "off", "duration_ms": 100},
+      {"action": "test_light", "light": "backlight1", "state": "on", "duration_ms": 500, "description": "Test backlight 1"},
+      {"action": "test_light", "light": "backlight1", "state": "off", "duration_ms": 100},
+      {"action": "test_light", "light": "backlight2", "state": "on", "duration_ms": 500, "description": "Test backlight 2"},
+      {"action": "test_light", "light": "backlight2", "state": "off", "duration_ms": 100},
+      {"action": "test_light", "light": ["backlight1", "backlight2"], "state": "on", "duration_ms": 500, "description": "Test both backlights"},
+      {"action": "test_light", "light": ["backlight1", "backlight2"], "state": "off", "duration_ms": 100},
+      {"action": "test_light", "light": ["mainbeam", "backlight1", "backlight2"], "state": "on", "duration_ms": 500, "description": "Test all lights"},
+      {"action": "test_light", "light": ["mainbeam", "backlight1", "backlight2"], "state": "off", "duration_ms": 100}
+    ]
+  },
+  "SMT_SS3_SINGLE": {
+    "description": "SMT panel test for SS3 boards with single backlight",
+    "panel_layout": {
+      "rows": 2,
+      "columns": 2,
+      "boards": 4
+    },
+    "light_configuration": {
+      "mainbeam": {
+        "type": "standard",
+        "relay_offset": 0,
+        "description": "White LED mainbeam"
+      },
+      "backlight": {
+        "type": "standard",
+        "relay_offset": 4,
+        "description": "LED backlight"
+      }
+    },
+    "steps": [
+      {"action": "test_light", "light": "mainbeam", "state": "on", "duration_ms": 500, "description": "Test mainbeam"},
+      {"action": "test_light", "light": "mainbeam", "state": "off", "duration_ms": 100},
+      {"action": "test_light", "light": "backlight", "state": "on", "duration_ms": 500, "description": "Test backlight"},
+      {"action": "test_light", "light": "backlight", "state": "off", "duration_ms": 100},
+      {"action": "test_light", "light": ["mainbeam", "backlight"], "state": "on", "duration_ms": 500, "description": "Test both lights"},
+      {"action": "test_light", "light": ["mainbeam", "backlight"], "state": "off", "duration_ms": 100}
+    ]
+  },
+  "SMT_SS3_RGBW": {
+    "description": "SMT panel test for SS3 boards with RGBW cycling backlight",
+    "panel_layout": {
+      "rows": 2,
+      "columns": 2,
+      "boards": 4
+    },
+    "light_configuration": {
+      "mainbeam": {
+        "type": "standard",
+        "relay_offset": 0,
+        "description": "White LED mainbeam"
+      },
+      "rgbw_backlight": {
+        "type": "rgbw_cycling",
+        "relay_offset": 4,
+        "description": "RGBW cycling backlight",
+        "rgbw_config": {
+          "cycle_pattern": "standard",
+          "on_time_ms": 50,
+          "off_time_ms": 50,
+          "cycles_to_advance": 1
+        }
+      }
+    },
+    "steps": [
+      {"action": "test_light", "light": "mainbeam", "state": "on", "duration_ms": 500, "description": "Test mainbeam"},
+      {"action": "test_light", "light": "mainbeam", "state": "off", "duration_ms": 100},
+      {"action": "rgbw_cycle", "light": "rgbw_backlight", "pattern": {"on_ms": 50, "off_ms": 50}, "duration_ms": 3000, "description": "Cycle through RGBW colors"},
+      {"action": "rgbw_test", "light": "rgbw_backlight", "sample_points": [200, 400, 600, 800, 1000], "duration_ms": 5000, "description": "Sample RGBW colors at specific points"},
+      {"action": "test_light", "light": "rgbw_backlight", "state": "off", "duration_ms": 100}
+    ]
+  },
+  "SMT_STATUS_LED_BOARD": {
+    "description": "SMT panel test for simple status boards with red and green LEDs",
+    "panel_layout": {
+      "rows": 2,
+      "columns": 2,
+      "boards": 4
+    },
+    "light_configuration": {
+      "red_led": {
+        "type": "standard",
+        "relay_offset": 0,
+        "description": "Red status LED"
+      },
+      "green_led": {
+        "type": "standard",
+        "relay_offset": 4,
+        "description": "Green status LED"
+      }
+    },
+    "steps": [
+      {"action": "test_light", "light": "red_led", "state": "on", "duration_ms": 500, "description": "Test red LED"},
+      {"action": "test_light", "light": "red_led", "state": "off", "duration_ms": 100},
+      {"action": "test_light", "light": "green_led", "state": "on", "duration_ms": 500, "description": "Test green LED"},
+      {"action": "test_light", "light": "green_led", "state": "off", "duration_ms": 100},
+      {"action": "test_light", "light": ["red_led", "green_led"], "state": "on", "duration_ms": 500, "description": "Test both LEDs"},
+      {"action": "test_light", "light": ["red_led", "green_led"], "state": "off", "duration_ms": 100}
+    ]
+  }
+}

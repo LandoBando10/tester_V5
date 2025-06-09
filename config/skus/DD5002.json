@@ -1,0 +1,79 @@
+{
+  "sku": "DD5002",
+  "description": "Product Gamma - C2 Sport Economy",
+  "pod_type": "C2", 
+  "power_level": "Sport",
+  "available_modes": ["Offroad", "SMT", "WeightChecking"],
+  
+  "backlight": {
+    "template": "rgbw_cycling",
+    "relay_pins": [3],
+    "cycle_interval_ms": 800,
+    "total_cycles": 8,
+    "colors_to_test": [
+      {"name": "red", "target_x": 0.650, "target_y": 0.330, "tolerance": 0.020},
+      {"name": "green", "target_x": 0.300, "target_y": 0.600, "tolerance": 0.020},
+      {"name": "blue", "target_x": 0.150, "target_y": 0.060, "tolerance": 0.020},
+      {"name": "white", "target_x": 0.313, "target_y": 0.329, "tolerance": 0.020}
+    ],
+    "stabilization_ms": 150,
+    "sample_points_ms": [200, 350, 450]
+  },
+  
+  "offroad_testing": {
+    "current": {
+      "min_mainbeam_A": 0.6,
+      "max_mainbeam_A": 0.9,
+      "min_backlight_A": 0.04,
+      "max_backlight_A": 0.12
+    },
+    "lux": {
+      "min_mainbeam": 1500,
+      "max_mainbeam": 1900
+    },
+    "color": {
+      "center_x_main": 0.460,
+      "center_y_main": 0.420,
+      "radius_x_main": 0.020,
+      "radius_y_main": 0.020,
+      "angle_deg_main": 0
+    }
+  },
+  
+  "smt_testing": {
+    "power": {
+      "sequence": "SMT_SEQ_B",
+      "min_mainbeam_A": 0.55,
+      "max_mainbeam_A": 0.85
+    },
+    "programming": {
+      "enabled": true,
+      "programmers": {
+        "stm8_main": {
+          "type": "STM8",
+          "path": "C:/Program Files (x86)/STMicroelectronics/st_toolset/stvp/STVP_CmdLine.exe",
+          "boards": ["main_controller"]
+        }
+      },
+      "device_types": {
+        "main_controller": "STM8S001J3"
+      },
+      "hex_files": {
+        "main_controller": "firmware/SSC5_V0.606.hex"
+      },
+      "programming_sequence": [
+        {
+          "board": "main_controller",
+          "pre_program_commands": ["SMT:POWER:PROG", "SMT:SELECT:MAIN"],
+          "post_program_commands": ["SMT:DESELECT:MAIN", "SMT:POWER:OFF"]
+        }
+      ]
+    }
+  },
+  
+  "weight_testing": {
+    "min_weight_g": 180.0,
+    "max_weight_g": 185.0,
+    "tare_g": 0.0
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "single": {
+    "type": "single",
+    "test_duration_ms": 500,
+    "description": "Single backlight relay configuration"
+  },
+  "dual": {
+    "type": "dual", 
+    "test_duration_ms": 500,
+    "description": "Dual backlight relay configuration"
+  },
+  "rgbw_cycling": {
+    "type": "rgbw_cycling",
+    "cycle_interval_ms": 800,
+    "total_cycles": 8,
+    "stabilization_ms": 150,
+    "sample_points_ms": [200, 350, 450],
+    "description": "RGBW color cycling backlight test"
+  }
+}

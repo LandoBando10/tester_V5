@@ -1,0 +1,72 @@
+{
+  "sku": "DD5000",
+  "description": "Product Alpha - C1 Pro Variant",
+  "pod_type": "C1",
+  "power_level": "Pro",
+  "available_modes": ["Offroad", "SMT"],
+  
+  "backlight": {
+    "template": "single",
+    "relay_pins": [3],
+    "test_duration_ms": 500
+  },
+  
+  "offroad_testing": {
+    "current": {
+      "min_mainbeam_A": 0.9,
+      "max_mainbeam_A": 1.2,
+      "min_backlight_A": 0.05,
+      "max_backlight_A": 0.15
+    },
+    "lux": {
+      "min_mainbeam": 2000,
+      "max_mainbeam": 2500,
+      "min_backlight": 100,
+      "max_backlight": 150
+    },
+    "color": {
+      "center_x_main": 0.450,
+      "center_y_main": 0.410,
+      "radius_x_main": 0.015,
+      "radius_y_main": 0.015,
+      "angle_deg_main": 0
+    }
+  },
+  
+  "smt_testing": {
+    "power": {
+      "sequence": "SMT_SEQ_A",
+      "min_mainbeam_A": 0.85,
+      "max_mainbeam_A": 1.15
+    },
+    "programming": {
+      "enabled": true,
+      "programmers": {
+        "stm8_main": {
+          "type": "STM8",
+          "path": "C:/Program Files (x86)/STMicroelectronics/st_toolset/stvp/STVP_CmdLine.exe",
+          "boards": ["main_controller"]
+        }
+      },
+      "device_types": {
+        "main_controller": "STM8S003F3"
+      },
+      "hex_files": {
+        "main_controller": "firmware/DD5000/main_v1.2.hex"
+      },
+      "programming_sequence": [
+        {
+          "board": "main_controller",
+          "pre_program_commands": ["SMT:POWER:PROG", "SMT:SELECT:MAIN"],
+          "post_program_commands": ["SMT:DESELECT:MAIN", "SMT:POWER:OFF"]
+        }
+      ]
+    }
+  },
+  
+  "weight_testing": {
+    "min_weight_g": 95.0,
+    "max_weight_g": 105.0,
+    "tare_g": 0.0
+  }
+}

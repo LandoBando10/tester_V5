@@ -1,0 +1,228 @@
+# Diode Dynamics Tester V4: Project Overview and Architecture
+
+## 1. Primary Intent
+
+The Diode Dynamics Tester V4 is a comprehensive production-line testing application designed to validate the functionality and quality of Diode Dynamics' LED lighting products. The system automates and standardizes testing processes across various product Stock Keeping Units (SKUs), ensuring products meet defined specifications before shipment. The platform emphasizes reliability, user-friendliness for operators, and configurability to accommodate different product types and testing requirements.
+
+## 2. System Architecture
+
+### 2.1 Modular Design Philosophy
+The system follows a clean, modular architecture with clear separation of concerns:
+- **Core Testing Engine**: Standardized test lifecycle with abstract base classes
+- **Hardware Abstraction**: Consistent controller patterns for all hardware interfaces
+- **Asynchronous Data Management**: Background loading with thread-safe operations
+- **Component-Based GUI**: Modular UI components with proper business logic separation
+- **Resource Management**: Comprehensive cleanup and error handling throughout
+
+### 2.2 Core System Components
+
+**Graphical User Interface (GUI)**: A PySide6-based modular interface with:
+- Component-based architecture in `src/gui/components/`
+- Business logic handlers in `src/gui/handlers/`
+- Background workers in `src/gui/workers/` to prevent UI blocking
+- Dark theme with touchscreen-friendly controls
+
+**Test Execution Engine**: Python-based orchestration system in `src/core/`:
+- `BaseTest`: Abstract foundation providing standardized test lifecycle
+- `OffroadTest`: Comprehensive assembled product validation
+- `SMTTest`: PCB-level fixture testing with programming capabilities
+- `WeightTest`: Precision weight validation using scale integration
+
+**Hardware Abstraction Layer**: Unified controller pattern in `src/hardware/`:
+- `ArduinoController`: Sensor readings and test execution with callback support
+- `SMTArduinoController`: Extended functionality for bed-of-nails fixture control
+- `ScaleController`: Weight measurement with stability detection
+- `SerialManager`: Thread-safe serial communication foundation
+
+**Asynchronous Configuration Management**: Modern data handling in `src/data/`:
+- `AsyncSKUManager`: Background loading with Qt signal integration
+- Thread-safe data access with mutex protection
+- Automatic retry mechanisms and fallback capabilities
+- Real-time progress reporting for configuration loading
+
+**Resource Management**: Comprehensive cleanup system:
+- `ResourceMixin` pattern for hardware controllers
+- Automatic resource cleanup on test completion or error
+- Thread-safe resource allocation and deallocation
+
+## 3. Testing Modes and Workflows
+
+### 3.1 Offroad Mode
+**Purpose**: Final assembly validation for complete "Offroad" products
+
+**Workflow**:
+1. Operator selects SKU from dynamically loaded list
+2. Enables desired test types via intuitive checkboxes
+3. System establishes Arduino connection with automatic retry
+4. Standardized test sequence execution:
+   - Optional pressure decay testing (5 seconds)
+   - Mainbeam validation (current, LUX, color)
+   - Configurable backlight testing (single, dual, RGBW cycling)
+5. Real-time data display with pass/fail indicators
+6. Comprehensive results reporting and logging
+
+**Enhanced Features**:
+- Intelligent sensor sampling with configurable timing
+- Resource-managed hardware connections
+- Real-time callback system for live data updates
+- Robust error handling with graceful recovery
+
+### 3.2 SMT (Surface Mount Technology) Mode
+**Purpose**: PCB testing and programming within bed-of-nails fixtures
+
+**Workflow**:
+1. SKU selection with automatic programming configuration validation
+2. Test selection (Programming and/or Power validation)
+3. Multi-controller hardware setup (SMT Arduino + external programmers)
+4. Automated test execution:
+   - Board-by-board programming with progress tracking
+   - Power circuit validation with current measurements
+5. Detailed results display with board-specific status reporting
+
+**Advanced Features**:
+- Multi-board programming support (STM8, PIC microcontrollers)
+- Intelligent fixture control via dedicated SMT Arduino
+- Power supply management (programming and test voltages)
+- Comprehensive programming result tracking
+
+### 3.3 Weight Checking Mode
+**Purpose**: Precision weight validation against specifications
+
+**Workflow**:
+1. SKU selection with automatic weight parameter loading
+2. Scale connection establishment with automatic detection
+3. Automated testing workflow:
+   - Real-time weight monitoring with stability detection
+   - Automatic part detection via configurable thresholds
+   - Instant pass/fail evaluation against SKU specifications
+4. Tare functionality and measurement optimization
+
+**Key Features**:
+- High-precision scale integration via serial communication
+- Configurable stability detection algorithms
+- Auto-trigger capabilities for seamless operator workflow
+- Real-time weight display with threshold visualization
+
+## 4. Configuration Management Evolution
+
+### 4.1 Modern SKU Management
+The system has evolved to support flexible configuration approaches:
+
+**Individual SKU Files**: Self-contained JSON configurations (e.g., `DD5002.json`, `DD5003.json`)
+- Complete test parameters per SKU
+- Mode-specific configurations embedded
+- Template-based backlight configurations
+- Simplified maintenance and version control
+
+**Asynchronous Loading Architecture**:
+- Background configuration loading prevents UI blocking
+- Progress reporting for large configuration sets
+- Thread-safe access with automatic retry mechanisms
+- Fallback support for legacy configuration formats
+
+### 4.2 Configuration Structure
+Each SKU configuration includes:
+```json
+{
+  "sku": "DD5002",
+  "pod_type": "C2",
+  "power_level": "Sport",
+  "available_modes": ["Offroad", "SMT", "WeightChecking"],
+  "backlight": {
+    "template": "rgbw_cycling",
+    "colors_to_test": [...]
+  },
+  "offroad_testing": {...},
+  "smt_testing": {...},
+  "weight_testing": {...}
+}
+```
+
+## 5. Hardware Integration
+
+### 5.1 Unified Controller Pattern
+All hardware interfaces follow a consistent pattern:
+- Standardized initialization and cleanup procedures
+- Thread-safe communication with automatic retry logic
+- Resource management through `ResourceMixin`
+- Consistent callback systems for real-time data
+
+### 5.2 Arduino Communication
+- Robust serial protocol with message parsing
+- Sensor management for INA260 (current/voltage/power), VEML7700 (LUX), pressure, and color sensors
+- Real-time data streaming with configurable sampling rates
+- Hardware-specific command sets with error handling
+
+### 5.3 Scale Integration
+- Multi-vendor scale support via serial communication
+- Advanced filtering for measurement stability
+- Configurable detection thresholds and timing parameters
+- Integration with SKU-specific weight specifications
+
+## 6. Enhanced System Features
+
+### 6.1 Asynchronous Architecture
+- Non-blocking UI operations through background workers
+- Thread-safe data access with mutex protection
+- Real-time progress reporting for long-running operations
+- Graceful error handling with user-friendly feedback
+
+### 6.2 Resource Management
+- Automatic hardware resource cleanup
+- Connection pooling and management
+- Memory-efficient configuration loading
+- Comprehensive error recovery mechanisms
+
+### 6.3 Data Logging and Results
+- Structured logging with configurable verbosity levels
+- Test results with detailed measurement tracking
+- Comprehensive error logging with stack traces
+- Traceability support for quality control requirements
+
+### 6.4 GUI Enhancements
+- Modular component architecture for maintainability
+- Responsive design with progress indicators
+- Real-time data visualization capabilities
+- Consistent dark theme with high contrast for production environments
+
+## 7. Development Architecture
+
+### 7.1 Code Organization
+```
+src/
+├── core/           # Test execution engines
+├── data/           # Asynchronous data management
+├── gui/            # Modular UI components
+├── hardware/       # Hardware abstraction layer
+└── utils/          # Utility functions and helpers
+```
+
+### 7.2 Design Principles
+- **Simple and Elegant**: Readable code with clear intent
+- **Modular Architecture**: Loosely coupled components
+- **Resource Management**: Comprehensive cleanup and error handling
+- **Asynchronous Operations**: Non-blocking UI with background processing
+- **Consistent Patterns**: Unified interfaces across hardware controllers
+
+## 8. Future Roadmap
+
+### 8.1 Statistical Process Control (SPC)
+*Planned implementation for continuous process monitoring and quality control*
+
+### 8.2 Enhanced Results Management
+*Development of comprehensive results logging and analysis capabilities*
+
+### 8.3 Configuration Migration Tools
+*Utilities for seamless transition between configuration formats*
+
+## 9. End Goal
+
+The Tester V4 platform provides a modern, maintainable, and scalable foundation for production testing that:
+
+- Minimizes operator effort while maximizing test reliability
+- Supports rapid deployment of new product testing requirements
+- Provides comprehensive quality assurance through robust testing workflows
+- Maintains high system availability through proper resource management
+- Enables future enhancements through clean architectural patterns
+
+The system represents a significant evolution in production testing technology, combining proven testing methodologies with modern software engineering practices to deliver a reliable, efficient, and adaptable testing platform.

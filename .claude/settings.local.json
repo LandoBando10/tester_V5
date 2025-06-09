@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find:*)",
+      "Bash(rm:*)",
+      "Bash(mkdir:*)",
+      "Bash(mv:*)",
+      "Bash(chmod:*)",
+      "Bash(python:*)",
+      "Bash(cp:*)",
+      "Bash(ls:*)",
+      "Bash(pip install:*)",
+      "Bash(sudo apt install:*)",
+      "Bash(/usr/bin/python3:*)",
+      "Bash(rg:*)",
+      "Bash(grep:*)",
+      "Bash(sudo apt:*)",
+      "Bash(apt search:*)",
+      "mcp__ide__getDiagnostics",
+      "Bash(/home/ldev2/tester-V4/venv/bin/python /home/ldev2/tester-V4/run.py)",
+      "WebFetch(domain:doc.qt.io)",
+      "Bash(git checkout:*)",
+      "Bash(/home/ldev2/.npm-global/lib/node_modules/@anthropic-ai/claude-code/vendor/ripgrep/x64-linux/rg \"logger\\.(debug|info).*(on_sku|Event:|ComboBox)\" \"/mnt/c/Users/ldev2/OneDrive/Documents/od/OneDrive/Desktop/New folder/tester-V4/src/gui/main_window.py\")",
+      "Bash(timeout:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
+    ],
+    "deny": []
+  }
+}
