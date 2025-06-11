@@ -177,16 +177,9 @@ def validate_timeouts() -> bool:
         return False
 
 def ensure_directories_exist() -> bool:
-    """Ensure all required directories exist"""
-    try:
-        for key, path in PATHS.items():
-            if 'directory' in key:
-                path.mkdir(parents=True, exist_ok=True)
-                logger.info(f"Ensured directory exists: {path}")
-        return True
-    except Exception as e:
-        logger.error(f"Error creating directories: {e}")
-        return False
+    """Deprecated - directories should exist already"""
+    # Directory creation removed - directories should already exist
+    return True
 
 # Initialize configuration validation on import
 def _initialize_config():
@@ -196,8 +189,7 @@ def _initialize_config():
             logger.warning("Timeout validation failed")
         if not validate_serial_settings():
             logger.warning("Serial settings validation failed")
-        if not ensure_directories_exist():
-            logger.warning("Directory creation failed")
+        # Directory creation removed
     except Exception as e:
         logger.error(f"Configuration initialization failed: {e}")
 

@@ -5,47 +5,96 @@
   "power_level": "Pro", 
   "available_modes": ["Offroad", "SMT"],
   
-  "backlight": {
-    "template": "single",
-    "relay_pins": [3],
-    "test_duration_ms": 500
-  },
-  
   "offroad_testing": {
-    "current": {
-      "min_mainbeam_A": 1.8,
-      "max_mainbeam_A": 2.3,
-      "min_backlight_A": 0.12,
-      "max_backlight_A": 0.18
-    },
-    "lux": {
-      "min_mainbeam": 3000,
-      "max_mainbeam": 3600,
-      "min_backlight": 120,
-      "max_backlight": 180
-    },
-    "color": {
-      "center_x_main": 0.440,
-      "center_y_main": 0.405,
-      "radius_x_main": 0.013,
-      "radius_y_main": 0.013,
-      "angle_deg_main": -5,
-      "center_x_back": 0.580,
-      "center_y_back": 0.390,
-      "radius_x_back": 0.020,
-      "radius_y_back": 0.020,
-      "angle_deg_back": 0
-    }
+    "test_sequence": [
+      {
+        "name": "mainbeam",
+        "relay": "main",
+        "duration_ms": 500,
+        "measurements": ["current", "voltage", "lux", "color"],
+        "limits": {
+          "current_A": {"min": 1.8, "max": 2.3},
+          "lux": {"min": 3000, "max": 3600},
+          "color_x": {"center": 0.440, "tolerance": 0.013},
+          "color_y": {"center": 0.405, "tolerance": 0.013}
+        }
+      },
+      {
+        "name": "backlight",
+        "relay": "backlight_1",
+        "duration_ms": 500,
+        "measurements": ["current", "voltage", "lux", "color"],
+        "limits": {
+          "current_A": {"min": 0.12, "max": 0.18},
+          "lux": {"min": 120, "max": 180},
+          "color_x": {"center": 0.580, "tolerance": 0.020},
+          "color_y": {"center": 0.390, "tolerance": 0.020}
+        }
+      }
+    ]
   },
   
   "smt_testing": {
-    "power": {
-      "sequence": "SMT_SS3_SINGLE",
-      "min_mainbeam_A": 2.6,
-      "max_mainbeam_A": 3.2,
-      "min_backlight_A": 0.015,
-      "max_backlight_A": 0.035
+    "panel_layout": {
+      "rows": 1,
+      "columns": 1,
+      "total_boards": 1,
+      "board_positions": {
+        "1": {"row": 1, "col": 1, "name": "Single Board"}
+      }
     },
+    "relay_mapping": {
+      "1": {"board": 1, "function": "mainbeam"},
+      "2": {"board": 1, "function": "backlight"},
+      "3": {"board": 1, "function": "indicator_left"},
+      "4": {"board": 1, "function": "indicator_right"},
+      "5": null,
+      "6": null,
+      "7": null,
+      "8": null
+    },
+    "test_sequence": [
+      {
+        "name": "mainbeam_test",
+        "description": "Test mainbeam current",
+        "function": "mainbeam",
+        "test_all_boards": true,
+        "limits": {
+          "current_A": {"min": 2.6, "max": 3.2},
+          "voltage_V": {"min": 11.5, "max": 12.5}
+        }
+      },
+      {
+        "name": "backlight_test",
+        "description": "Test backlight current",
+        "function": "backlight",
+        "test_all_boards": true,
+        "limits": {
+          "current_A": {"min": 0.015, "max": 0.035},
+          "voltage_V": {"min": 11.5, "max": 12.5}
+        }
+      },
+      {
+        "name": "indicator_left_test",
+        "description": "Test left indicator",
+        "function": "indicator_left",
+        "test_all_boards": true,
+        "limits": {
+          "current_A": {"min": 0.01, "max": 0.05},
+          "voltage_V": {"min": 11.5, "max": 12.5}
+        }
+      },
+      {
+        "name": "indicator_right_test",
+        "description": "Test right indicator",
+        "function": "indicator_right",
+        "test_all_boards": true,
+        "limits": {
+          "current_A": {"min": 0.01, "max": 0.05},
+          "voltage_V": {"min": 11.5, "max": 12.5}
+        }
+      }
+    ],
     "programming": {
       "enabled": false,
       "note": "Pre-programmed components - no ISP required"
