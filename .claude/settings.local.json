@@ -24,7 +24,8 @@
       "Bash(timeout:*)",
       "Bash(git add:*)",
       "Bash(git commit:*)",
-      "WebFetch(domain:docs.anthropic.com)"
+      "WebFetch(domain:docs.anthropic.com)",
+      "Bash(git push:*)"
     ],
     "deny": []
   }
