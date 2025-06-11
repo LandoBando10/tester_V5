@@ -38,14 +38,23 @@ class TestAreaWidget(QWidget):
         
     def set_mode(self, mode: str):
         """Update the test area based on current mode"""
+        previous_mode = self.current_mode
         self.current_mode = mode
-        self.logger.info(f"Setting test area mode to: {mode}")
+        self.logger.info(f"Setting test area mode to: {mode} (from {previous_mode})")
+        
+        # Pause weight widget if switching away from weight mode
+        if previous_mode == "WeightChecking" and mode != "WeightChecking":
+            if self.weight_test_widget and hasattr(self.weight_test_widget, 'pause_reading'):
+                self.weight_test_widget.pause_reading()
         
         # Clear current content
         self.clear_content()
         
         if mode == "WeightChecking":
             self.setup_weight_testing_area()
+            # Resume reading if weight widget already exists
+            if self.weight_test_widget and hasattr(self.weight_test_widget, 'resume_reading'):
+                self.weight_test_widget.resume_reading()
         elif mode == "SMT":
             self.setup_smt_testing_area()
         else:  # Offroad mode

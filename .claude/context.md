@@ -23,6 +23,7 @@ You are a **Claude 4 engineering assistant** embedded in the development of **T
 
 * Each **SKU** has its own file under `config/skus/` (e.g. `DD5001.json`).
 * Files define **all** test parameters (lux, current, pressure, backlight, etc.).
+* SMT parameters include relay maping, board count, etc.
 * The system **lazy‑loads** SKU data only when accessed, not at startup.
 * A global index file (`config/skus.json`) lists available SKUs and template maps.
 
@@ -39,7 +40,7 @@ You are a **Claude 4 engineering assistant** embedded in the development of **T
 Each mode must:
 
 * Handle hardware‑connection errors gracefully.
-* Display live results in the PySide6 GUI.
+* Display results in the PySide6 GUI.
 * Log outcomes for traceability.
 * Respect SKU‑specific logic, timings, and tolerances.
 

@@ -100,11 +100,17 @@ class ScaleController(ResourceMixin):
             self._current_weight = value
 
     def connect(self, port: str) -> bool:
-        """Connect to scale on specified port"""
+        """Connect to scale on specified port - optimized"""
         if self.serial.connect(port):
             # Set serial timeout to be very short for non-blocking reads
             if hasattr(self.serial, 'connection') and self.serial.connection:
                 self.serial.connection.timeout = 0.05  # 50ms timeout
+                # Clear any accumulated data in buffers before testing
+                try:
+                    self.serial.connection.reset_input_buffer()
+                    self.serial.connection.reset_output_buffer()
+                except:
+                    pass  # Some serial implementations don't support these methods
             
             if self.test_communication():
                 self.logger.info(f"Scale connected successfully on {port}")
@@ -122,24 +128,24 @@ class ScaleController(ResourceMixin):
         self.cleanup_resources()  # Clean up all tracked resources
 
     def test_communication(self) -> bool:
-        """Test if scale is responding"""
+        """Test if scale is responding - optimized for speed"""
         try:
             # Clear any pending data
             self.serial.flush_buffers()
-            time.sleep(0.1)
+            time.sleep(0.05)  # Reduced from 0.1
 
-            # Try to get a reading with short timeout
-            weight = self._get_raw_weight_fast(timeout=1.0)
+            # Try to get a reading with shorter timeout
+            weight = self._get_raw_weight_fast(timeout=0.3)  # Reduced from 1.0
             if weight is not None:
                 self.logger.debug(f"Communication test successful, got weight: {weight}")
                 return True
 
             # If direct reading fails, assume scale sends data continuously
-            # Just check if we can read anything
-            for _ in range(5):
+            # Just check if we can read anything (reduced iterations)
+            for _ in range(3):  # Reduced from 5
                 if self.serial.connection and self.serial.connection.in_waiting > 0:
                     return True
-                time.sleep(0.1)
+                time.sleep(0.05)  # Reduced from 0.1
 
             return False
 
@@ -179,7 +185,12 @@ class ScaleController(ResourceMixin):
         
         # Clear any accumulated data and reset filters
         if self.serial.connection:
-            self.serial.flush_buffers()
+            try:
+                # More aggressive buffer clearing for faster startup
+                self.serial.connection.reset_input_buffer()
+                self.serial.flush_buffers()
+            except:
+                self.serial.flush_buffers()
         self.clear_weight_history()
         
         # Use provided interval or default

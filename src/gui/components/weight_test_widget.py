@@ -371,6 +371,20 @@ class WeightTestWidget(QWidget, ResourceMixin):
 
     def _establish_connection(self, port: str):
         """Establish connection to the scale controller."""
+        # Check if we can reuse existing controller
+        if self.scale_controller and not self._should_recreate_scale_controller(port):
+            # Try to reconnect with existing controller
+            self.logger.info(f"Reusing existing scale controller for port {port}")
+            if self.scale_controller.is_connected():
+                # Already connected to same port
+                self._start_live_reading(port)
+                return
+            elif self.scale_controller.connect(port):
+                # Reconnected successfully
+                self._start_live_reading(port)
+                return
+        
+        # Need new controller or reconnection failed
         if self._should_recreate_scale_controller(port):
             self._close_connection()
             
@@ -406,13 +420,18 @@ class WeightTestWidget(QWidget, ResourceMixin):
         
         self.logger.info(f"Scale connected on {port}. Live reading active.")
 
-    def _close_connection(self):
+    def _close_connection(self, force_disconnect: bool = True):
         """Close the scale controller connection."""
         if self.scale_controller:
             self.weight_update_timer.stop()
-            self.scale_controller.disconnect()
-            self.scale_controller = None
-        self._reset_ui_for_disconnection()
+            if force_disconnect:
+                self.scale_controller.disconnect()
+                self.scale_controller = None
+            else:
+                # Just stop reading, keep controller instance
+                self.scale_controller.stop_reading()
+        if force_disconnect:
+            self._reset_ui_for_disconnection()
 
     def _handle_connection_failure(self, port: str, error_msg: str = ""):
         """Handle connection failure."""
@@ -967,3 +986,17 @@ class WeightTestWidget(QWidget, ResourceMixin):
         
         self.cleanup_resources()
         self.logger.info("WeightTestWidget resources cleanup finished.")
+    
+    def pause_reading(self):
+        """Pause scale reading without disconnecting (for mode switching)."""
+        if self.scale_controller and self.is_connected:
+            self.logger.info("Pausing scale reading for mode switch")
+            self._close_connection(force_disconnect=False)
+    
+    def resume_reading(self):
+        """Resume scale reading after mode switch."""
+        if self.scale_controller and self.is_connected:
+            port = self.scale_controller.serial.port if hasattr(self.scale_controller.serial, 'port') else None
+            if port:
+                self.logger.info(f"Resuming scale reading on port {port}")
+                self._establish_connection(port)

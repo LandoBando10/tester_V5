@@ -68,8 +68,8 @@ class WeightTest(BaseTest):
             # Start reading using controller's standardized method
             self.scale.start_reading()
 
-            # Give scale time to stabilize
-            time.sleep(1)
+            # Brief pause for initial reading (reduced from 1 second)
+            time.sleep(0.1)
 
             self.update_progress("Hardware setup complete", 45)
             return True

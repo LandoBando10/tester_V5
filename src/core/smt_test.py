@@ -159,7 +159,7 @@ class SMTTest(BaseTest):
         self.smt_config_path = smt_config_path
         self.arduino = ArduinoController(baud_rate=115200)  # Use standard controller with SMT firmware
         self.smt_controller = SMTController(self.arduino)
-        self.required_params = ["power"]  # Changed to lowercase to match SKU file
+        self.relay_mapping = {}
 
         # Programming control
         self.programmers: Dict[str, ProgrammerController] = {}
@@ -212,9 +212,6 @@ class SMTTest(BaseTest):
         try:
             self.update_progress("Connecting to SMT Arduino...", 10)
 
-            if not self.validate_parameters(self.required_params):
-                return False
-
             # Connect to SMT Arduino
             if not self.arduino.connect(self.port):
                 self.logger.error(f"Failed to connect to SMT Arduino on port {self.port}")
@@ -222,11 +219,20 @@ class SMTTest(BaseTest):
 
             self.update_progress("Initializing SMT system...", 20)
 
-            # Load SMT configuration if provided
-            if self.smt_config_path:
-                if not self.smt_controller.load_configuration(self.smt_config_path):
-                    self.logger.error(f"Failed to load SMT configuration: {self.smt_config_path}")
-                    return False
+            # Get SMT configuration from parameters
+            smt_config = self.parameters.get("smt_testing", {})
+            if not smt_config:
+                self.logger.error("No smt_testing configuration found in SKU parameters")
+                return False
+                
+            # Store relay mapping for our use
+            self.relay_mapping = smt_config.get("relay_mapping", {})
+            if not self.relay_mapping:
+                self.logger.error("No relay_mapping found in SKU configuration")
+                return False
+
+            # Configure SMT controller
+            self.smt_controller.set_configuration(smt_config)
 
             # Initialize SMT controller with Arduino
             if not self.smt_controller.initialize_arduino():
@@ -254,9 +260,9 @@ class SMTTest(BaseTest):
                     "action": "program_boards"
                 })
 
-            # Add power validation phases
-            power_params = self.parameters.get("power", {})  # Changed to lowercase
-            sequence_id = power_params.get("sequence", "SMT_SEQ_A")  # Changed key name to match SKU file
+            # Add power validation phases from smt_testing configuration
+            smt_config = self.parameters.get("smt_testing", {})
+            test_sequence = smt_config.get("test_sequence", [])
 
             self.test_phases.extend([
                 {
@@ -478,8 +484,7 @@ class SMTTest(BaseTest):
     # --- new helper ----------------------------------------------------
     def _measure_group(self, relays: str, timeout: float = 15.0) -> Dict[str, Dict]:
         """
-        Ask the tester to measure a comma-separated relay list and parse the
-        streamed MEASUREMENT lines into a {board-name: {...}} dict.
+        Measure a group of relays and map results back to board numbers
         """
         board_results = {}
         self.logger.info(f"Sending MEASURE_GROUP:{relays}")
@@ -507,19 +512,26 @@ class SMTTest(BaseTest):
         full_response = '\n'.join(response_lines)
         self.logger.info(f"Full response:\n{full_response}")
 
-        # Parse measurement lines
+        # Parse measurement lines and map to boards
         for line in response_lines:
             if line.startswith("MEASUREMENT:"):
                 try:
                     _, relay, rest = line.split(":", 2)
                     relay_num = int(relay)
+                    
+                    # Get board number from relay mapping
+                    board_num = self.smt_controller.get_board_from_relay(relay_num)
+                    if not board_num:
+                        self.logger.warning(f"No board mapping found for relay {relay_num}")
+                        continue
+                    
                     data = {}
                     for pair in rest.split(","):
                         if "=" in pair:
                             k, v = pair.split("=", 1)
                             data[k.strip()] = float(v.strip())
                     
-                    board_results[f"Board {relay_num}"] = {
+                    board_results[f"Board {board_num}"] = {
                         "relay": relay_num,
                         "voltage": data.get("V", 0),
                         "current": data.get("I", 0),
@@ -528,16 +540,23 @@ class SMTTest(BaseTest):
                 except Exception as e:
                     self.logger.error(f"Error parsing measurement line '{line}': {e}")
         
-        # Don't send RELAY_ALL:OFF here - the Arduino already does it
         self.logger.info(f"Parsed board results: {list(board_results.keys())}")
         return board_results
 
     def _execute_mainbeam_power_test(self, duration: float, base_progress: int) -> bool:
         try:
-            self.update_progress("Measuring main-beam current on all boards…", base_progress)
-            board_results = self._measure_group("1,2,3,4")   # relays 1-4
+            self.update_progress("Measuring mainbeam current on all boards...", base_progress)
+            
+            # Get mainbeam relays from mapping
+            mainbeam_relays = self.smt_controller.get_relays_for_function("mainbeam")
+            if not mainbeam_relays:
+                self.logger.error("No mainbeam relays found in configuration")
+                return False
+                
+            relay_str = ",".join(map(str, mainbeam_relays))
+            board_results = self._measure_group(relay_str)
+            
             currents = [d["current"] for d in board_results.values()]
-
             self.result.measurements["mainbeam_current_readings"] = {
                 "board_results": board_results,
                 "values": currents,
@@ -545,45 +564,36 @@ class SMTTest(BaseTest):
             }
             return True
         except Exception as e:
-            self.logger.error(f"Main-beam power test error: {e}")
+            self.logger.error(f"Mainbeam power test error: {e}")
             return False
 
     def _execute_backlight_power_test(self, duration: float, base_progress: int) -> bool:
         try:
-            if not self._has_backlight_support():
-                self.logger.info("Back-light test not supported; skipping")
+            self.update_progress("Measuring backlight current on all boards...", base_progress)
+            
+            # Get all backlight relays (any function containing "backlight")
+            backlight_relays = []
+            for relay_str, mapping in self.relay_mapping.items():
+                if mapping and "backlight" in mapping.get("function", ""):
+                    backlight_relays.append(int(relay_str))
+            
+            if not backlight_relays:
+                self.logger.info("No backlight relays found - skipping backlight test")
                 return True
-
-            self.update_progress("Measuring back-light current on all boards…", base_progress)
-            board_results = self._measure_group("5,6,7,8")   # relays 5-8
+                
+            backlight_relays.sort()
+            relay_str = ",".join(map(str, backlight_relays))
+            board_results = self._measure_group(relay_str)
             
-            # Rename boards from "Board 5-8" to "Board 1-4" for backlight
-            renamed_results = {}
-            for board_name, board_data in board_results.items():
-                if board_name.startswith("Board "):
-                    try:
-                        relay_num = int(board_name.split()[1])
-                        if relay_num >= 5 and relay_num <= 8:
-                            board_num = relay_num - 4  # Convert relay 5->1, 6->2, 7->3, 8->4
-                            renamed_results[f"Board {board_num}"] = board_data
-                        else:
-                            # Keep original name if not in expected range
-                            renamed_results[board_name] = board_data
-                    except ValueError:
-                        renamed_results[board_name] = board_data
-                else:
-                    renamed_results[board_name] = board_data
-            
-            currents = [d["current"] for d in renamed_results.values()]
-
+            currents = [d["current"] for d in board_results.values()]
             self.result.measurements["backlight_current_readings"] = {
-                "board_results": renamed_results,
+                "board_results": board_results,
                 "values": currents,
                 "average": sum(currents) / len(currents) if currents else 0
             }
             return True
         except Exception as e:
-            self.logger.error(f"Back-light power test error: {e}")
+            self.logger.error(f"Backlight power test error: {e}")
             return False
 
     def _has_backlight_support(self) -> bool:
@@ -597,11 +607,25 @@ class SMTTest(BaseTest):
         try:
             self.update_progress("Analyzing results...", 85)
 
-            power_params = self.parameters.get("power", {})  # Changed to lowercase
-            min_mainbeam_current = power_params.get("min_mainbeam_A", 0.5)  # Changed key name to match SKU file
-            max_mainbeam_current = power_params.get("max_mainbeam_A", 2.0)  # Changed key name to match SKU file
-            min_backlight_current = power_params.get("min_backlight_A", 0.1)  # Add backlight limits
-            max_backlight_current = power_params.get("max_backlight_A", 0.5)
+            # Get limits from smt_testing configuration
+            smt_config = self.parameters.get("smt_testing", {})
+            test_sequence = smt_config.get("test_sequence", [])
+            
+            # Extract limits from test sequence
+            mainbeam_limits = {}
+            backlight_limits = {}
+            
+            for test in test_sequence:
+                if test.get("function") == "mainbeam":
+                    mainbeam_limits = test.get("limits", {})
+                elif "backlight" in test.get("function", ""):
+                    backlight_limits = test.get("limits", {})
+            
+            # Get current limits or use defaults
+            min_mainbeam_current = mainbeam_limits.get("current_A", {}).get("min", 0.5)
+            max_mainbeam_current = mainbeam_limits.get("current_A", {}).get("max", 2.0)
+            min_backlight_current = backlight_limits.get("current_A", {}).get("min", 0.1)
+            max_backlight_current = backlight_limits.get("current_A", {}).get("max", 0.5)
 
             # Analyze mainbeam power
             mainbeam_data = self.result.measurements.get("mainbeam_current_readings")

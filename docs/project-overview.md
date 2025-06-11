@@ -114,27 +114,113 @@ The system has evolved to support flexible configuration approaches:
 - Template-based backlight configurations
 - Simplified maintenance and version control
 
-**Asynchronous Loading Architecture**:
-- Background configuration loading prevents UI blocking
-- Progress reporting for large configuration sets
-- Thread-safe access with automatic retry mechanisms
-- Fallback support for legacy configuration formats
+
 
 ### 4.2 Configuration Structure
-Each SKU configuration includes:
+Each SKU configuration includes:(below is an example of a sku that has all 3 tests enabled)
 ```json
 {
   "sku": "DD5002",
-  "pod_type": "C2",
+  "description": "Product Gamma - C2 Sport Economy",
+  "pod_type": "C2", 
   "power_level": "Sport",
   "available_modes": ["Offroad", "SMT", "WeightChecking"],
-  "backlight": {
-    "template": "rgbw_cycling",
-    "colors_to_test": [...]
+  
+  "offroad_testing": {
+    "test_sequence": [
+      {
+        "name": "mainbeam",
+        "relay": "main",
+        "duration_ms": 500,
+        "measurements": ["current", "voltage", "lux", "color"],
+        "limits": {
+          "current_A": {"min": 0.6, "max": 0.9},
+          "lux": {"min": 1500, "max": 1900},
+          "color_x": {"center": 0.460, "tolerance": 0.020},
+          "color_y": {"center": 0.420, "tolerance": 0.020}
+        }
+      },
+      {
+        "name": "backlight_rgbw",
+        "relay": "backlight_1",
+        "duration_ms": 6400,
+        "type": "rgbw_cycling",
+        "rgbw_config": {
+          "cycle_interval_ms": 800,
+          "total_cycles": 8,
+          "stabilization_ms": 150,
+          "sample_points_ms": [200, 350, 450],
+          "colors_to_test": [
+            {"name": "red", "target_x": 0.650, "target_y": 0.330, "tolerance": 0.020},
+            {"name": "green", "target_x": 0.300, "target_y": 0.600, "tolerance": 0.020},
+            {"name": "blue", "target_x": 0.150, "target_y": 0.060, "tolerance": 0.020},
+            {"name": "white", "target_x": 0.313, "target_y": 0.329, "tolerance": 0.020}
+          ]
+        },
+        "measurements": ["current", "voltage", "color"],
+        "limits": {
+          "current_A": {"min": 0.04, "max": 0.12}
+        }
+      }
+    ]
   },
-  "offroad_testing": {...},
-  "smt_testing": {...},
-  "weight_testing": {...}
+  
+  "smt_testing": {
+    "panel_layout": {
+      "rows": 3,
+      "columns": 2,
+      "total_boards": 6,
+      "board_positions": {
+        "1": {"row": 1, "col": 1, "name": "Bottom Left"},
+        "2": {"row": 1, "col": 2, "name": "Bottom Right"},
+        "3": {"row": 2, "col": 1, "name": "Middle Left"},
+        "4": {"row": 2, "col": 2, "name": "Middle Right"},
+        "5": {"row": 3, "col": 1, "name": "Top Left"},
+        "6": {"row": 3, "col": 2, "name": "Top Right"}
+      }
+    },
+    "relay_mapping": {
+      "1": {"board": 1, "function": "mainbeam"},
+      "2": {"board": 2, "function": "mainbeam"},
+      "3": {"board": 3, "function": "mainbeam"},
+      "4": {"board": 4, "function": "mainbeam"},
+      "5": {"board": 5, "function": "mainbeam"},
+      "6": {"board": 6, "function": "mainbeam"},
+      "7": null,
+      "8": null
+    },
+    "test_sequence": [
+      {
+        "name": "mainbeam_test",
+        "description": "Test mainbeam current on all boards",
+        "function": "mainbeam",
+        "test_all_boards": true,
+        "limits": {
+          "current_A": {"min": 0.55, "max": 0.85},
+          "voltage_V": {"min": 11.5, "max": 12.5}
+        }
+      }
+    ],
+    "programming": {
+      "enabled": true,
+      "programmer_path": "C:/Program Files (x86)/STMicroelectronics/st_toolset/stvp/STVP_CmdLine.exe",
+      "boards": {
+        "1": {"hex_file": "firmware/SSC5_V0.606.hex", "device": "STM8S001J3"},
+        "2": {"hex_file": "firmware/SSC5_V0.606.hex", "device": "STM8S001J3"},
+        "3": {"hex_file": "firmware/SSC5_V0.606.hex", "device": "STM8S001J3"},
+        "4": {"hex_file": "firmware/SSC5_V0.606.hex", "device": "STM8S001J3"},
+        "5": {"hex_file": "firmware/SSC5_V0.606.hex", "device": "STM8S001J3"},
+        "6": {"hex_file": "firmware/SSC5_V0.606.hex", "device": "STM8S001J3"}
+      }
+    }
+  },
+  
+  "weight_testing": {
+    "limits": {
+      "weight_g": {"min": 180.0, "max": 185.0}
+    },
+    "tare_g": 0.0
+  }
 }
 ```
 
@@ -217,7 +303,7 @@ src/
 
 ## 9. End Goal
 
-The Tester V4 platform provides a modern, maintainable, and scalable foundation for production testing that:
+The Tester V5 platform provides a modern, maintainable, and scalable foundation for production testing that:
 
 - Minimizes operator effort while maximizing test reliability
 - Supports rapid deployment of new product testing requirements
