@@ -204,23 +204,77 @@ class ConnectionDialog(QDialog):
 
         logger.info(f"Attempting to connect to Arduino on port: {port}")
         try:
-            # Test Arduino connection
             from src.hardware.arduino_controller import ArduinoController
-            arduino = ArduinoController(baud_rate=115200)
+            
+            # Create Arduino instance if it doesn't exist
+            if not self.parent().arduino_controller:
+                self.parent().arduino_controller = ArduinoController(baud_rate=115200)
+            
+            arduino = self.parent().arduino_controller
             
             if arduino.connect(port):
                 # Test communication
                 if arduino.test_communication():
-                    arduino.disconnect()
+                    # Get firmware type
+                    firmware_type = arduino.get_firmware_type()
+                    current_mode = self.parent().current_mode
                     
+                    # Store firmware type for later validation
+                    arduino._firmware_type = firmware_type
+                    
+                    # Validate firmware matches mode
+                    firmware_valid = False
+                    if firmware_type == "UNKNOWN":
+                        # Couldn't determine firmware type
+                        reply = QMessageBox.question(self, "Unknown Firmware", 
+                                                   f"Could not determine Arduino firmware type. "
+                                                   f"Are you sure this Arduino has {current_mode} firmware?",
+                                                   QMessageBox.Yes | QMessageBox.No)
+                        firmware_valid = (reply == QMessageBox.Yes)
+                    elif firmware_type == current_mode.upper():
+                        firmware_valid = True
+                    else:
+                        # Wrong firmware for current mode
+                        QMessageBox.warning(self, "Wrong Arduino Firmware", 
+                                          f"This Arduino has {firmware_type} firmware, "
+                                          f"but you are in {current_mode} mode.\n\n"
+                                          f"Please connect an Arduino with {current_mode} firmware.")
+                        arduino.disconnect()
+                        self.parent().arduino_controller = None
+                        return
+                    
+                    if not firmware_valid:
+                        arduino.disconnect()
+                        self.parent().arduino_controller = None
+                        return
+                    
+                    # Configure sensors based on current mode
+                    from src.hardware.arduino_controller import SensorConfigurations
+                    
+                    if current_mode == "SMT":
+                        sensor_configs = SensorConfigurations.smt_panel_sensors()
+                    else:  # Offroad
+                        sensor_configs = SensorConfigurations.offroad_pod_sensors()
+                    
+                    if not arduino.configure_sensors(sensor_configs):
+                        logger.error(f"Failed to configure sensors for {current_mode}")
+                        QMessageBox.warning(self, "Sensor Configuration Failed", 
+                                          f"Arduino connected but sensor configuration failed for {current_mode} mode.")
+                        return
+                    
+                    arduino._sensors_configured = True
+                    logger.info(f"Sensors configured for {current_mode} mode")
+                    
+                    # Don't disconnect - keep it connected!
                     self.arduino_connected = True
                     self.arduino_port = port
-                    self.arduino_status_label.setText(f"Status: Connected ({port})")
+                    self.arduino_status_label.setText(f"Status: Connected ({port}) - {firmware_type}")
                     self.arduino_status_label.setStyleSheet("color: green; font-weight: bold;")
                     self.arduino_connect_btn.setText("Disconnect")
-                    logger.info(f"Successfully connected to Arduino on {port}.")
+                    logger.info(f"Successfully connected to {firmware_type} Arduino on {port}.")
                 else:
                     arduino.disconnect()
+                    self.parent().arduino_controller = None
                     logger.warning(f"Arduino connected on {port} but communication test failed.")
                     QMessageBox.warning(self, "Connection Failed", 
                                         "Arduino connected but communication test failed. Check firmware and connections.")
@@ -238,12 +292,19 @@ class ConnectionDialog(QDialog):
 
     def disconnect_arduino(self):
         """Disconnect Arduino"""
+        try:
+            if self.parent().arduino_controller:
+                self.parent().arduino_controller.disconnect()
+                self.parent().arduino_controller = None
+        except Exception as e:
+            logger.error(f"Error disconnecting Arduino: {e}")
+        
         self.arduino_connected = False
         self.arduino_port = None
         self.arduino_status_label.setText("Status: Disconnected")
         self.arduino_status_label.setStyleSheet("color: red; font-weight: bold;")
         self.arduino_connect_btn.setText("Connect")
-        logger.info(f"Arduino disconnected from port {self.arduino_port if self.arduino_port else 'N/A'}.")
+        logger.info("Arduino disconnected.")
 
     def connect_scale(self):
         """Connect to Scale"""

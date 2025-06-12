@@ -47,6 +47,7 @@ class MainWindow(QMainWindow):
         # UI Components
         self.connection_dialog = ConnectionDialog(self)
         self.test_worker: Optional[TestWorker] = None
+        self.arduino_controller = None  # Persistent Arduino instance
 
         # Current state
         self.current_mode = "Offroad"  # Default mode
@@ -193,8 +194,9 @@ class MainWindow(QMainWindow):
 
     def set_mode(self, mode: str):
         """Set the current test mode"""
+        previous_mode = self.current_mode
         self.current_mode = mode
-        self.logger.info(f"Mode changed to: {mode}")
+        self.logger.info(f"Mode changed from {previous_mode} to {mode}")
 
         # Update UI components
         self.top_controls.set_mode(mode)
@@ -206,6 +208,31 @@ class MainWindow(QMainWindow):
                 self.start_btn.hide()
             else:
                 self.start_btn.show()
+        
+        # Check if Arduino firmware matches new mode
+        if hasattr(self, 'arduino_controller') and self.arduino_controller and self.arduino_controller.is_connected():
+            firmware_type = getattr(self.arduino_controller, '_firmware_type', 'UNKNOWN')
+            
+            if mode in ["SMT", "Offroad"] and firmware_type != mode.upper() and firmware_type != "UNKNOWN":
+                # Wrong firmware for new mode
+                from PySide6.QtWidgets import QMessageBox
+                
+                # Clear sensor configuration flag
+                if hasattr(self.arduino_controller, '_sensors_configured'):
+                    delattr(self.arduino_controller, '_sensors_configured')
+                
+                # Update connection status to show disconnected
+                self.connection_dialog.arduino_connected = False
+                self.connection_dialog.arduino_status_label.setText("Status: Wrong firmware for mode")
+                self.connection_dialog.arduino_status_label.setStyleSheet("color: orange; font-weight: bold;")
+                
+                QMessageBox.warning(self, "Arduino Firmware Mismatch",
+                                   f"The connected Arduino has {firmware_type} firmware, "
+                                   f"but you switched to {mode} mode.\n\n"
+                                   f"Please disconnect and connect an Arduino with {mode} firmware.")
+                
+                # Update connection status
+                self.update_connection_status()
         
         # Update connection status when switching to weight checking mode
         if mode == "WeightChecking":
@@ -483,6 +510,15 @@ class MainWindow(QMainWindow):
 
             # Cleanup test area
             self.test_area.cleanup()
+            
+            # Cleanup persistent Arduino connection
+            if hasattr(self, 'arduino_controller') and self.arduino_controller:
+                try:
+                    if self.arduino_controller.is_connected():
+                        self.arduino_controller.disconnect()
+                    self.arduino_controller = None
+                except Exception as e:
+                    self.logger.error(f"Error disconnecting Arduino: {e}")
             
             # Cleanup SKU manager
             if hasattr(self, 'sku_manager'):

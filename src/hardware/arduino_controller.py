@@ -538,6 +538,29 @@ class ArduinoController(ResourceMixin):
     def is_connected(self) -> bool:
         """Check if Arduino is connected"""
         return self.serial.is_connected()
+    
+    def get_firmware_type(self) -> str:
+        """Get the firmware type of connected Arduino"""
+        try:
+            response = self.send_command("ID", timeout=2.0)
+            if response:
+                response_upper = response.upper()
+                if "SMT_TESTER" in response_upper or "SMT" in response_upper:
+                    return "SMT"
+                elif "OFFROAD" in response_upper:
+                    return "OFFROAD"
+                elif "DIODE_DYNAMICS" in response_upper:
+                    # Generic firmware - need more info
+                    # Try to determine by checking available commands
+                    status = self.send_command("STATUS", timeout=2.0)
+                    if status and "SMT" in status.upper():
+                        return "SMT"
+                    else:
+                        return "OFFROAD"
+            return "UNKNOWN"
+        except Exception as e:
+            self.logger.error(f"Error getting firmware type: {e}")
+            return "UNKNOWN"
 
     def get_sensor_status(self) -> Dict[str, Any]:
         """Get status of all configured sensors"""

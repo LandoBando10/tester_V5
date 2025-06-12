@@ -87,13 +87,24 @@ class SMTHandler(QObject, ResourceMixin):
             QMessageBox.critical(self.main_window, "Error", f"Could not start test: {e}")
     
     def _validate_arduino_connection(self, connection_status: Dict[str, Any]) -> bool:
-        """Validate Arduino connection"""
+        """Validate Arduino connection and firmware"""
         self.logger.debug("Validating Arduino connection.")
         if not connection_status.get('arduino_connected', False):
             self.logger.warning("Arduino not connected.")
             QMessageBox.warning(self.main_window, "Warning",
                                 "Please connect to Arduino first (Connection → Hardware Connections)")
             return False
+        
+        # Validate firmware type
+        if hasattr(self.main_window, 'arduino_controller') and self.main_window.arduino_controller:
+            firmware_type = getattr(self.main_window.arduino_controller, '_firmware_type', 'UNKNOWN')
+            if firmware_type != "SMT" and firmware_type != "UNKNOWN":
+                self.logger.warning(f"Wrong Arduino firmware: {firmware_type}")
+                QMessageBox.critical(self.main_window, "Wrong Arduino Firmware",
+                                   f"The connected Arduino has {firmware_type} firmware.\n\n"
+                                   f"Please disconnect and connect an Arduino with SMT firmware.")
+                return False
+        
         self.logger.debug("Arduino connection validated.")
         return True
     
@@ -104,6 +115,12 @@ class SMTHandler(QObject, ResourceMixin):
         try:
             from src.core.smt_test import SMTTest
             port = connection_status['arduino_port']
+            
+            # Get Arduino controller from main window
+            arduino_controller = None
+            if hasattr(self.main_window, 'arduino_controller'):
+                arduino_controller = self.main_window.arduino_controller
+                self.logger.info("Using persistent Arduino controller")
             
             # Get programming configuration if programming is enabled
             programming_config = None
@@ -123,8 +140,9 @@ class SMTHandler(QObject, ResourceMixin):
                         return None
                     self.logger.info("User chose to continue without programming config.")
             
+            # Pass Arduino controller to SMT test
             self.logger.info(f"SMTTest instance created with port: {port}, programming_config: {'present' if programming_config else 'absent'}")
-            return SMTTest(sku, params, port, programming_config)
+            return SMTTest(sku, params, port, programming_config, arduino_controller=arduino_controller)
             
         except ImportError as e:
             self.logger.error(f"Import error creating test instance: {e}", exc_info=True)

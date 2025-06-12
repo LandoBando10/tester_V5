@@ -11,12 +11,19 @@ class OffroadTest(BaseTest):
     """Offroad pod testing implementation with FIXED Arduino communication"""
 
     def __init__(self, sku: str, parameters: Dict[str, Any], port: str, test_config: str = "offroad_standard", 
-                 pressure_test_enabled: bool = False):
+                 pressure_test_enabled: bool = False, arduino_controller=None):
         super().__init__(sku, parameters)
         self.port = port
         self.test_config = test_config
         self.pressure_test_enabled = pressure_test_enabled
-        self.arduino = ArduinoController(baud_rate=115200)
+        
+        # Use provided Arduino controller or create new one
+        self.arduino = arduino_controller
+        self.owns_arduino = False  # Track if we created the Arduino instance
+        if not self.arduino:
+            self.arduino = ArduinoController(baud_rate=115200)
+            self.owns_arduino = True
+            
         self.required_params = ["LUX", "COLOR"]  # PRESSURE is global
 
         # Data collection - now properly aligned with Arduino
@@ -33,23 +40,31 @@ class OffroadTest(BaseTest):
     def setup_hardware(self) -> bool:
         """Initialize Arduino and sensors using correct protocol"""
         try:
-            self.update_progress("Connecting to Arduino...", 10)
+            self.update_progress("Initializing test hardware...", 10)
 
             if not self.validate_parameters(self.required_params):
                 return False
 
-            # Connect to Arduino
-            if not self.arduino.connect(self.port):
-                self.logger.error(f"Failed to connect to Arduino on port {self.port}")
-                return False
+            # Only connect if we own the Arduino instance
+            if self.owns_arduino and not self.arduino.is_connected():
+                self.update_progress("Connecting to Arduino...", 15)
+                if not self.arduino.connect(self.port):
+                    self.logger.error(f"Failed to connect to Arduino on port {self.port}")
+                    return False
 
-            self.update_progress("Checking sensors...", 20)
-
-            # Configure sensors using SENSOR_CHECK (not JSON config)
-            sensor_config = self._get_sensor_configuration()
-            if not self.arduino.configure_sensors(sensor_config):
-                self.logger.error("Failed to configure sensors")
-                return False
+            # Skip sensor configuration if already configured
+            if not hasattr(self.arduino, '_sensors_configured'):
+                self.update_progress("Checking sensors...", 20)
+                # Configure sensors using SENSOR_CHECK (not JSON config)
+                sensor_config = self._get_sensor_configuration()
+                if not self.arduino.configure_sensors(sensor_config):
+                    self.logger.error("Failed to configure sensors")
+                    return False
+                self.arduino._sensors_configured = True
+                self.logger.info("Sensors configured successfully")
+            else:
+                self.logger.info("Sensors already configured, skipping")
+                self.update_progress("Sensors ready", 20)
 
             self.update_progress("Setting up callbacks...", 30)
 
@@ -63,8 +78,8 @@ class OffroadTest(BaseTest):
             # Start sensor reading
             self.arduino.start_reading()
 
-            # Give sensors time to stabilize
-            time.sleep(2)
+            # REMOVED: Sensor stabilization delay per user request
+            # Sensors should be ready immediately
 
             self.update_progress("Hardware setup complete", 45)
             return True
@@ -549,9 +564,12 @@ class OffroadTest(BaseTest):
             # Arduino handles cleanup automatically with STOP command
             self.arduino.send_command("STOP")
             
-            # Stop reading and disconnect
+            # Stop reading
             self.arduino.stop_reading()
-            self.arduino.disconnect()
+            
+            # Only disconnect if we own the Arduino instance
+            if self.owns_arduino:
+                self.arduino.disconnect()
 
             self.logger.info("Hardware cleanup complete")
 

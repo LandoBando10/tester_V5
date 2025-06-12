@@ -85,13 +85,24 @@ class OffroadHandler(QObject, ResourceMixin):
             QMessageBox.critical(self.main_window, "Error", f"Could not start test: {e}")
     
     def _validate_arduino_connection(self, connection_status: Dict[str, Any]) -> bool:
-        """Validate Arduino connection"""
+        """Validate Arduino connection and firmware"""
         self.logger.debug("Validating Arduino connection.")
         if not connection_status.get('arduino_connected', False):
             self.logger.warning("Arduino not connected.")
             QMessageBox.warning(self.main_window, "Warning",
                                 "Please connect to Arduino first (Connection → Hardware Connections)")
             return False
+        
+        # Validate firmware type
+        if hasattr(self.main_window, 'arduino_controller') and self.main_window.arduino_controller:
+            firmware_type = getattr(self.main_window.arduino_controller, '_firmware_type', 'UNKNOWN')
+            if firmware_type != "OFFROAD" and firmware_type != "UNKNOWN":
+                self.logger.warning(f"Wrong Arduino firmware: {firmware_type}")
+                QMessageBox.critical(self.main_window, "Wrong Arduino Firmware",
+                                   f"The connected Arduino has {firmware_type} firmware.\n\n"
+                                   f"Please disconnect and connect an Arduino with Offroad firmware.")
+                return False
+        
         self.logger.debug("Arduino connection validated.")
         return True
     
@@ -105,8 +116,14 @@ class OffroadHandler(QObject, ResourceMixin):
             test_config = "offroad_standard"  # Could be made configurable
             pressure_test_enabled = "PRESSURE" in enabled_tests
             
+            # Get Arduino controller from main window
+            arduino_controller = None
+            if hasattr(self.main_window, 'arduino_controller'):
+                arduino_controller = self.main_window.arduino_controller
+                self.logger.info("Using persistent Arduino controller")
+            
             self.logger.info(f"OffroadTest instance created with port: {port}, config: {test_config}, pressure_enabled: {pressure_test_enabled}")
-            return offroad_test.OffroadTest(sku, params, port, test_config, pressure_test_enabled)
+            return offroad_test.OffroadTest(sku, params, port, test_config, pressure_test_enabled, arduino_controller=arduino_controller)
             
         except ImportError as e:
             self.logger.error(f"Import error creating test instance: {e}", exc_info=True)

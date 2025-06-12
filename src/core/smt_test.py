@@ -152,12 +152,19 @@ class SMTArduinoController(ArduinoController):
 class SMTTest(BaseTest):
     """SMT panel testing with programming and power validation using dedicated SMT Arduino"""
 
-    def __init__(self, sku: str, parameters: Dict[str, Any], port: str, programming_config: Optional[Dict] = None, smt_config_path: Optional[str] = None):
+    def __init__(self, sku: str, parameters: Dict[str, Any], port: str, programming_config: Optional[Dict] = None, smt_config_path: Optional[str] = None, arduino_controller=None):
         super().__init__(sku, parameters)
         self.port = port
         self.programming_config = programming_config or {}
         self.smt_config_path = smt_config_path
-        self.arduino = ArduinoController(baud_rate=115200)  # Use standard controller with SMT firmware
+        
+        # Use provided Arduino controller or create new one
+        self.arduino = arduino_controller
+        self.owns_arduino = False  # Track if we created the Arduino instance
+        if not self.arduino:
+            self.arduino = ArduinoController(baud_rate=115200)
+            self.owns_arduino = True
+            
         self.smt_controller = SMTController(self.arduino)
         self.relay_mapping = {}
 
@@ -210,17 +217,40 @@ class SMTTest(BaseTest):
     def setup_hardware(self) -> bool:
         """Initialize SMT Arduino and bed-of-nails fixture"""
         try:
-            self.update_progress("Connecting to SMT Arduino...", 10)
+            self.update_progress("Setting up SMT test...", 10)
 
-            # Connect to SMT Arduino
-            if not self.arduino.connect(self.port):
-                self.logger.error(f"Failed to connect to SMT Arduino on port {self.port}")
-                return False
+            # Only connect if we own the Arduino instance
+            if self.owns_arduino and not self.arduino.is_connected():
+                self.update_progress("Connecting to SMT Arduino...", 15)
+                if not self.arduino.connect(self.port):
+                    self.logger.error(f"Failed to connect to SMT Arduino on port {self.port}")
+                    return False
 
-            self.update_progress("Initializing SMT system...", 20)
+            # Skip sensor configuration if already configured
+            if not hasattr(self.arduino, '_sensors_configured'):
+                self.update_progress("Configuring sensors...", 20)
+                from src.hardware.arduino_controller import SensorConfigurations
+                sensor_configs = SensorConfigurations.smt_panel_sensors()
+                
+                if not self.arduino.configure_sensors(sensor_configs):
+                    self.logger.error("Failed to configure sensors")
+                    self.logger.error("Please check:")
+                    self.logger.error("1. INA260 sensor is properly connected to I2C bus")
+                    self.logger.error("2. Sensor has power (check VCC and GND connections)")
+                    self.logger.error("3. I2C pull-up resistors are present")
+                    self.logger.error("4. No I2C address conflicts (INA260 default is 0x40)")
+                    return False
+                
+                self.arduino._sensors_configured = True
+                self.logger.info("Sensors configured successfully")
+            else:
+                self.logger.info("Sensors already configured, skipping")
 
-            # The parameters ARE the smt_testing configuration
-            # (get_test_parameters returns the mode-specific config directly)
+            # REMOVED: 2-second sleep for sensor stabilization
+            # The sensors should be ready immediately or after minimal delay
+
+            # Get SMT configuration
+            self.update_progress("Initializing SMT controller...", 30)
             smt_config = self.parameters
             if not smt_config:
                 self.logger.error("No SMT configuration found in parameters")
@@ -240,29 +270,7 @@ class SMTTest(BaseTest):
                 self.logger.error("Failed to initialize SMT controller")
                 return False
 
-            # Configure sensors for SMT testing
-            self.update_progress("Configuring sensors...", 30)
-            from src.hardware.arduino_controller import SensorConfigurations
-            sensor_configs = SensorConfigurations.smt_panel_sensors()
-            
-            if not self.arduino.configure_sensors(sensor_configs):
-                self.logger.error("Failed to configure sensors")
-                self.logger.error("Please check:")
-                self.logger.error("1. INA260 sensor is properly connected to I2C bus")
-                self.logger.error("2. Sensor has power (check VCC and GND connections)")
-                self.logger.error("3. I2C pull-up resistors are present")
-                self.logger.error("4. No I2C address conflicts (INA260 default is 0x40)")
-                return False
-                
-            self.logger.info("Sensors configured successfully")
-            
-            # Give sensors time to initialize
-            self.update_progress("Waiting for sensors to stabilize...", 35)
-            time.sleep(2.0)  # Allow 2 seconds for sensor initialization
-            
-            self.logger.info("Sensor initialization complete")
-
-            self.update_progress("Hardware setup complete", 40)
+            self.update_progress("Ready to test", 40)
             return True
 
         except Exception as e:
@@ -763,8 +771,9 @@ class SMTTest(BaseTest):
             # Turn off all outputs using SMT controller
             self.smt_controller.all_lights_off()
 
-            # Disconnect
-            self.arduino.disconnect()
+            # Only disconnect if we own the Arduino instance
+            if self.owns_arduino:
+                self.arduino.disconnect()
 
             self.logger.info("SMT hardware cleanup complete")
 

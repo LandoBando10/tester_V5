@@ -78,8 +78,23 @@ class ConnectionHandler(QObject, ResourceMixin):
                 connected = status.get('arduino_connected', False)
                 arduino_port = status.get('arduino_port')
                 if connected:
-                    self.logger.info(f"Arduino connected on port {arduino_port}.")
-                    connection_details = f"Arduino on {arduino_port}" if arduino_port else "Arduino connected"
+                    # Check for firmware mismatch
+                    if (hasattr(self.main_window, 'arduino_controller') and 
+                        self.main_window.arduino_controller and 
+                        self.main_window.arduino_controller.is_connected()):
+                        firmware_type = getattr(self.main_window.arduino_controller, '_firmware_type', 'UNKNOWN')
+                        if (self.main_window.current_mode in ["SMT", "Offroad"] and 
+                            firmware_type != self.main_window.current_mode.upper() and 
+                            firmware_type != "UNKNOWN"):
+                            self.logger.warning(f"Firmware mismatch: {firmware_type} Arduino connected in {self.main_window.current_mode} mode")
+                            connected = False
+                            connection_details = f"Wrong firmware: {firmware_type}"
+                        else:
+                            self.logger.info(f"Arduino connected on port {arduino_port}.")
+                            connection_details = f"Arduino on {arduino_port}" if arduino_port else "Arduino connected"
+                    else:
+                        self.logger.info(f"Arduino connected on port {arduino_port}.")
+                        connection_details = f"Arduino on {arduino_port}" if arduino_port else "Arduino connected"
                 else:
                     self.logger.info("Arduino is not connected.")
                     connection_details = "Disconnected"
