@@ -219,10 +219,11 @@ class SMTTest(BaseTest):
 
             self.update_progress("Initializing SMT system...", 20)
 
-            # Get SMT configuration from parameters
-            smt_config = self.parameters.get("smt_testing", {})
+            # The parameters ARE the smt_testing configuration
+            # (get_test_parameters returns the mode-specific config directly)
+            smt_config = self.parameters
             if not smt_config:
-                self.logger.error("No smt_testing configuration found in SKU parameters")
+                self.logger.error("No SMT configuration found in parameters")
                 return False
                 
             # Store relay mapping for our use
@@ -238,6 +239,28 @@ class SMTTest(BaseTest):
             if not self.smt_controller.initialize_arduino():
                 self.logger.error("Failed to initialize SMT controller")
                 return False
+
+            # Configure sensors for SMT testing
+            self.update_progress("Configuring sensors...", 30)
+            from src.hardware.arduino_controller import SensorConfigurations
+            sensor_configs = SensorConfigurations.smt_panel_sensors()
+            
+            if not self.arduino.configure_sensors(sensor_configs):
+                self.logger.error("Failed to configure sensors")
+                self.logger.error("Please check:")
+                self.logger.error("1. INA260 sensor is properly connected to I2C bus")
+                self.logger.error("2. Sensor has power (check VCC and GND connections)")
+                self.logger.error("3. I2C pull-up resistors are present")
+                self.logger.error("4. No I2C address conflicts (INA260 default is 0x40)")
+                return False
+                
+            self.logger.info("Sensors configured successfully")
+            
+            # Give sensors time to initialize
+            self.update_progress("Waiting for sensors to stabilize...", 35)
+            time.sleep(2.0)  # Allow 2 seconds for sensor initialization
+            
+            self.logger.info("Sensor initialization complete")
 
             self.update_progress("Hardware setup complete", 40)
             return True
@@ -260,8 +283,8 @@ class SMTTest(BaseTest):
                     "action": "program_boards"
                 })
 
-            # Add power validation phases from smt_testing configuration
-            smt_config = self.parameters.get("smt_testing", {})
+            # Add power validation phases from configuration
+            smt_config = self.parameters
             test_sequence = smt_config.get("test_sequence", [])
 
             self.test_phases.extend([
@@ -487,26 +510,34 @@ class SMTTest(BaseTest):
         Measure a group of relays and map results back to board numbers
         """
         board_results = {}
+        relay_list = relays.split(',')
+        
+        # MEASURE_GROUP command handles relay switching internally
+        # No need to turn relays on/off manually
         self.logger.info(f"Sending MEASURE_GROUP:{relays}")
         
         # Send command and collect ALL responses until MEASURE_GROUP:COMPLETE
         response_lines = []
         
-        # Send the command
+        # Use the Arduino controller's send_command method
+        # First send the command to start measurement
         self.arduino.serial.write(f"MEASURE_GROUP:{relays}\r\n")
         
         # Read responses until we see COMPLETE or timeout
-        import time
         start_time = time.time()
         
         while time.time() - start_time < timeout:
-            line = self.arduino.serial.read_line(timeout=0.5)
-            if line:
-                response_lines.append(line)
-                if "MEASURE_GROUP:COMPLETE" in line:
-                    break
-                elif "STOPPED" in line:  # Handle early termination
-                    break
+            if self.arduino.serial.is_connected():
+                line = self.arduino.serial.read_line(timeout=0.5)
+                if line:
+                    response_lines.append(line)
+                    if "MEASURE_GROUP:COMPLETE" in line:
+                        break
+                    elif "STOPPED" in line:  # Handle early termination
+                        break
+            else:
+                self.logger.error("Lost connection to Arduino during measurement")
+                break
         
         # Join all response lines
         full_response = '\n'.join(response_lines)
@@ -541,6 +572,10 @@ class SMTTest(BaseTest):
                     self.logger.error(f"Error parsing measurement line '{line}': {e}")
         
         self.logger.info(f"Parsed board results: {list(board_results.keys())}")
+        
+        # MEASURE_GROUP already turned off all relays
+        # No need to turn them off again
+        
         return board_results
 
     def _execute_mainbeam_power_test(self, duration: float, base_progress: int) -> bool:
@@ -607,8 +642,8 @@ class SMTTest(BaseTest):
         try:
             self.update_progress("Analyzing results...", 85)
 
-            # Get limits from smt_testing configuration
-            smt_config = self.parameters.get("smt_testing", {})
+            # The parameters ARE the smt_testing configuration
+            smt_config = self.parameters
             test_sequence = smt_config.get("test_sequence", [])
             
             # Extract limits from test sequence

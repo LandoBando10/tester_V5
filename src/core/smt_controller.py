@@ -31,9 +31,16 @@ class SMTController:
         try:
             # Check connection
             response = self.arduino.send_command("ID")
-            if "SMT_TESTER" not in response:
-                logger.error("Arduino not running SMT firmware")
+            if not response:
+                logger.error("No response from Arduino")
                 return False
+            
+            # Accept either SMT_TESTER or DIODE_DYNAMICS firmware
+            if "SMT_TESTER" not in response and "DIODE_DYNAMICS" not in response:
+                logger.error(f"Arduino not running compatible firmware. Response: {response}")
+                return False
+            
+            logger.info(f"Arduino firmware identified: {response}")
                 
             # Get relay count from mapping
             relay_count = len([r for r in self.relay_mapping.values() if r])

@@ -129,19 +129,42 @@ class ArduinoController(ResourceMixin):
             for sensor in sensor_configs:
                 self.sensors[sensor.sensor_id] = sensor
 
+            # First, let's check what the Arduino reports about its sensors
+            self.logger.info("Checking Arduino sensor status...")
+            status_response = self.serial.query("STATUS", response_timeout=3.0)
+            if status_response:
+                self.logger.info(f"Arduino status before sensor check: {status_response}")
+            
+            # Try to scan I2C bus to see what's connected
+            self.logger.info("Scanning I2C bus...")
+            i2c_response = self.serial.query("I2C_SCAN", response_timeout=5.0)
+            if i2c_response:
+                self.logger.info(f"I2C scan results: {i2c_response}")
+            
             # Arduino automatically initializes sensors - just verify they're working
+            self.logger.info("Running sensor check...")
             response = self.serial.query("SENSOR_CHECK", response_timeout=10.0)
-            if response and "COMPLETE" in response:
-                self.logger.info(f"Arduino sensors initialized successfully")
+            if response and response.startswith("OK:"):
+                self.logger.info(f"Arduino sensors initialized successfully: {response}")
                 
-                # Get sensor status to verify what's available
+                # Get sensor status again to verify what's available
                 status_response = self.serial.query("STATUS", response_timeout=3.0)
                 if status_response:
-                    self.logger.debug(f"Arduino status: {status_response}")
+                    self.logger.info(f"Arduino status after sensor check: {status_response}")
                 
+                return True
+            elif response and response.startswith("WARNING:"):
+                self.logger.warning(f"Arduino sensor warning: {response}")
+                # Warning is still acceptable, sensor exists but may need time
                 return True
             else:
                 self.logger.error(f"Arduino sensor check failed: {response}")
+                
+                # Try to get more diagnostic info
+                diag_response = self.serial.query("SENSOR_DIAG", response_timeout=3.0)
+                if diag_response:
+                    self.logger.error(f"Sensor diagnostics: {diag_response}")
+                    
                 return False
 
         except Exception as e:
@@ -561,12 +584,14 @@ class SensorConfigurations:
 
     @staticmethod
     def smt_panel_sensors(read_interval_ms: int = 100) -> List[SensorConfig]:
-        """SMT panel testing sensor configuration"""
+        """SMT panel testing sensor configuration
+        
+        For SMT testing, typically uses a single INA260 that's switched
+        between different measurement points via relays.
+        """
         return [
-            SensorConfig("INA260", "CURRENT_MAIN", read_interval_ms),
-            SensorConfig("INA260", "VOLTAGE_MAIN", read_interval_ms),
-            SensorConfig("INA260", "CURRENT_BACK", read_interval_ms),
-            SensorConfig("INA260", "VOLTAGE_BACK", read_interval_ms)
+            SensorConfig("INA260", "CURRENT", read_interval_ms),
+            SensorConfig("INA260", "VOLTAGE", read_interval_ms)
         ]
 
 

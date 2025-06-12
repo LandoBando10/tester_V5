@@ -238,13 +238,13 @@ class PCBPanelWidget(QWidget):
             # Check pass/fail
             if not data.get("passed", True):
                 board_pass[b_idx] = False
-                logger.info(f"[CELL COLOR DEBUG] Board {b_idx} marked as FAILED due to {name}")
+                # Debug: Board marked as FAILED due to measurement
 
-        logger.info(f"[CELL COLOR DEBUG] Final board pass/fail status: {board_pass}")
+        # Debug: Final board pass/fail status determined
         
         for idx, cell in self.cells.items():
             passed = board_pass.get(idx, True)
-            logger.info(f"[CELL COLOR DEBUG] Updating cell {idx} with passed={passed}")
+            # Debug: Updating cell with pass/fail status
             cell.update_measurements(
                 main_vals.get(idx),
                 back_vals.get(idx, {}),
