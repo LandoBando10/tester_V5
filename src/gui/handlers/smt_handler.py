@@ -8,6 +8,7 @@ from PySide6.QtCore import QObject, Signal, Qt
 
 from src.core.base_test import TestResult
 from src.utils.resource_manager import ResourceMixin
+import time
 
 
 class SMTHandler(QObject, ResourceMixin):
@@ -30,13 +31,61 @@ class SMTHandler(QObject, ResourceMixin):
         # Connect button signal to handler - ensures it runs on main thread
         self.button_pressed_signal.connect(self._handle_button_press_on_main_thread, Qt.QueuedConnection)
         
+        # PHASE 1: Test timing control
+        self._last_test_end_time = 0
+        self.min_test_interval = 3.0  # 3 seconds between tests for safety
+        self.consecutive_test_count = 0
+        self.max_consecutive_tests = 10
+        
         self.logger.debug("SMTHandler initialized")
     
     def start_test(self, sku: str, enabled_tests: List[str], connection_status: Dict[str, Any]):
-        """Start the SMT test"""
+        """Start the SMT test with PHASE 1 recovery logic"""
         self.logger.info(f"Starting SMT test for SKU: {sku}, Enabled Tests: {enabled_tests}")
         
         try:
+            # PHASE 1: Enforce cooldown between tests
+            current_time = time.time()
+            time_since_last = current_time - self._last_test_end_time
+            
+            if time_since_last < self.min_test_interval:
+                wait_time = self.min_test_interval - time_since_last
+                self.logger.info(f"Enforcing {wait_time:.1f}s cooldown between tests")
+                self.main_window.update_status(f"Please wait {wait_time:.1f}s...", "yellow")
+                time.sleep(wait_time)
+            
+            # PHASE 1: Extended cooldown after many consecutive tests
+            self.consecutive_test_count += 1
+            if self.consecutive_test_count >= self.max_consecutive_tests:
+                self.logger.warning(f"Reached {self.max_consecutive_tests} consecutive tests - enforcing extended cooldown")
+                self.main_window.update_status("Extended cooldown (10s) - relay recovery", "yellow")
+                
+                # Turn off all relays during cooldown
+                if hasattr(self.main_window, 'arduino_controller') and self.main_window.arduino_controller:
+                    self.main_window.arduino_controller.send_command("RELAY_ALL:OFF")
+                
+                time.sleep(10.0)
+                self.consecutive_test_count = 0
+            
+            # PHASE 1: Verify Arduino responsiveness
+            if hasattr(self.main_window, 'arduino_controller') and self.main_window.arduino_controller:
+                arduino = self.main_window.arduino_controller
+                
+                # Clear buffers before test
+                self.logger.info("Clearing serial buffers before test")
+                arduino.serial.flush_buffers()
+                
+                # Verify Arduino is responsive
+                if hasattr(arduino, 'verify_arduino_responsive'):
+                    if not arduino.verify_arduino_responsive():
+                        self.logger.error("Arduino not responding - attempting recovery")
+                        if hasattr(arduino, 'recover_communication'):
+                            if not arduino.recover_communication():
+                                self.logger.error("Failed to recover Arduino communication")
+                                self._button_press_handled = False
+                                QMessageBox.critical(self.main_window, "Error", 
+                                                   "Arduino not responding. Please reconnect.")
+                                return
             # Validation
             if not sku or sku == "-- Select SKU --":
                 self.logger.warning("SKU not selected.")
@@ -260,9 +309,20 @@ class SMTHandler(QObject, ResourceMixin):
             self.logger.error(f"Error during cleanup: {e}", exc_info=True)
     
     def _handle_test_completion(self, result: TestResult):
-        """Handle test completion"""
+        """Handle test completion with PHASE 1 timing updates"""
         self.logger.info(f"SMT test completed. Result: {'PASS' if result.passed else 'FAIL'}")
         try:
+            # PHASE 1: Record test end time for cooldown tracking
+            self._last_test_end_time = time.time()
+            
+            # PHASE 1: Always turn off relays after test
+            if hasattr(self.main_window, 'arduino_controller') and self.main_window.arduino_controller:
+                self.main_window.arduino_controller.send_command("RELAY_ALL:OFF")
+            
+            # If test failed, add extra recovery time
+            if not result.passed:
+                self._last_test_end_time += 3.0  # Add 3 seconds to cooldown for failed tests
+            
             # Clean up worker
             if self.current_test_worker:
                 self.current_test_worker = None

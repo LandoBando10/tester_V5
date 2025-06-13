@@ -8,146 +8,11 @@ from pathlib import Path
 from src.core.base_test import BaseTest, TestResult
 from src.core.programmer_controller import ProgrammerController
 from src.core.smt_controller import SMTController
-from src.hardware.arduino_controller import ArduinoController, SensorConfigurations
+from src.hardware.smt_arduino_controller import SMTArduinoController, SMTSensorConfigurations
 from config.settings import SENSOR_TIMINGS, TEST_SENSOR_CONFIGS
 
 
-class SMTArduinoController(ArduinoController):
-    """Extended Arduino controller specifically for SMT operations"""
-    
-    def __init__(self, baud_rate: int = 115200):
-        super().__init__(baud_rate)
-        self.is_smt_initialized = False
-        
-    def initialize_smt_system(self) -> bool:
-        """Initialize the SMT bed-of-nails fixture"""
-        try:
-            response = self.send_command("SMT:INIT", timeout=5.0)
-            if response and "OK" in response:
-                self.is_smt_initialized = True
-                self.logger.info("SMT system initialized successfully")
-                return True
-            else:
-                self.logger.error(f"SMT initialization failed: {response}")
-                return False
-        except Exception as e:
-            self.logger.error(f"SMT initialization error: {e}")
-            return False
-    
-    def select_board(self, board_name: str) -> bool:
-        """Select a specific board in the bed-of-nails fixture"""
-        try:
-            response = self.send_command(f"SMT:SELECT:{board_name.upper()}", timeout=3.0)
-            if response and "OK" in response:
-                self.logger.debug(f"Board {board_name} selected")
-                return True
-            else:
-                self.logger.error(f"Board selection failed for {board_name}: {response}")
-                return False
-        except Exception as e:
-            self.logger.error(f"Board selection error for {board_name}: {e}")
-            return False
-    
-    def deselect_board(self, board_name: str) -> bool:
-        """Deselect a specific board in the bed-of-nails fixture"""
-        try:
-            response = self.send_command(f"SMT:DESELECT:{board_name.upper()}", timeout=3.0)
-            if response and "OK" in response:
-                self.logger.debug(f"Board {board_name} deselected")
-                return True
-            else:
-                self.logger.error(f"Board deselection failed for {board_name}: {response}")
-                return False
-        except Exception as e:
-            self.logger.error(f"Board deselection error for {board_name}: {e}")
-            return False
-    
-    def deselect_all_boards(self) -> bool:
-        """Deselect all boards"""
-        return self.deselect_board("ALL")
-    
-    def set_power(self, power_type: str) -> bool:
-        """Set power supply state"""
-        try:
-            valid_power_types = ["OFF", "PROG_3V3", "PROG_5V", "TEST_12V", "TEST_24V"]
-            if power_type.upper() not in valid_power_types:
-                self.logger.error(f"Invalid power type: {power_type}")
-                return False
-                
-            response = self.send_command(f"SMT:POWER:{power_type.upper()}", timeout=3.0)
-            if response and "OK" in response:
-                self.logger.debug(f"Power set to {power_type}")
-                return True
-            else:
-                self.logger.error(f"Power setting failed for {power_type}: {response}")
-                return False
-        except Exception as e:
-            self.logger.error(f"Power control error: {e}")
-            return False
-    
-    def enable_programmer(self, programmer_type: str) -> bool:
-        """Enable programmer interface"""
-        try:
-            valid_programmers = ["STM8", "PIC"]
-            if programmer_type.upper() not in valid_programmers:
-                self.logger.error(f"Invalid programmer type: {programmer_type}")
-                return False
-                
-            response = self.send_command(f"SMT:PROG:ENABLE_{programmer_type.upper()}", timeout=3.0)
-            if response and "OK" in response:
-                self.logger.debug(f"{programmer_type} programmer enabled")
-                return True
-            else:
-                self.logger.error(f"Programmer enable failed for {programmer_type}: {response}")
-                return False
-        except Exception as e:
-            self.logger.error(f"Programmer enable error: {e}")
-            return False
-    
-    def disable_programmer(self) -> bool:
-        """Disable programmer interface"""
-        try:
-            response = self.send_command("SMT:PROG:DISABLE", timeout=3.0)
-            if response and "OK" in response:
-                self.logger.debug("Programmer disabled")
-                return True
-            else:
-                self.logger.error(f"Programmer disable failed: {response}")
-                return False
-        except Exception as e:
-            self.logger.error(f"Programmer disable error: {e}")
-            return False
-    
-    def set_mainbeam(self, state: bool) -> bool:
-        """Control mainbeam output for testing"""
-        try:
-            cmd = "SMT:MAINBEAM:ON" if state else "SMT:MAINBEAM:OFF"
-            response = self.send_command(cmd, timeout=2.0)
-            if response and "OK" in response:
-                self.logger.debug(f"Mainbeam {'ON' if state else 'OFF'}")
-                return True
-            else:
-                self.logger.error(f"Mainbeam control failed: {response}")
-                return False
-        except Exception as e:
-            self.logger.error(f"Mainbeam control error: {e}")
-            return False
-    
-    def set_backlight(self, state: bool) -> bool:
-        """Control backlight output for testing"""
-        try:
-            cmd = "SMT:BACKLIGHT:ON" if state else "SMT:BACKLIGHT:OFF"
-            response = self.send_command(cmd, timeout=2.0)
-            if response and "OK" in response:
-                self.logger.debug(f"Backlight {'ON' if state else 'OFF'}")
-                return True
-            else:
-                self.logger.error(f"Backlight control failed: {response}")
-                return False
-        except Exception as e:
-            self.logger.error(f"Backlight control error: {e}")
-            return False
-
+# Note: SMTArduinoController is now imported from smt_arduino_controller.py
 
 class SMTTest(BaseTest):
     """SMT panel testing with programming and power validation using dedicated SMT Arduino"""
@@ -162,7 +27,7 @@ class SMTTest(BaseTest):
         self.arduino = arduino_controller
         self.owns_arduino = False  # Track if we created the Arduino instance
         if not self.arduino:
-            self.arduino = ArduinoController(baud_rate=115200)
+            self.arduino = SMTArduinoController(baud_rate=115200)
             self.owns_arduino = True
             
         self.smt_controller = SMTController(self.arduino)
@@ -229,8 +94,7 @@ class SMTTest(BaseTest):
             # Skip sensor configuration if already configured
             if not hasattr(self.arduino, '_sensors_configured'):
                 self.update_progress("Configuring sensors...", 20)
-                from src.hardware.arduino_controller import SensorConfigurations
-                sensor_configs = SensorConfigurations.smt_panel_sensors()
+                sensor_configs = SMTSensorConfigurations.smt_panel_sensors()
                 
                 if not self.arduino.configure_sensors(sensor_configs):
                     self.logger.error("Failed to configure sensors")
@@ -516,36 +380,31 @@ class SMTTest(BaseTest):
     def _measure_group(self, relays: str, timeout: float = 15.0) -> Dict[str, Dict]:
         """
         Measure a group of relays and map results back to board numbers
+        PHASE 1 FIX: Use proper send_command instead of direct serial write
         """
         board_results = {}
         relay_list = relays.split(',')
         
+        # PHASE 1: Enforce test cooldown if this is a new test
+        self.arduino.enforce_test_cooldown()
+        
+        # PHASE 1: Verify Arduino is responsive before starting
+        if not self.arduino.verify_arduino_responsive():
+            self.logger.error("Arduino not responsive before MEASURE_GROUP")
+            if not self.arduino.recover_communication():
+                self.logger.error("Failed to recover Arduino communication")
+                return board_results
+        
         # MEASURE_GROUP command handles relay switching internally
-        # No need to turn relays on/off manually
         self.logger.info(f"Sending MEASURE_GROUP:{relays}")
         
-        # Send command and collect ALL responses until MEASURE_GROUP:COMPLETE
-        response_lines = []
+        # PHASE 1 CRITICAL FIX: Use send_measure_group method
+        success, response_lines = self.arduino.send_measure_group(relays, timeout)
         
-        # Use the Arduino controller's send_command method
-        # First send the command to start measurement
-        self.arduino.serial.write(f"MEASURE_GROUP:{relays}\r\n")
-        
-        # Read responses until we see COMPLETE or timeout
-        start_time = time.time()
-        
-        while time.time() - start_time < timeout:
-            if self.arduino.serial.is_connected():
-                line = self.arduino.serial.read_line(timeout=0.5)
-                if line:
-                    response_lines.append(line)
-                    if "MEASURE_GROUP:COMPLETE" in line:
-                        break
-                    elif "STOPPED" in line:  # Handle early termination
-                        break
-            else:
-                self.logger.error("Lost connection to Arduino during measurement")
-                break
+        if not success:
+            self.logger.error("MEASURE_GROUP command failed")
+            self.result.failures.append("Failed to communicate with Arduino during measurement")
+            return board_results
         
         # Join all response lines
         full_response = '\n'.join(response_lines)
@@ -581,8 +440,17 @@ class SMTTest(BaseTest):
         
         self.logger.info(f"Parsed board results: {list(board_results.keys())}")
         
-        # MEASURE_GROUP already turned off all relays
-        # No need to turn them off again
+        # PHASE 1: Validate we got measurements
+        expected_count = len(relay_list)
+        actual_count = len(board_results)
+        
+        if actual_count == 0:
+            self.logger.error(f"No measurements received for relays {relays}")
+            self.result.failures.append(f"No measurements received from Arduino for relays {relays}")
+        elif actual_count < expected_count:
+            self.logger.warning(f"Only received {actual_count}/{expected_count} measurements")
+            missing_relays = [r for r in relay_list if not any(br['relay'] == int(r) for br in board_results.values())]
+            self.logger.warning(f"Missing measurements for relays: {missing_relays}")
         
         return board_results
 
@@ -770,6 +638,9 @@ class SMTTest(BaseTest):
 
             # Turn off all outputs using SMT controller
             self.smt_controller.all_lights_off()
+            
+            # PHASE 1: Mark test as complete for cooldown tracking
+            self.arduino.mark_test_complete()
 
             # Only disconnect if we own the Arduino instance
             if self.owns_arduino:

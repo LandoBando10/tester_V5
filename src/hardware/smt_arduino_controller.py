@@ -1,17 +1,22 @@
-"""Arduino Controller - Fixed for SMT_Board_Tester_with_Button firmware
+"""
+SMT Arduino Controller - Specialized for SMT Panel Testing
 
-Note: This version has been modified to work with Arduino firmware that doesn't
-support the START and I2C_SCAN commands. These commands have been bypassed to
-prevent connection timeouts. The Arduino operates in request-response mode and
-reports button events through the reading loop.
+PHASE 1 FIXES IMPLEMENTED:
+- Fixed MEASURE_GROUP command handling with proper queue usage
+- Added serial buffer management and flushing before commands  
+- Added empty response detection and error handling
+- Added basic recovery logic with Arduino responsiveness verification
+- Added 2-second minimum interval between tests
+- Added command queue overflow protection
+- Specialized for SMT testing patterns
 
-Modified: June 2025 - Removed START and I2C_SCAN commands to fix 10-second connection delay
+Modified: December 2024 - Phase 1 stability fixes for SMT testing
 """
 
 import time
 import logging
 import threading
-from typing import Dict, List, Optional, Callable, Any
+from typing import Dict, List, Optional, Callable, Any, Tuple
 from dataclasses import dataclass
 from .serial_manager import SerialManager
 from src.utils.resource_manager import ResourceMixin
@@ -30,38 +35,27 @@ class SensorReading:
 
 
 @dataclass
-class TestResult:
-    """Container for parsed test result data"""
-    timestamp: float
-    test_type: str
-    measurements: Dict[str, float]
-    raw_data: str = ""
-
-
-@dataclass
-class RGBWSample:
-    """Container for RGBW sample data"""
-    timestamp: float
-    cycle: int
+class MeasurementResult:
+    """Container for SMT relay measurement results"""
+    relay: int
+    board: int
     voltage: float
     current: float
-    lux: float
-    x: float
-    y: float
-    raw_data: str = ""
+    power: float
+    timestamp: float
 
 
 @dataclass
 class SensorConfig:
-    """Configuration for a sensor - kept for compatibility but not sent to Arduino"""
-    sensor_type: str  # 'INA260', 'VEML7700', 'PRESSURE', 'COLOR'
+    """Configuration for a sensor - kept for compatibility"""
+    sensor_type: str  # 'INA260' for SMT
     sensor_id: str  # Unique identifier
-    read_interval_ms: int = 100  # Not used by Arduino
+    read_interval_ms: int = 100
     enabled: bool = True
 
 
-class ArduinoController(ResourceMixin):
-    """Controller for Arduino-based sensor systems - Fixed Communication Protocol"""
+class SMTArduinoController(ResourceMixin):
+    """Specialized Arduino controller for SMT panel testing with Phase 1 fixes"""
 
     def __init__(self, baud_rate: int = 115200):
         super().__init__()  # Initialize ResourceMixin
@@ -71,9 +65,7 @@ class ArduinoController(ResourceMixin):
         # Sensor management
         self.sensors: Dict[str, SensorConfig] = {}
         self.readings: List[SensorReading] = []
-        self.test_results: List[TestResult] = []
-        self.rgbw_samples: List[RGBWSample] = []
-        self.max_readings = 10000
+        self.max_readings = 1000  # Reduced for SMT (less data needed)
 
         # Reading control
         self.is_reading = False
@@ -81,26 +73,36 @@ class ArduinoController(ResourceMixin):
         self.reading_lock = threading.Lock()
 
         # Callbacks
-        self.reading_callback: Optional[Callable[[SensorReading], None]] = None
-        self.result_callback: Optional[Callable[[TestResult], None]] = None
-        self.rgbw_callback: Optional[Callable[[RGBWSample], None]] = None
         self.button_callback: Optional[Callable[[str], None]] = None  # Button state callback
 
-        # Current test tracking
-        self.current_test_type: Optional[str] = None
-        self.latest_test_result: Optional[TestResult] = None
-        
         # Command queue for sending commands during reading loop
         self.command_queue: Queue = Queue()
-        self.response_queues: Dict[str, Queue] = {}
         self.response_lock = threading.Lock()
+        
+        # Health monitoring (PHASE 1)
+        self.last_command_time = 0
+        self.consecutive_errors = 0
+        self.max_consecutive_errors = 3
+        
+        # Test timing control (PHASE 1)
+        self.last_test_end_time = 0
+        self.min_test_interval = 2.0  # Minimum seconds between tests
+        
+        # MEASURE_GROUP specific tracking
+        self.active_measure_group = False
+        self.measure_group_responses: List[str] = []
 
     def connect(self, port: str) -> bool:
-        """Connect to Arduino on specified port"""
+        """Connect to Arduino on specified port with enhanced recovery"""
         if self.serial.connect(port):
+            # PHASE 1: Clear buffers immediately
+            self.serial.flush_buffers()
+            time.sleep(0.1)  # Small delay for Arduino to stabilize
+            
             # Test communication
             if self.test_communication():
-                self.logger.info(f"Arduino connected successfully on {port}")
+                self.logger.info(f"SMT Arduino connected successfully on {port}")
+                self.consecutive_errors = 0
                 return True
             else:
                 self.logger.error("Arduino connected but communication test failed")
@@ -109,8 +111,16 @@ class ArduinoController(ResourceMixin):
         return False
 
     def disconnect(self):
-        """Disconnect from Arduino"""
+        """Disconnect from Arduino with proper cleanup"""
         self.stop_reading()
+        
+        # PHASE 1: Turn off all relays before disconnecting
+        if self.is_connected():
+            try:
+                self.send_command("RELAY_ALL:OFF", timeout=1.0)
+                time.sleep(0.1)
+            except:
+                pass
         
         # Clear command queue
         while not self.command_queue.empty():
@@ -123,22 +133,26 @@ class ArduinoController(ResourceMixin):
         self.cleanup_resources()  # Clean up all tracked resources
 
     def test_communication(self) -> bool:
-        """Test if Arduino is responding"""
+        """Test if Arduino is responding - enhanced for SMT"""
         try:
             # Clear any pending data
             self.serial.flush_buffers()
 
-            # Send identification command
-            response = self.serial.query("ID", response_timeout=3.0)
-            if response and "DIODE_DYNAMICS" in response.upper():
-                self.logger.debug(f"Arduino identification: {response}")
-                return True
+            # Try multiple times with different commands
+            for attempt in range(3):
+                # Send identification command
+                response = self.serial.query("ID", response_timeout=3.0)
+                if response and ("SMT" in response.upper() or "DIODE_DYNAMICS" in response.upper()):
+                    self.logger.debug(f"Arduino identification: {response}")
+                    return True
 
-            # Try alternative ping command
-            response = self.serial.query("PING", response_timeout=2.0)
-            if response and "PONG" in response.upper():
-                self.logger.debug("Arduino responded to PING")
-                return True
+                # Try STATUS command
+                response = self.serial.query("STATUS", response_timeout=2.0)
+                if response and "RELAYS:" in response:
+                    self.logger.debug(f"Arduino status: {response}")
+                    return True
+                
+                time.sleep(0.5)
 
             return False
 
@@ -146,47 +160,36 @@ class ArduinoController(ResourceMixin):
             self.logger.error(f"Communication test error: {e}")
             return False
 
-    def configure_sensors(self, sensor_configs: List[SensorConfig]) -> bool:
-        """Initialize Arduino sensors using SENSOR_CHECK command"""
+    def verify_arduino_responsive(self) -> bool:
+        """PHASE 1: Verify Arduino is still responsive before operations"""
         try:
-            # Store sensor configs locally for reference only
+            response = self.send_command("STATUS", timeout=2.0)
+            return response is not None and "RELAYS:" in str(response)
+        except:
+            return False
+
+    def configure_sensors(self, sensor_configs: List[SensorConfig]) -> bool:
+        """Initialize Arduino sensors for SMT testing"""
+        try:
+            # Store sensor configs locally
             self.sensors.clear()
             for sensor in sensor_configs:
                 self.sensors[sensor.sensor_id] = sensor
 
-            # First, let's check what the Arduino reports about its sensors
+            # Check sensor status
             self.logger.info("Checking Arduino sensor status...")
             status_response = self.serial.query("STATUS", response_timeout=3.0)
             if status_response:
-                self.logger.info(f"Arduino status before sensor check: {status_response}")
+                self.logger.info(f"Arduino status: {status_response}")
             
-            # Skip I2C_SCAN - current firmware doesn't support this command
-            # The firmware will report sensor status through SENSOR_CHECK instead
-            
-            # Arduino automatically initializes sensors - just verify they're working
+            # Run sensor check
             self.logger.info("Running sensor check...")
             response = self.serial.query("SENSOR_CHECK", response_timeout=10.0)
-            if response and response.startswith("OK:"):
-                self.logger.info(f"Arduino sensors initialized successfully: {response}")
-                
-                # Get sensor status again to verify what's available
-                status_response = self.serial.query("STATUS", response_timeout=3.0)
-                if status_response:
-                    self.logger.info(f"Arduino status after sensor check: {status_response}")
-                
-                return True
-            elif response and response.startswith("WARNING:"):
-                self.logger.warning(f"Arduino sensor warning: {response}")
-                # Warning is still acceptable, sensor exists but may need time
+            if response and (response.startswith("OK:") or response.startswith("WARNING:")):
+                self.logger.info(f"Arduino sensors initialized: {response}")
                 return True
             else:
                 self.logger.error(f"Arduino sensor check failed: {response}")
-                
-                # Try to get more diagnostic info
-                diag_response = self.serial.query("SENSOR_DIAG", response_timeout=3.0)
-                if diag_response:
-                    self.logger.error(f"Sensor diagnostics: {diag_response}")
-                    
                 return False
 
         except Exception as e:
@@ -194,76 +197,57 @@ class ArduinoController(ResourceMixin):
             return False
 
     def start_reading(self, callback: Optional[Callable[[SensorReading], None]] = None):
-        """Start continuous sensor reading"""
+        """Start reading loop for button events"""
         if self.is_reading:
-            self.logger.warning("Already reading sensors")
+            self.logger.warning("Already reading")
             return
 
-        self.reading_callback = callback
         self.is_reading = True
 
         # Start reading thread with resource tracking
         self.reading_thread = threading.Thread(target=self._reading_loop, daemon=True)
-        thread_id = self.register_thread(self.reading_thread, "arduino_reading")
+        thread_id = self.register_thread(self.reading_thread, "smt_arduino_reading")
         self.reading_thread.start()
 
-        # Skip START command - current firmware doesn't support it
-        # The reading loop will process button events and any data sent by Arduino
-        self.logger.info("Started reading loop for button events and data (no START command needed)")
+        self.logger.info("Started SMT reading loop for button events")
 
     def stop_reading(self):
-        """Stop continuous sensor reading"""
+        """Stop reading loop"""
         if not self.is_reading:
             return
 
         self.is_reading = False
 
-        # Send stop command to Arduino
-        self.serial.write("STOP\r\n")
-
-        # Wait for reading thread to finish with proper timeout
+        # Wait for reading thread to finish
         if self.reading_thread and self.reading_thread.is_alive():
             self.reading_thread.join(timeout=5.0)
             if self.reading_thread.is_alive():
                 self.logger.warning("Reading thread did not terminate gracefully")
-            else:
-                self.logger.debug("Reading thread terminated successfully")
 
-        self.logger.info("Stopped sensor reading")
+        self.logger.info("Stopped SMT reading loop")
 
     def _reading_loop(self):
-        """Main reading loop running in separate thread"""
+        """Main reading loop with PHASE 1 improvements"""
+        consecutive_errors = 0
+        
         while self.is_reading:
             try:
+                # PHASE 1: Monitor command queue depth
+                queue_depth = self.command_queue.qsize()
+                if queue_depth > 10:
+                    self.logger.warning(f"Command queue depth high: {queue_depth}")
+                    # Clear old commands
+                    while self.command_queue.qsize() > 5:
+                        try:
+                            self.command_queue.get_nowait()
+                        except Empty:
+                            break
+                
                 # Check for queued commands first
                 try:
                     command_data = self.command_queue.get_nowait()
-                    command = command_data['command']
-                    response_queue = command_data['response_queue']
-                    
-                    # Send command
-                    if self.serial.write(command + '\r\n'):
-                        # Wait for response with timeout
-                        start_time = time.time()
-                        timeout = command_data.get('timeout', 2.0)
-                        
-                        while time.time() - start_time < timeout:
-                            line = self.serial.read_line(timeout=0.1)
-                            if line:
-                                line = line.strip()
-                                # Check if this is a response to our command
-                                if self._is_command_response(command, line):
-                                    response_queue.put(line)
-                                    break
-                                else:
-                                    # Process other messages normally
-                                    self._process_arduino_message(line)
-                        else:
-                            # Timeout - put None in response queue
-                            response_queue.put(None)
-                    else:
-                        response_queue.put(None)
-                        
+                    self._process_queued_command(command_data)
+                    consecutive_errors = 0  # Reset on success
                 except Empty:
                     pass
                 
@@ -271,116 +255,148 @@ class ArduinoController(ResourceMixin):
                 line = self.serial.read_line(timeout=0.1)
                 if line:
                     self._process_arduino_message(line.strip())
+                    consecutive_errors = 0  # Reset on success
+                
+                # PHASE 1: Monitor serial buffer health
+                if self.serial.is_connected() and hasattr(self.serial.connection, 'in_waiting'):
+                    if self.serial.connection.in_waiting > 1000:
+                        self.logger.warning(f"Serial input buffer getting full: {self.serial.connection.in_waiting} bytes")
+                        self.serial.flush_buffers()
 
             except Exception as e:
                 self.logger.error(f"Reading loop error: {e}")
+                consecutive_errors += 1
+                
+                # PHASE 1: Recovery after multiple errors
+                if consecutive_errors >= self.max_consecutive_errors:
+                    self.logger.error(f"Too many consecutive errors ({consecutive_errors}) - attempting recovery")
+                    try:
+                        self.serial.flush_buffers()
+                        time.sleep(1.0)
+                        consecutive_errors = 0
+                    except:
+                        pass
+                
                 time.sleep(0.1)
+
+    def _process_queued_command(self, command_data: Dict):
+        """Process a command from the queue with special handling for MEASURE_GROUP"""
+        command = command_data['command']
+        response_queue = command_data['response_queue']
+        timeout = command_data.get('timeout', 2.0)
+        
+        # PHASE 1: Clear input buffer before sending critical commands
+        if command.startswith("MEASURE_GROUP") or self.serial.connection.in_waiting > 100:
+            self.serial.flush_buffers()
+            time.sleep(0.05)  # Small delay for buffer to clear
+        
+        # Send command
+        if not self.serial.write(command + '\r\n'):
+            response_queue.put(None)
+            return
+            
+        # Special handling for MEASURE_GROUP commands
+        if command.startswith("MEASURE_GROUP"):
+            self._handle_measure_group_response(response_queue, timeout)
+        else:
+            # Normal command handling
+            self._handle_normal_command_response(command, response_queue, timeout)
+
+    def _handle_measure_group_response(self, response_queue: Queue, timeout: float):
+        """PHASE 1: Proper MEASURE_GROUP response handling"""
+        responses = []
+        start_time = time.time()
+        measurement_count = 0
+        got_complete = False
+        
+        self.logger.debug("Waiting for MEASURE_GROUP response...")
+        
+        while time.time() - start_time < timeout:
+            line = self.serial.read_line(timeout=0.5)
+            if not line:
+                continue
+                
+            line = line.strip()
+            responses.append(line)
+            
+            # Count measurements
+            if line.startswith("MEASUREMENT:"):
+                measurement_count += 1
+                self.logger.debug(f"Got measurement: {line}")
+            
+            # Check for completion
+            if "MEASURE_GROUP:COMPLETE" in line:
+                got_complete = True
+                self.logger.debug(f"MEASURE_GROUP complete with {measurement_count} measurements")
+                break
+            
+            # Check for error
+            if line.startswith("ERROR:"):
+                self.logger.error(f"MEASURE_GROUP error: {line}")
+                response_queue.put(line)
+                return
+        
+        # PHASE 1: Validate response
+        if not got_complete:
+            self.logger.error(f"MEASURE_GROUP timeout after {timeout}s - got {len(responses)} lines")
+            response_queue.put(None)
+        elif measurement_count == 0:
+            self.logger.error("MEASURE_GROUP returned no measurements!")
+            # Return first response line to indicate command was received
+            response_queue.put(responses[0] if responses else None)
+        else:
+            # Return first response line (should be INFO:MEASURE_GROUP:START)
+            response_queue.put(responses[0] if responses else "OK")
+        
+        # Store responses for later retrieval
+        self.measure_group_responses = responses
+
+    def _handle_normal_command_response(self, command: str, response_queue: Queue, timeout: float):
+        """Handle response for normal commands"""
+        start_time = time.time()
+        
+        while time.time() - start_time < timeout:
+            line = self.serial.read_line(timeout=0.1)
+            if line:
+                line = line.strip()
+                if self._is_command_response(command, line):
+                    response_queue.put(line)
+                    return
+                else:
+                    # Process other messages normally
+                    self._process_arduino_message(line)
+        
+        # Timeout
+        response_queue.put(None)
     
     def _is_command_response(self, command: str, line: str) -> bool:
         """Check if a line is a response to a specific command"""
-        # Remove newlines and normalize
         cmd = command.strip().upper()
         resp = line.strip().upper()
         
-        # Common response patterns
+        # SMT-specific response patterns
         if cmd == "ID":
-            return "SMT_TESTER" in resp or "DIODE_DYNAMICS" in resp or "OFFROAD" in resp
+            return "SMT" in resp or "DIODE_DYNAMICS" in resp
         elif cmd == "STATUS":
             return resp.startswith("DATA:RELAYS:") or resp.startswith("STATUS:")
         elif cmd.startswith("RELAY"):
             return resp.startswith("OK:RELAY") or resp.startswith("ERROR:RELAY")
         elif cmd == "RESET":
             return resp.startswith("OK:RESET") or resp == "RESET"
-        elif cmd == "SENSORS":
-            return resp.startswith("OK:SENSOR") or resp.startswith("ERROR:SENSOR")
-        elif cmd == "TEST":
-            return resp.startswith("OK:TEST") or resp.startswith("ERROR:TEST")
+        elif cmd == "SENSOR_CHECK":
+            return resp.startswith("OK:SENSOR") or resp.startswith("WARNING:SENSOR")
+        elif cmd.startswith("MEASURE_GROUP"):
+            return resp.startswith("INFO:MEASURE_GROUP:")
         else:
             # Generic OK/ERROR responses
             return resp.startswith("OK:") or resp.startswith("ERROR:")
 
     def _process_arduino_message(self, line: str):
-        """Process all types of Arduino messages"""
+        """Process Arduino messages - simplified for SMT"""
         try:
-            # Handle LIVE sensor data
-            if line.startswith("LIVE:"):
-                readings = self._parse_live_data(line)
-                for reading in readings:
-                    with self.reading_lock:
-                        self.readings.append(reading)
-                        # Limit stored readings
-                        if len(self.readings) > self.max_readings:
-                            self.readings.pop(0)
-                    
-                    # Call callback if set
-                    if self.reading_callback:
-                        try:
-                            self.reading_callback(reading)
-                        except Exception as e:
-                            self.logger.error(f"Reading callback error: {e}")
-
-            # Handle TEST_COMPLETE messages
-            elif line.startswith("TEST_COMPLETE:"):
-                test_type = line[14:].strip()
-                self.current_test_type = None
-                self.logger.info(f"Test completed: {test_type}")
-
-            # Handle RESULT messages
-            elif line.startswith("RESULT:"):
-                result = self._parse_result_data(line)
-                if result:
-                    with self.reading_lock:
-                        self.test_results.append(result)
-                        self.latest_test_result = result
-                    
-                    if self.result_callback:
-                        try:
-                            self.result_callback(result)
-                        except Exception as e:
-                            self.logger.error(f"Result callback error: {e}")
-
-            # Handle RGBW_SAMPLE messages
-            elif line.startswith("RGBW_SAMPLE:"):
-                sample = self._parse_rgbw_sample(line)
-                if sample:
-                    with self.reading_lock:
-                        self.rgbw_samples.append(sample)
-                    
-                    if self.rgbw_callback:
-                        try:
-                            self.rgbw_callback(sample)
-                        except Exception as e:
-                            self.logger.error(f"RGBW callback error: {e}")
-
-            # Handle TEST_STARTED messages
-            elif line.startswith("TEST_STARTED:"):
-                test_type = line[13:].strip()
-                self.current_test_type = test_type
-                self.logger.info(f"Test started: {test_type}")
-
-            # Handle STATUS messages
-            elif line.startswith("STATUS:"):
-                self.logger.debug(f"Arduino status: {line}")
-
-            # Handle ERROR messages
-            elif line.startswith("ERROR:"):
-                self.logger.error(f"Arduino error: {line}")
-
-            # Handle INFO messages
-            elif line.startswith("INFO:"):
-                self.logger.info(f"Arduino info: {line}")
-
-            # Handle DEBUG messages
-            elif line.startswith("DEBUG:"):
-                self.logger.debug(f"Arduino debug: {line}")
-
-            # Handle HEARTBEAT
-            elif line.startswith("HEARTBEAT:"):
-                self.logger.debug("Arduino heartbeat received")
-
-            # Handle BUTTON messages
-            elif line.startswith("DATA:BUTTON:"):
-                button_state = line[12:].strip()  # Get state after "DATA:BUTTON:"
+            # Handle button messages (most important for SMT)
+            if line.startswith("DATA:BUTTON:"):
+                button_state = line[12:].strip()
                 self.logger.info(f"Button event: {button_state}")
                 if self.button_callback:
                     try:
@@ -388,230 +404,28 @@ class ArduinoController(ResourceMixin):
                     except Exception as e:
                         self.logger.error(f"Button callback error: {e}")
             
-            # Handle unknown messages
+            # Log other message types
+            elif line.startswith("ERROR:"):
+                self.logger.error(f"Arduino error: {line}")
+                self.consecutive_errors += 1
+            elif line.startswith("INFO:"):
+                self.logger.info(f"Arduino info: {line}")
+            elif line.startswith("DEBUG:"):
+                self.logger.debug(f"Arduino debug: {line}")
+            elif line.startswith("STATUS:"):
+                self.logger.debug(f"Arduino status: {line}")
             else:
-                if line and not line.startswith("==="):  # Ignore startup banner
-                    self.logger.debug(f"Unknown Arduino message: {line}")
+                if line and not line.startswith("==="):
+                    self.logger.debug(f"Arduino message: {line}")
 
         except Exception as e:
             self.logger.error(f"Error processing Arduino message '{line}': {e}")
 
-    def _parse_live_data(self, line: str) -> List[SensorReading]:
-        """Parse LIVE data format: LIVE:V=12.500,I=1.250,LUX=2500.00,X=0.450,Y=0.410,PSI=14.500"""
-        readings = []
-        try:
-            if not line.startswith("LIVE:"):
-                return readings
-
-            data_part = line[5:]  # Remove "LIVE:"
-            timestamp = time.time()
-
-            for pair in data_part.split(","):
-                if "=" in pair:
-                    key, value_str = pair.split("=", 1)
-                    key = key.strip()
-                    
-                    try:
-                        value = float(value_str.strip())
-                        
-                        # Map Arduino sensor IDs to expected Python IDs
-                        sensor_id = self._map_arduino_sensor_id(key)
-                        unit = self._get_unit_for_sensor(key)
-                        sensor_type = self._get_sensor_type(key)
-
-                        reading = SensorReading(
-                            timestamp=timestamp,
-                            sensor_type=sensor_type,
-                            sensor_id=sensor_id,
-                            value=value,
-                            unit=unit,
-                            raw_data=line
-                        )
-                        readings.append(reading)
-                        
-                    except ValueError:
-                        self.logger.warning(f"Could not parse value '{value_str}' for sensor '{key}'")
-
-        except Exception as e:
-            self.logger.error(f"Error parsing LIVE data '{line}': {e}")
-
-        return readings
-
-    def _parse_result_data(self, line: str) -> Optional[TestResult]:
-        """Parse RESULT data format: RESULT:MV_MAIN=12.500,MI_MAIN=1.250,LUX_MAIN=2500.00,..."""
-        try:
-            if not line.startswith("RESULT:"):
-                return None
-
-            data_part = line[7:]  # Remove "RESULT:"
-            measurements = {}
-            timestamp = time.time()
-
-            for pair in data_part.split(","):
-                if "=" in pair:
-                    key, value_str = pair.split("=", 1)
-                    key = key.strip()
-                    
-                    try:
-                        value = float(value_str.strip())
-                        measurements[key] = value
-                    except ValueError:
-                        self.logger.warning(f"Could not parse result value '{value_str}' for '{key}'")
-
-            # Determine test type from current state or measurements
-            test_type = self.current_test_type or "UNKNOWN"
-
-            return TestResult(
-                timestamp=timestamp,
-                test_type=test_type,
-                measurements=measurements,
-                raw_data=line
-            )
-
-        except Exception as e:
-            self.logger.error(f"Error parsing RESULT data '{line}': {e}")
-            return None
-
-    def _parse_rgbw_sample(self, line: str) -> Optional[RGBWSample]:
-        """Parse RGBW_SAMPLE data format: RGBW_SAMPLE:CYCLE=1,VOLTAGE=12.5,CURRENT=1.2,LUX=100,X=0.45,Y=0.41"""
-        try:
-            if not line.startswith("RGBW_SAMPLE:"):
-                return None
-
-            data_part = line[12:]  # Remove "RGBW_SAMPLE:"
-            data = {}
-            timestamp = time.time()
-
-            for pair in data_part.split(","):
-                if "=" in pair:
-                    key, value_str = pair.split("=", 1)
-                    key = key.strip()
-                    
-                    try:
-                        if key == "CYCLE":
-                            data[key] = int(value_str.strip())
-                        else:
-                            data[key] = float(value_str.strip())
-                    except ValueError:
-                        self.logger.warning(f"Could not parse RGBW value '{value_str}' for '{key}'")
-
-            # Extract required fields with defaults
-            cycle = data.get("CYCLE", 0)
-            voltage = data.get("VOLTAGE", 0.0)
-            current = data.get("CURRENT", 0.0)
-            lux = data.get("LUX", 0.0)
-            x = data.get("X", 0.0)
-            y = data.get("Y", 0.0)
-
-            return RGBWSample(
-                timestamp=timestamp,
-                cycle=cycle,
-                voltage=voltage,
-                current=current,
-                lux=lux,
-                x=x,
-                y=y,
-                raw_data=line
-            )
-
-        except Exception as e:
-            self.logger.error(f"Error parsing RGBW_SAMPLE '{line}': {e}")
-            return None
-
-    def _map_arduino_sensor_id(self, arduino_id: str) -> str:
-        """Map Arduino sensor IDs to Python expected IDs"""
-        mapping = {
-            "I": "CURRENT",
-            "V": "VOLTAGE", 
-            "LUX": "LUX_MAIN",  # Default to main, context will determine if it's backlight
-            "X": "X_MAIN",      # Default to main, context will determine if it's backlight
-            "Y": "Y_MAIN",      # Default to main, context will determine if it's backlight
-            "PSI": "PSI"
-        }
-        return mapping.get(arduino_id, arduino_id)
-
-    def _get_unit_for_sensor(self, sensor_id: str) -> str:
-        """Get unit string for sensor ID"""
-        units = {
-            "I": "A",
-            "V": "V",
-            "LUX": "lux",
-            "X": "CIE_x",
-            "Y": "CIE_y", 
-            "PSI": "PSI"
-        }
-        return units.get(sensor_id, "")
-
-    def _get_sensor_type(self, sensor_id: str) -> str:
-        """Get sensor type for sensor ID"""
-        types = {
-            "I": "INA260",
-            "V": "INA260",
-            "LUX": "VEML7700",
-            "X": "COLOR",
-            "Y": "COLOR",
-            "PSI": "PRESSURE"
-        }
-        return types.get(sensor_id, "UNKNOWN")
-
-    def get_latest_reading(self, sensor_id: str) -> Optional[SensorReading]:
-        """Get the most recent reading from a specific sensor"""
-        with self.reading_lock:
-            for reading in reversed(self.readings):
-                if reading.sensor_id == sensor_id:
-                    return reading
-        return None
-
-    def get_readings_since(self, timestamp: float, sensor_id: Optional[str] = None) -> List[SensorReading]:
-        """Get all readings since a specific timestamp"""
-        with self.reading_lock:
-            filtered_readings = []
-            for reading in self.readings:
-                if reading.timestamp >= timestamp:
-                    if sensor_id is None or reading.sensor_id == sensor_id:
-                        filtered_readings.append(reading)
-            return filtered_readings
-
-    def get_average_reading(self, sensor_id: str, duration_seconds: float) -> Optional[float]:
-        """Get average reading for a sensor over the last duration_seconds"""
-        cutoff_time = time.time() - duration_seconds
-        readings = self.get_readings_since(cutoff_time, sensor_id)
-
-        if not readings:
-            return None
-
-        values = [reading.value for reading in readings]
-        return sum(values) / len(values)
-
-    def get_latest_test_result(self) -> Optional[TestResult]:
-        """Get the most recent test result"""
-        with self.reading_lock:
-            return self.latest_test_result
-
-    def get_test_result_value(self, key: str) -> Optional[float]:
-        """Get a specific measurement from the latest test result"""
-        result = self.get_latest_test_result()
-        if result and key in result.measurements:
-            return result.measurements[key]
-        return None
-
-    def get_rgbw_samples_for_cycle(self, cycle: int) -> List[RGBWSample]:
-        """Get all RGBW samples for a specific cycle"""
-        with self.reading_lock:
-            return [sample for sample in self.rgbw_samples if sample.cycle == cycle]
-
-    def get_all_rgbw_samples(self) -> List[RGBWSample]:
-        """Get all RGBW samples"""
-        with self.reading_lock:
-            return self.rgbw_samples.copy()
-
-    def clear_rgbw_samples(self):
-        """Clear stored RGBW samples"""
-        with self.reading_lock:
-            self.rgbw_samples.clear()
-
     def send_command(self, command: str, timeout: float = 2.0) -> Optional[str]:
-        """Send a custom command to Arduino"""
+        """Send command with PHASE 1 improvements"""
+        # Record command time
+        self.last_command_time = time.time()
+        
         # If reading loop is active, use command queue
         if self.is_reading and self.reading_thread and self.reading_thread.is_alive():
             response_queue = Queue()
@@ -627,18 +441,85 @@ class ArduinoController(ResourceMixin):
             # Wait for response
             try:
                 response = response_queue.get(timeout=timeout + 0.5)
+                
+                # PHASE 1: Check for empty MEASURE_GROUP responses
+                if response is None and command.startswith("MEASURE_GROUP"):
+                    self.logger.error("MEASURE_GROUP returned no response - possible serial overflow")
+                    self.consecutive_errors += 1
+                    # Attempt to clear buffers
+                    self.serial.flush_buffers()
+                
                 return response
             except Empty:
                 self.logger.warning(f"Timeout waiting for response to command: {command}")
+                self.consecutive_errors += 1
                 return None
         else:
             # Normal query when reading loop is not active
             return self.serial.query(command, response_timeout=timeout)
 
-    def clear_readings(self):
-        """Clear stored sensor readings"""
-        with self.reading_lock:
-            self.readings.clear()
+    def send_measure_group(self, relays: str, timeout: float = 15.0) -> Tuple[bool, List[str]]:
+        """PHASE 1: Specialized method for MEASURE_GROUP commands"""
+        # Clear previous responses
+        self.measure_group_responses = []
+        
+        # Send command
+        response = self.send_command(f"MEASURE_GROUP:{relays}", timeout=timeout)
+        
+        if response:
+            # Return success and collected responses
+            return True, self.measure_group_responses
+        else:
+            return False, []
+
+    def enforce_test_cooldown(self) -> bool:
+        """PHASE 1: Enforce minimum interval between tests"""
+        current_time = time.time()
+        elapsed = current_time - self.last_test_end_time
+        
+        if elapsed < self.min_test_interval:
+            wait_time = self.min_test_interval - elapsed
+            self.logger.info(f"Enforcing {wait_time:.1f}s cooldown between tests")
+            time.sleep(wait_time)
+            return True
+        return False
+
+    def mark_test_complete(self):
+        """PHASE 1: Mark test as complete for cooldown tracking"""
+        self.last_test_end_time = time.time()
+        # Always turn off relays after test
+        self.send_command("RELAY_ALL:OFF", timeout=1.0)
+
+    def recover_communication(self) -> bool:
+        """PHASE 1: Attempt to recover communication with Arduino"""
+        try:
+            self.logger.info("Attempting Arduino communication recovery")
+            
+            # 1. Flush buffers
+            self.serial.flush_buffers()
+            
+            # 2. Send reset signal
+            self.serial.write(b"\x03")  # Ctrl+C
+            time.sleep(0.1)
+            
+            # 3. Clear any pending data
+            if hasattr(self.serial.connection, 'reset_input_buffer'):
+                self.serial.connection.reset_input_buffer()
+            
+            # 4. Test communication
+            for attempt in range(3):
+                response = self.send_command("ID", timeout=2.0)
+                if response and ("SMT" in response or "DIODE" in response):
+                    self.logger.info("Arduino communication recovered successfully")
+                    self.consecutive_errors = 0
+                    return True
+                time.sleep(0.5)
+            
+            return False
+            
+        except Exception as e:
+            self.logger.error(f"Error during Arduino recovery: {e}")
+            return False
 
     def is_connected(self) -> bool:
         """Check if Arduino is connected"""
@@ -648,77 +529,27 @@ class ArduinoController(ResourceMixin):
         """Set callback for button state changes"""
         self.button_callback = callback
     
-    def get_firmware_type(self) -> str:
-        """Get the firmware type of connected Arduino"""
-        try:
-            response = self.send_command("ID", timeout=2.0)
-            if response:
-                response_upper = response.upper()
-                if "SMT_TESTER" in response_upper or "SMT" in response_upper:
-                    return "SMT"
-                elif "OFFROAD" in response_upper:
-                    return "OFFROAD"
-                elif "DIODE_DYNAMICS" in response_upper:
-                    # Generic firmware - need more info
-                    # Try to determine by checking available commands
-                    status = self.send_command("STATUS", timeout=2.0)
-                    if status and "SMT" in status.upper():
-                        return "SMT"
-                    else:
-                        return "OFFROAD"
-            return "UNKNOWN"
-        except Exception as e:
-            self.logger.error(f"Error getting firmware type: {e}")
-            return "UNKNOWN"
-
-    def get_sensor_status(self) -> Dict[str, Any]:
-        """Get status of all configured sensors"""
-        status = {
+    def get_health_status(self) -> Dict[str, Any]:
+        """PHASE 1: Get health status of the controller"""
+        return {
             "connected": self.is_connected(),
             "reading": self.is_reading,
-            "total_readings": len(self.readings),
-            "current_test": self.current_test_type,
-            "sensors": {}
+            "consecutive_errors": self.consecutive_errors,
+            "command_queue_depth": self.command_queue.qsize(),
+            "time_since_last_command": time.time() - self.last_command_time if self.last_command_time > 0 else None,
+            "time_since_last_test": time.time() - self.last_test_end_time if self.last_test_end_time > 0 else None
         }
 
-        for sensor_id, config in self.sensors.items():
-            latest = self.get_latest_reading(sensor_id)
-            status["sensors"][sensor_id] = {
-                "type": config.sensor_type,
-                "enabled": config.enabled,
-                "interval_ms": config.read_interval_ms,
-                "last_reading": latest.value if latest else None,
-                "last_timestamp": latest.timestamp if latest else None
-            }
 
-        return status
-
-
-# Predefined sensor configurations for common setups - kept for compatibility
-class SensorConfigurations:
-    """Predefined sensor configurations for different test modes"""
-
-    @staticmethod
-    def offroad_pod_sensors(read_interval_ms: int = 50) -> List[SensorConfig]:
-        """Standard offroad pod sensor configuration"""
-        return [
-            SensorConfig("INA260", "CURRENT", read_interval_ms),
-            SensorConfig("INA260", "VOLTAGE", read_interval_ms),
-            SensorConfig("INA260", "POWER", read_interval_ms),
-            SensorConfig("VEML7700", "LUX_MAIN", read_interval_ms),
-            SensorConfig("VEML7700", "LUX_BACK", read_interval_ms),
-            SensorConfig("PRESSURE", "PSI", read_interval_ms),
-            SensorConfig("COLOR", "X_MAIN", read_interval_ms),
-            SensorConfig("COLOR", "Y_MAIN", read_interval_ms),
-            SensorConfig("COLOR", "X_BACK", read_interval_ms),
-            SensorConfig("COLOR", "Y_BACK", read_interval_ms)
-        ]
+# Predefined sensor configuration for SMT
+class SMTSensorConfigurations:
+    """Predefined sensor configurations for SMT testing"""
 
     @staticmethod
     def smt_panel_sensors(read_interval_ms: int = 100) -> List[SensorConfig]:
         """SMT panel testing sensor configuration
         
-        For SMT testing, typically uses a single INA260 that's switched
+        For SMT testing, uses a single INA260 that's switched
         between different measurement points via relays.
         """
         return [
@@ -731,21 +562,16 @@ class SensorConfigurations:
 if __name__ == "__main__":
     logging.basicConfig(level=logging.DEBUG)
 
-    def reading_handler(reading: SensorReading):
-        print(f"[{reading.timestamp:.3f}] {reading.sensor_id}: {reading.value} {reading.unit}")
+    def button_handler(state: str):
+        print(f"Button {state}")
 
-    def result_handler(result: TestResult):
-        print(f"Test Result ({result.test_type}): {result.measurements}")
-
-    def rgbw_handler(sample: RGBWSample):
-        print(f"RGBW Cycle {sample.cycle}: V={sample.voltage}, I={sample.current}, X={sample.x}, Y={sample.y}")
-
-    # Test Arduino controller
-    arduino = ArduinoController(baud_rate=115200)
+    # Test SMT Arduino controller
+    arduino = SMTArduinoController(baud_rate=115200)
     
-    print("Fixed Arduino Controller loaded with proper communication protocol:")
-    print("✅ Handles LIVE:V=12.5,I=1.2,LUX=2500,X=0.45,Y=0.41,PSI=14.5")
-    print("✅ Handles RESULT:MV_MAIN=12.5,MI_MAIN=1.2,LUX_MAIN=2500,...")
-    print("✅ Handles RGBW_SAMPLE:CYCLE=1,VOLTAGE=12.5,CURRENT=1.2,...")
-    print("✅ Uses SENSOR_CHECK instead of CONFIG")
-    print("✅ Cleanup uses STOP command only")
+    print("SMT Arduino Controller with Phase 1 Fixes:")
+    print("✅ Proper MEASURE_GROUP command handling")
+    print("✅ Serial buffer management")
+    print("✅ Empty response detection")
+    print("✅ Test cooldown enforcement")
+    print("✅ Communication recovery")
+    print("✅ Health monitoring")
