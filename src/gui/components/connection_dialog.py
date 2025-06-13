@@ -265,6 +265,16 @@ class ConnectionDialog(QDialog):
                     arduino._sensors_configured = True
                     logger.info(f"Sensors configured for {current_mode} mode")
                     
+                    # Set up button callback for SMT mode
+                    if current_mode == "SMT" and hasattr(self.parent(), 'smt_handler'):
+                        logger.info("Setting up physical button callback for SMT mode")
+                        arduino.set_button_callback(self.parent().smt_handler.handle_button_event)
+                        
+                        # Start the reading loop to process button events
+                        if not arduino.is_reading:
+                            logger.info("Starting Arduino reading loop for button events")
+                            arduino.start_reading()
+                    
                     # Don't disconnect - keep it connected!
                     self.arduino_connected = True
                     self.arduino_port = port
@@ -294,6 +304,13 @@ class ConnectionDialog(QDialog):
         """Disconnect Arduino"""
         try:
             if self.parent().arduino_controller:
+                # Stop reading loop if running
+                if self.parent().arduino_controller.is_reading:
+                    logger.info("Stopping Arduino reading loop")
+                    self.parent().arduino_controller.stop_reading()
+                    
+                # Clear button callback
+                self.parent().arduino_controller.set_button_callback(None)
                 self.parent().arduino_controller.disconnect()
                 self.parent().arduino_controller = None
         except Exception as e:

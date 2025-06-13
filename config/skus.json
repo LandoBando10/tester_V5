@@ -19,12 +19,6 @@
   
   "available_skus": [
     {
-      "sku": "DD5000",
-      "config_file": "config/skus/DD5000.json",
-      "enabled": true,
-      "last_modified": "2024-01-01"
-    },
-    {
       "sku": "DD5001", 
       "config_file": "config/skus/DD5001.json",
       "enabled": true,
@@ -39,6 +33,54 @@
     {
       "sku": "DD5003",
       "config_file": "config/skus/DD5003.json",
+      "enabled": true,
+      "last_modified": "2024-01-01"
+    },
+    {
+      "sku": "SL0224P01-ABL",
+      "config_file": "config/skus/SL0224P01-ABL.json",
+      "enabled": true,
+      "last_modified": "2024-01-01"
+    },
+    {
+      "sku": "SL0224P01-RBL",
+      "config_file": "config/skus/SL0224P01-RBL.json",
+      "enabled": true,
+      "last_modified": "2024-01-01"
+    },
+    {
+      "sku": "SL0224P02-ABL",
+      "config_file": "config/skus/SL0224P02-ABL.json",
+      "enabled": true,
+      "last_modified": "2024-01-01"
+    },
+    {
+      "sku": "SL0225P01-ABL",
+      "config_file": "config/skus/SL0225P01-ABL.json",
+      "enabled": true,
+      "last_modified": "2024-01-01"
+    },
+    {
+      "sku": "SL0225P01-RBL",
+      "config_file": "config/skus/SL0225P01-RBL.json",
+      "enabled": true,
+      "last_modified": "2024-01-01"
+    },
+    {
+      "sku": "SL0225P02-ABL",
+      "config_file": "config/skus/SL0225P02-ABL.json",
+      "enabled": true,
+      "last_modified": "2024-01-01"
+    },
+    {
+      "sku": "SL0233P01-ABL",
+      "config_file": "config/skus/SL0233P01-ABL.json",
+      "enabled": true,
+      "last_modified": "2024-01-01"
+    },
+    {
+      "sku": "SL0233P01-RBL",
+      "config_file": "config/skus/SL0233P01-RBL.json",
       "enabled": true,
       "last_modified": "2024-01-01"
     }

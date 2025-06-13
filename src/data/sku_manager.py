@@ -221,6 +221,10 @@ class SKUManager:
             if param_key in sku_data:
                 params = sku_data[param_key].copy()
                 
+                # Transform weight parameters to expected format
+                if mode == "WeightChecking" and param_key == "weight_testing":
+                    params = self._transform_weight_params(params)
+                
                 # Merge with global parameters if applicable
                 try:
                     return self._merge_with_global_params(params, mode)
@@ -325,6 +329,57 @@ class SKUManager:
             self._available_skus = None
             self._global_parameters = None
             self._index_loaded = False
+    
+    def _transform_weight_params(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Transform weight_testing format to WEIGHT format expected by widget"""
+        transformed = {}
+        
+        try:
+            # Extract weight limits
+            if "limits" in params and "weight_g" in params["limits"]:
+                weight_limits = params["limits"]["weight_g"]
+                transformed["WEIGHT"] = {
+                    "min_weight_g": weight_limits.get("min", 0.0),
+                    "max_weight_g": weight_limits.get("max", 0.0),
+                    "tare_g": params.get("tare_g", 0.0)
+                }
+            else:
+                # Fallback for other potential formats
+                self.logger.warning("Weight parameters not in expected format, using defaults")
+                transformed["WEIGHT"] = {
+                    "min_weight_g": 100.0,
+                    "max_weight_g": 300.0,
+                    "tare_g": 0.0
+                }
+                
+            self.logger.debug(f"Transformed weight params: {transformed}")
+            
+        except Exception as e:
+            self.logger.error(f"Error transforming weight parameters: {e}")
+            # Return default structure on error
+            transformed["WEIGHT"] = {
+                "min_weight_g": 100.0,
+                "max_weight_g": 300.0,
+                "tare_g": 0.0
+            }
+            
+        return transformed
+    
+    def _transform_weight_params(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Transform weight_testing format to WEIGHT format expected by the widget"""
+        if "limits" in params and "weight_g" in params["limits"]:
+            weight_limits = params["limits"]["weight_g"]
+            transformed = {
+                "WEIGHT": {
+                    "min_weight_g": weight_limits.get("min", 0.0),
+                    "max_weight_g": weight_limits.get("max", 0.0),
+                    "tare_g": params.get("tare_g", 0.0)
+                }
+            }
+            return transformed
+        
+        # If already in the expected format, return as-is
+        return params
     
     def _merge_with_global_params(self, params: Dict[str, Any], mode: str) -> Dict[str, Any]:
         """Merge SKU-specific parameters with global parameters"""

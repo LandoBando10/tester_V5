@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 from PySide6.QtWidgets import QMessageBox
-from PySide6.QtCore import QObject
+from PySide6.QtCore import QObject, Signal, Qt
 
 from src.core.base_test import TestResult
 from src.utils.resource_manager import ResourceMixin
@@ -13,12 +13,23 @@ from src.utils.resource_manager import ResourceMixin
 class SMTHandler(QObject, ResourceMixin):
     """Handles SMT test execution logic"""
     
+    # Signal to request user confirmation from main thread
+    request_user_confirmation = Signal(str, str, object)  # title, message, callback
+    
+    # Signal for button press handling on main thread
+    button_pressed_signal = Signal()
+    
     def __init__(self, main_window):
         QObject.__init__(self)
         ResourceMixin.__init__(self)
         self.main_window = main_window
         self.logger = logging.getLogger(self.__class__.__name__)
         self.current_test_worker = None
+        self._button_press_handled = False
+        
+        # Connect button signal to handler - ensures it runs on main thread
+        self.button_pressed_signal.connect(self._handle_button_press_on_main_thread, Qt.QueuedConnection)
+        
         self.logger.debug("SMTHandler initialized")
     
     def start_test(self, sku: str, enabled_tests: List[str], connection_status: Dict[str, Any]):
@@ -29,16 +40,19 @@ class SMTHandler(QObject, ResourceMixin):
             # Validation
             if not sku or sku == "-- Select SKU --":
                 self.logger.warning("SKU not selected.")
+                self._button_press_handled = False  # Reset flag on error
                 QMessageBox.warning(self.main_window, "Warning", "Please select a SKU")
                 return
             
             # Validate Arduino connection
             if not self._validate_arduino_connection(connection_status):
+                self._button_press_handled = False  # Reset flag on error
                 return
             
             # Validate SKU supports SMT mode
             if not self.main_window.sku_manager.validate_sku_mode_combination(sku, "SMT"):
                 self.logger.warning(f"SKU {sku} does not support SMT mode.")
+                self._button_press_handled = False  # Reset flag on error
                 QMessageBox.warning(self.main_window, "Warning", f"SKU {sku} does not support SMT mode")
                 return
             
@@ -46,6 +60,7 @@ class SMTHandler(QObject, ResourceMixin):
             params = self.main_window.sku_manager.get_test_parameters(sku, "SMT")
             if not params:
                 self.logger.error(f"No parameters found for {sku} in SMT mode.")
+                self._button_press_handled = False  # Reset flag on error
                 QMessageBox.critical(self.main_window, "Error", f"No parameters found for {sku} in SMT mode")
                 return
             
@@ -58,6 +73,7 @@ class SMTHandler(QObject, ResourceMixin):
             # Create test instance
             test_instance = self._create_test_instance(sku, params, enabled_tests, connection_status)
             if not test_instance:
+                self._button_press_handled = False  # Reset flag on error
                 return
             
             # Update UI
@@ -84,6 +100,7 @@ class SMTHandler(QObject, ResourceMixin):
             
         except Exception as e:
             self.logger.error(f"Error starting SMT test: {e}", exc_info=True)
+            self._button_press_handled = False  # Reset flag on error
             QMessageBox.critical(self.main_window, "Error", f"Could not start test: {e}")
     
     def _validate_arduino_connection(self, connection_status: Dict[str, Any]) -> bool:
@@ -235,6 +252,7 @@ class SMTHandler(QObject, ResourceMixin):
                 self.current_test_worker.wait(3000)
             
             self.current_test_worker = None
+            self._button_press_handled = False
             self.cleanup_resources()
             self.logger.info("SMT handler cleanup completed.")
                 
@@ -248,6 +266,9 @@ class SMTHandler(QObject, ResourceMixin):
             # Clean up worker
             if self.current_test_worker:
                 self.current_test_worker = None
+            
+            # Reset button handling flag
+            self._button_press_handled = False
                 
             # Update UI
             self.main_window.test_completed(result)
@@ -281,3 +302,40 @@ class SMTHandler(QObject, ResourceMixin):
             elif current > 0:
                 # Update progress
                 self.main_window.test_area.smt_widget.update_programming_progress(current, board_name, status)
+    
+    def handle_button_event(self, button_state: str):
+        """Handle physical button press from Arduino"""
+        if button_state == "PRESSED":
+            # Check if we should handle this press
+            if not self._button_press_handled and not self.is_test_running():
+                self._button_press_handled = True
+                self.logger.info("Physical button pressed - triggering test start")
+                
+                # Emit signal to handle the button press on the main thread
+                # Use Qt.QueuedConnection to ensure it runs on main thread
+                self.button_pressed_signal.emit()
+            elif self.is_test_running():
+                self.logger.info("Test already running, ignoring button press")
+        elif button_state == "RELEASED":
+            # Button released - ready for next press after test completes
+            self.logger.debug("Physical button released")
+    
+    def _handle_button_press_on_main_thread(self):
+        """Handle button press on main thread - safe for GUI operations"""
+        try:
+            # Get current SKU and check if valid
+            sku = self.main_window.top_controls.get_current_sku()
+            if not sku or sku == "-- Select SKU --":
+                self.logger.warning("No SKU selected, ignoring button press")
+                self._button_press_handled = False
+                return
+            
+            # Get enabled tests and connection status
+            enabled_tests = self.main_window.top_controls.get_enabled_tests()
+            connection_status = self.main_window.connection_dialog.get_connection_status()
+            
+            # Start the test - now safe to show dialogs
+            self.start_test(sku, enabled_tests, connection_status)
+        except Exception as e:
+            self.logger.error(f"Error handling button press: {e}", exc_info=True)
+            self._button_press_handled = False

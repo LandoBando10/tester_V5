@@ -1,0 +1,15 @@
+{
+  "default": {
+    "enabled": false,
+    "programmers": {
+      "STM8": {
+        "type": "STM8",
+        "path": "C:\\Program Files\\STMicroelectronics\\st_toolset\\stvp\\STVP_CmdLine.exe"
+      },
+      "PIC": {
+        "type": "PIC", 
+        "path": "C:\\Program Files\\Microchip\\IPE\\ipecmd.exe"
+      }
+    }
+  }
+}

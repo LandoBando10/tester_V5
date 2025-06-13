@@ -29,15 +29,27 @@ class SMTController:
     def initialize_arduino(self) -> bool:
         """Initialize Arduino for SMT testing"""
         try:
+            # Clear any pending messages first
+            self.arduino.serial.flush_buffers()
+            
             # Check connection
             response = self.arduino.send_command("ID")
             if not response:
                 logger.error("No response from Arduino")
                 return False
             
-            # Accept either SMT_TESTER or DIODE_DYNAMICS firmware
-            if "SMT_TESTER" not in response and "DIODE_DYNAMICS" not in response:
-                logger.error(f"Arduino not running compatible firmware. Response: {response}")
+            # Ignore button messages and look for actual ID response
+            max_attempts = 3
+            for attempt in range(max_attempts):
+                if "BUTTON:" in response:
+                    logger.debug(f"Ignoring button message during init: {response}")
+                    response = self.arduino.send_command("ID")
+                    if not response:
+                        continue
+                elif "SMT_TESTER" in response or "DIODE_DYNAMICS" in response:
+                    break
+            else:
+                logger.error(f"Arduino not running compatible firmware after {max_attempts} attempts. Last response: {response}")
                 return False
             
             logger.info(f"Arduino firmware identified: {response}")

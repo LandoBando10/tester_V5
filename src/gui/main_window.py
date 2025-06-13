@@ -202,6 +202,9 @@ class MainWindow(QMainWindow):
         self.top_controls.set_mode(mode)
         self.test_area.set_mode(mode)
         
+        # Update menu bar to reflect current mode
+        self.menu_bar.set_mode(mode)
+        
         # Show/hide start button based on mode
         if hasattr(self, 'start_btn'):
             if mode == "WeightChecking":
@@ -228,6 +231,9 @@ class MainWindow(QMainWindow):
                 if hasattr(self.arduino_controller, '_sensors_configured'):
                     delattr(self.arduino_controller, '_sensors_configured')
                 
+                # Clear button callback
+                self.arduino_controller.set_button_callback(None)
+                
                 # Update connection status to show disconnected
                 self.connection_dialog.arduino_connected = False
                 self.connection_dialog.arduino_status_label.setText("Status: Wrong firmware for mode")
@@ -240,6 +246,21 @@ class MainWindow(QMainWindow):
                 
                 # Update connection status
                 self.update_connection_status()
+            elif mode == "SMT" and firmware_type == "SMT":
+                # Set up button callback for SMT mode if switching to SMT with correct firmware
+                if hasattr(self, 'smt_handler'):
+                    self.logger.info("Updating button callback for SMT mode")
+                    self.arduino_controller.set_button_callback(self.smt_handler.handle_button_event)
+                    # Start reading loop if not already running
+                    if not self.arduino_controller.is_reading:
+                        self.logger.info("Starting Arduino reading loop for SMT mode")
+                        self.arduino_controller.start_reading()
+            elif mode != "SMT":
+                # Clear button callback and stop reading when switching away from SMT
+                self.arduino_controller.set_button_callback(None)
+                if self.arduino_controller.is_reading:
+                    self.logger.info("Stopping Arduino reading loop")
+                    self.arduino_controller.stop_reading()
         
         # Update connection status when switching to weight checking mode
         if mode == "WeightChecking":

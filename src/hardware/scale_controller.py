@@ -323,14 +323,23 @@ class ScaleController(ResourceMixin):
             median_weight = sorted_recent[len(sorted_recent) // 2]
             
             # Check if current reading is an extreme outlier
-            outlier_threshold = max(100.0, abs(median_weight) * 0.5)  # 50% change or 100g
+            # Make threshold more lenient - 30% change or 50g minimum
+            outlier_threshold = max(50.0, abs(median_weight) * 0.3)  
             
             if abs(raw_weight - median_weight) > outlier_threshold:
-                # This looks like an outlier, use a more conservative approach
-                self.logger.debug(f"Potential outlier detected: {raw_weight}g vs median {median_weight}g")
+                # This looks like an outlier
+                self.logger.warning(f"Weight outlier detected: {raw_weight}g vs median {median_weight}g (diff: {abs(raw_weight - median_weight):.1f}g)")
                 
-                # Return a weighted average favoring the median
-                return (median_weight * 0.7) + (raw_weight * 0.3)
+                # If the drop is extreme (more than 50%), discard it completely
+                if abs(raw_weight - median_weight) > abs(median_weight) * 0.5:
+                    self.logger.warning(f"Discarding extreme outlier: {raw_weight}g")
+                    # Remove the outlier from history
+                    self.weight_history.pop()
+                    # Return the median instead
+                    return median_weight
+                
+                # Otherwise, use a weighted average favoring the median
+                return (median_weight * 0.8) + (raw_weight * 0.2)
         
         # Apply simple moving average to smooth readings
         if len(self.weight_history) >= 3:
@@ -477,6 +486,12 @@ class ScaleController(ResourceMixin):
                 # Validate weight is in reasonable range
                 if weight is not None and -100 <= weight <= 5000:
                     return weight
+                elif weight is not None:
+                    self.logger.debug(f"Weight out of range: {weight}g from string: {weight_str}")
+            else:
+                # Log unparseable strings for debugging
+                if weight_str and not weight_str.isspace():
+                    self.logger.debug(f"Could not parse weight from: {weight_str[:30]}")
             
             # Fallback: Try to extract any float from the string
             # This is faster than multiple regex attempts

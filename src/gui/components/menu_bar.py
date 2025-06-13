@@ -202,13 +202,14 @@ class TestMenuBar(QMenuBar):
         """Set the current mode and update menu"""
         logger.info(f"Setting mode to: {mode}") # Added
         try: # Added
-            # Update mode actions
+            # Update mode actions without triggering signals
             for m, action in self.mode_actions.items():
+                # Temporarily block signals to prevent infinite recursion
+                action.blockSignals(True)
                 action.setChecked(m == mode)
+                action.blockSignals(False)
             
-            # Emit signal
-            self.mode_changed.emit(mode)
-            logger.debug(f"Mode changed signal emitted for {mode}") # Added
+            logger.debug(f"Mode menu updated for {mode}") # Added
         except Exception as e: # Added
             logger.error(f"Error setting mode to {mode}: %s", e, exc_info=True) # Added
             QMessageBox.warning(self, "Mode Change Error", f"Could not switch to mode: {mode}") # Added

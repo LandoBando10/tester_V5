@@ -32,7 +32,7 @@ class WeightTestConfig:
     
     # Stability parameters
     WEIGHT_STABLE_THRESHOLD_S: float = 2.0
-    WEIGHT_STABLE_TOLERANCE_G: float = 0.1
+    WEIGHT_STABLE_TOLERANCE_G: float = 0.5  # Increased from 0.1g to 0.5g for better stability
     MIN_READINGS_FOR_STABILITY: int = 5
     RECENT_WEIGHTS_BUFFER_SIZE: int = 10
     
@@ -654,10 +654,22 @@ class WeightTestWidget(QWidget, ResourceMixin):
             return False
             
         relevant_weights = list(self.recent_weights)[-self.config.MIN_READINGS_FOR_STABILITY:]
-        return all(
-            abs(w - current_weight) <= self.config.WEIGHT_STABLE_TOLERANCE_G 
-            for w in relevant_weights
+        
+        # Calculate median to be more robust against outliers
+        sorted_weights = sorted(relevant_weights)
+        median_weight = sorted_weights[len(sorted_weights) // 2]
+        
+        # Check if current weight is close to median
+        if abs(current_weight - median_weight) > self.config.WEIGHT_STABLE_TOLERANCE_G * 2:
+            return False
+        
+        # Check if most readings (80%) are within tolerance
+        within_tolerance = sum(
+            1 for w in relevant_weights 
+            if abs(w - median_weight) <= self.config.WEIGHT_STABLE_TOLERANCE_G
         )
+        
+        return within_tolerance >= len(relevant_weights) * 0.8
 
     def start_weight_test(self, auto_triggered: bool = True):
         """Start an auto-triggered weight test."""
@@ -747,6 +759,7 @@ class WeightTestWidget(QWidget, ResourceMixin):
         from src.core.base_test import TestResult
         
         result = TestResult()  # TestResult doesn't accept constructor arguments
+        result.sku = self.current_sku  # Add SKU to result for logging
         start_time = time.time()
 
         try:
