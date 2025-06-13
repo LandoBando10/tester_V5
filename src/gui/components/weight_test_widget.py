@@ -371,6 +371,19 @@ class WeightTestWidget(QWidget, ResourceMixin):
 
     def _establish_connection(self, port: str):
         """Establish connection to the scale controller."""
+        # First check if there's already a connected scale from connection dialog
+        main_window = self._get_main_window()
+        if (main_window and hasattr(main_window, 'scale_controller') and 
+            main_window.scale_controller and main_window.scale_controller.is_connected()):
+            
+            # Check if it's connected to the right port
+            if (hasattr(main_window.scale_controller.serial, 'port') and 
+                main_window.scale_controller.serial.port == port):
+                self.logger.info(f"Reusing existing scale connection from connection dialog on {port}")
+                self.scale_controller = main_window.scale_controller
+                self._start_live_reading(port)
+                return
+        
         # Check if we can reuse existing controller
         if self.scale_controller and not self._should_recreate_scale_controller(port):
             # Try to reconnect with existing controller
@@ -379,7 +392,7 @@ class WeightTestWidget(QWidget, ResourceMixin):
                 # Already connected to same port
                 self._start_live_reading(port)
                 return
-            elif self.scale_controller.connect(port):
+            elif self.scale_controller.connect(port, skip_comm_test=self._is_connection_validated(port)):
                 # Reconnected successfully
                 self._start_live_reading(port)
                 return
@@ -391,7 +404,10 @@ class WeightTestWidget(QWidget, ResourceMixin):
             try:
                 self.scale_controller = ScaleController(baud_rate=self.config.DEFAULT_BAUD_RATE)
                 
-                if self.scale_controller.connect(port):
+                # Check if connection was already validated through connection dialog
+                skip_comm_test = self._is_connection_validated(port)
+                
+                if self.scale_controller.connect(port, skip_comm_test=skip_comm_test):
                     self._start_live_reading(port)
                 else:
                     self._handle_connection_failure(port)
@@ -406,6 +422,27 @@ class WeightTestWidget(QWidget, ResourceMixin):
                 (hasattr(self.scale_controller, 'serial') and 
                  hasattr(self.scale_controller.serial, 'port') and 
                  self.scale_controller.serial.port != port))
+    
+    def _get_main_window(self):
+        """Get reference to main window."""
+        main_window = self.parent()
+        while main_window and not hasattr(main_window, 'connection_dialog'):
+            main_window = main_window.parent()
+        return main_window
+    
+    def _is_connection_validated(self, port: str) -> bool:
+        """Check if connection was already validated through connection dialog."""
+        try:
+            main_window = self._get_main_window()
+            if main_window and hasattr(main_window, 'connection_dialog'):
+                status = main_window.connection_dialog.get_connection_status()
+                # If scale is marked as connected on the same port, skip comm test
+                return (status.get('scale_connected', False) and 
+                        status.get('scale_port') == port)
+        except Exception as e:
+            self.logger.debug(f"Could not check connection validation status: {e}")
+        
+        return False
 
     def _start_live_reading(self, port: str):
         """Start live reading from the scale controller."""

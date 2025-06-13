@@ -323,7 +323,8 @@ class ConnectionDialog(QDialog):
             if scale.connect(port):
                 # Test communication
                 if scale.test_communication():
-                    scale.disconnect()
+                    # Keep the connection alive and store it for reuse
+                    self.parent().scale_controller = scale
                     
                     self.scale_connected = True
                     self.scale_port = port
@@ -350,12 +351,22 @@ class ConnectionDialog(QDialog):
 
     def disconnect_scale(self):
         """Disconnect Scale"""
+        # Actually disconnect the scale hardware
+        if hasattr(self.parent(), 'scale_controller') and self.parent().scale_controller:
+            try:
+                self.parent().scale_controller.disconnect()
+                logger.info(f"Scale hardware disconnected from {self.scale_port}")
+            except Exception as e:
+                logger.error(f"Error disconnecting scale hardware: {e}")
+            finally:
+                self.parent().scale_controller = None
+        
         self.scale_connected = False
         self.scale_port = None
         self.scale_status_label.setText("Status: Disconnected")
         self.scale_status_label.setStyleSheet("color: red; font-weight: bold;")
         self.scale_connect_btn.setText("Connect")
-        logger.info(f"Scale disconnected from port {self.scale_port if self.scale_port else 'N/A'}.")
+        logger.info(f"Scale disconnected from connection dialog.")
     
     def check_stm8_programmer(self):
         """Check STM8 programmer availability"""

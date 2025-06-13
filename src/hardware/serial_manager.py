@@ -43,12 +43,13 @@ class SerialManager(ResourceMixin):
                     stopbits=serial.STOPBITS_ONE
                 )
 
-                # Give device minimal time to initialize
-                time.sleep(0.05)
-
-                # Clear any existing data in buffers
-                self.connection.reset_input_buffer()
-                self.connection.reset_output_buffer()
+                # Reduce or remove sleep after connection
+                # time.sleep(0.05)  # Remove or reduce to 0.01
+                
+                # Only clear buffers if data exists
+                if self.connection.in_waiting > 0:
+                    self.connection.reset_input_buffer()
+                    self.connection.reset_output_buffer()
 
                 self.port = port
                 self.logger.info(f"Connected to {port} at {self.baud_rate} baud")

@@ -36,7 +36,7 @@ except ImportError as e:
     print("Some features may not be available.")
 
 
-class EnhancedSMTSetupUtility:
+class SMTSetupUtility:
     """Enhanced utility for setting up and testing SMT programming system"""
 
     def __init__(self):
@@ -781,7 +781,7 @@ class EnhancedSMTSetupUtility:
 
 def main():
     """Enhanced main utility function with comprehensive menu"""
-    utility = EnhancedSMTSetupUtility()
+    utility = SMTSetupUtility()
 
     print("Enhanced SMT Programming Setup Utility")
     print("Diode Dynamics Production Test System v2.0")

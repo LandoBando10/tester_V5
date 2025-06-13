@@ -86,8 +86,8 @@ def check_dependencies():
     return True
 
 
-def run_gui_mode():
-    """Run the GUI application"""
+def run_professional_gui_mode(args=None):
+    """Run the GUI application with professional startup (splash screen and mode selection)"""
     logger = logging.getLogger(__name__)
     
     # Check for SKU configuration file
@@ -95,12 +95,10 @@ def run_gui_mode():
     if not config_file.exists():
         error_msg = f"SKU configuration file not found: {config_file}. Please ensure it exists."
         logger.critical(error_msg)
-        # Attempt to show a GUI error message if possible, otherwise print
         try:
             from PySide6.QtWidgets import QApplication, QMessageBox
-            # Ensure QApplication instance exists for QMessageBox
             if not QApplication.instance():
-                _ = QApplication(sys.argv) # Create a temporary app instance
+                _ = QApplication(sys.argv)
             QMessageBox.critical(None, "Configuration Error", error_msg)
         except Exception as e_gui:
             logger.error(f"Could not display GUI error message for missing config: {e_gui}")
@@ -108,8 +106,131 @@ def run_gui_mode():
         return False
 
     try:
-        # Import and run the GUI application
-        from src.gui.main_window import MainWindow # Changed to import MainWindow directly
+        from PySide6.QtWidgets import QApplication
+        from PySide6.QtCore import QTimer
+        from src.gui.startup import SplashScreen, ModeSelectionDialog
+        from src.gui.main_window import MainWindow
+
+        logger.info("Initializing QApplication for professional mode...")
+        app = QApplication(sys.argv)
+        app.setApplicationName("Diode Dynamics Tester V5")
+        app.setOrganizationName("Diode Dynamics")
+        
+        # Variables to hold windows
+        selected_mode = None
+        main_window = None
+        preloaded_main_window = None
+        
+        def on_preloaded_window(window):
+            """Handle preloaded MainWindow from splash screen"""
+            nonlocal preloaded_main_window
+            preloaded_main_window = window
+            logger.info("MainWindow preloaded and ready")
+        
+        def on_splash_finished():
+            """Handle splash screen completion"""
+            nonlocal selected_mode, main_window, preloaded_main_window
+            
+            # Add a small delay to ensure splash is fully closed
+            def show_mode_dialog():
+                # Get splash position for seamless transition
+                splash_pos = splash.pos() if splash and hasattr(splash, 'pos') else None
+                mode_dialog = ModeSelectionDialog(position=splash_pos)
+                
+                def on_mode_selected(mode):
+                    nonlocal selected_mode, main_window, preloaded_main_window
+                    selected_mode = mode
+                    logger.info(f"User selected mode: {mode}")
+                    
+                    # Use preloaded window if available, otherwise create new one
+                    if preloaded_main_window:
+                        main_window = preloaded_main_window
+                        logger.info("Using preloaded MainWindow - instant startup!")
+                    else:
+                        logger.info("Creating new MainWindow...")
+                        main_window = MainWindow()
+                    
+                    # Set mode and show window
+                    main_window.set_mode(selected_mode)
+                    main_window.show()
+                
+                # Connect mode selection
+                mode_dialog.mode_selected.connect(on_mode_selected)
+                
+                # If dialog is rejected (closed), exit application
+                if mode_dialog.exec() != ModeSelectionDialog.Accepted:
+                    logger.info("Mode selection cancelled, exiting application")
+                    app.quit()
+                    return False
+            
+            # Small delay to ensure splash is fully gone
+            QTimer.singleShot(300, show_mode_dialog)
+        
+        # Check for startup video (unless disabled)
+        project_root = Path(__file__).parent
+        video_path = project_root / "resources" / "startup_video.mp4"
+        
+        # Disable video if flag is set or file doesn't exist
+        if args and hasattr(args, 'no_video') and args.no_video:
+            video_path = None
+            logger.info("Video disabled by --no-video flag")
+        elif not video_path.exists():
+            video_path = None
+            logger.info("Startup video not found, using fallback splash")
+        
+        # Create and show splash screen (longer duration for 3-second video)
+        splash = SplashScreen(str(video_path) if video_path else None, duration_ms=3500)
+        splash.finished.connect(on_splash_finished)
+        splash.preloaded_window.connect(on_preloaded_window)
+        splash.show_fullscreen()
+        
+        # Run application
+        logger.info("Starting professional GUI application event loop...")
+        app.exec()
+        logger.info("Professional GUI application finished.")
+        return True
+
+    except ImportError as e:
+        error_msg = f"Import error: {e}. This might be due to missing application files or incorrect Python environment."
+        logger.critical(error_msg, exc_info=True)
+        print(f"\\nCRITICAL IMPORT ERROR: {error_msg}")
+        print("Please check that all required application files are in place and the Python environment is correctly set up.")
+        return False
+    except Exception as e:
+        error_msg = f"An unexpected error occurred while trying to run the professional GUI: {e}"
+        logger.critical(error_msg, exc_info=True)
+        print(f"\\nCRITICAL ERROR: {error_msg}")
+        try:
+            from PySide6.QtWidgets import QApplication, QMessageBox
+            if not QApplication.instance():
+                _ = QApplication(sys.argv)
+            QMessageBox.critical(None, "Application Error", f"A critical error occurred: {e}\\n\\nPlease check the logs for more details.")
+        except Exception as e_gui_critical:
+            logger.error(f"Could not display critical GUI error message: {e_gui_critical}")
+        return False
+
+
+def run_gui_mode():
+    """Run the GUI application in standard mode (direct to MainWindow)"""
+    logger = logging.getLogger(__name__)
+    
+    # Check for SKU configuration file
+    config_file = Path('config/skus.json')
+    if not config_file.exists():
+        error_msg = f"SKU configuration file not found: {config_file}. Please ensure it exists."
+        logger.critical(error_msg)
+        try:
+            from PySide6.QtWidgets import QApplication, QMessageBox
+            if not QApplication.instance():
+                _ = QApplication(sys.argv)
+            QMessageBox.critical(None, "Configuration Error", error_msg)
+        except Exception as e_gui:
+            logger.error(f"Could not display GUI error message for missing config: {e_gui}")
+            print(f"\\nCRITICAL ERROR: {error_msg}")
+        return False
+
+    try:
+        from src.gui.main_window import MainWindow
         from PySide6.QtWidgets import QApplication
 
         logger.info("Initializing QApplication...")
@@ -135,7 +256,6 @@ def run_gui_mode():
         error_msg = f"An unexpected error occurred while trying to run the GUI: {e}"
         logger.critical(error_msg, exc_info=True)
         print(f"\\nCRITICAL ERROR: {error_msg}")
-        # Attempt to show a GUI error message
         try:
             from PySide6.QtWidgets import QApplication, QMessageBox
             if not QApplication.instance():
@@ -307,8 +427,11 @@ def main():
         description="Diode Dynamics Production Test System",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""Examples:
-  # Run GUI mode (default)
+  # Run GUI mode (default - with professional startup)
   python main.py
+  
+  # Run GUI mode without splash screen/mode selection
+  python main.py gui --no-professional
   
   # Run offroad test
   python main.py offroad DD5000 COM4
@@ -368,6 +491,18 @@ def main():
         help="Enable verbose logging"
     )
     
+    parser.add_argument(
+        "--no-professional",
+        action="store_true",
+        help="Disable professional startup (skip splash screen and mode selection)"
+    )
+    
+    parser.add_argument(
+        "--no-video",
+        action="store_true",
+        help="Disable video in splash screen (use static logo only)"
+    )
+    
     args = parser.parse_args()
     
     print("Diode Dynamics Production Test System")
@@ -400,7 +535,11 @@ def main():
         success = True
         
         if args.mode == "gui":
-            success = run_gui_mode()
+            # Default to professional mode for GUI unless explicitly disabled
+            if hasattr(args, 'no_professional') and args.no_professional:
+                success = run_gui_mode()
+            else:
+                success = run_professional_gui_mode(args)
             
         elif args.mode == "offroad":
             if not args.sku or not args.port:

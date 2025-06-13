@@ -2,7 +2,7 @@
 import logging
 from typing import Optional
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel
-from PySide6.QtCore import Signal, Qt
+from PySide6.QtCore import Signal, Qt, QTimer
 from PySide6.QtGui import QFont
 
 from src.core.base_test import TestResult
@@ -24,6 +24,9 @@ class TestAreaWidget(QWidget):
         self.weight_test_widget = None
         self.setup_ui()
         
+        # Pre-create weight widget in background
+        QTimer.singleShot(100, self._precreate_weight_widget)
+        
     def setup_ui(self):
         """Setup the main test area UI"""
         self.setStyleSheet("background-color: #2b2b2b; border-radius: 8px;")
@@ -35,6 +38,20 @@ class TestAreaWidget(QWidget):
         
         # Initialize with default mode
         self.set_mode("Offroad")
+        
+    def _precreate_weight_widget(self):
+        """Pre-create weight widget to avoid delay on mode switch"""
+        try:
+            from src.gui.components.weight_test_widget import WeightTestWidget
+            from src.gui.utils.style_manager import StyleManager
+            self.weight_test_widget = WeightTestWidget()
+            self.weight_test_widget.test_started.connect(self.weight_test_started.emit)
+            self.weight_test_widget.test_completed.connect(self.weight_test_completed.emit)
+            self.weight_test_widget.setParent(None)  # Don't add to layout yet
+            StyleManager.preload()  # Pre-load styles
+            self.logger.debug("Pre-created weight widget successfully")
+        except Exception as e:
+            self.logger.debug(f"Could not pre-create weight widget: {e}")
         
     def set_mode(self, mode: str):
         """Update the test area based on current mode"""

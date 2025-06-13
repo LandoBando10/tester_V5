@@ -28,7 +28,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Diode Dynamics Tester V4")
+        self.setWindowTitle("Diode Dynamics Tester V5")
         self.setMinimumSize(1200, 800)
         self.showMaximized()
 
@@ -50,7 +50,7 @@ class MainWindow(QMainWindow):
         self.arduino_controller = None  # Persistent Arduino instance
 
         # Current state
-        self.current_mode = "Offroad"  # Default mode
+        self.current_mode = None  # Will be set by launcher
 
         # Setup UI and connections first
         self.setup_logging()
@@ -209,6 +209,13 @@ class MainWindow(QMainWindow):
             else:
                 self.start_btn.show()
         
+        # If switching to SMT mode and a SKU is already selected, update panel layout
+        if mode == "SMT":
+            current_sku = self.top_controls.get_current_sku()
+            if current_sku and current_sku != "-- Select SKU --":
+                # Trigger SKU change handler to update panel layout
+                self.on_sku_changed(current_sku)
+        
         # Check if Arduino firmware matches new mode
         if hasattr(self, 'arduino_controller') and self.arduino_controller and self.arduino_controller.is_connected():
             firmware_type = getattr(self.arduino_controller, '_firmware_type', 'UNKNOWN')
@@ -333,9 +340,24 @@ class MainWindow(QMainWindow):
             if self.current_mode != "WeightChecking":
                 self.set_start_enabled(True)
 
-            # Update test area for weight mode
+            # Update test area based on current mode
             if self.current_mode == "WeightChecking":
                 self.test_area.set_sku(sku)
+            elif self.current_mode == "SMT":
+                # Update SMT panel layout based on SKU configuration
+                try:
+                    params = self.sku_manager.get_test_parameters(sku, "SMT")
+                    if params and "panel_layout" in params:
+                        panel_layout = params["panel_layout"]
+                        rows = panel_layout.get("rows", 0)
+                        cols = panel_layout.get("columns", 0)
+                        
+                        # Update the SMT widget's panel layout
+                        if hasattr(self.test_area, 'smt_widget') and self.test_area.smt_widget:
+                            self.test_area.smt_widget.set_panel_layout(rows, cols)
+                            self.logger.info(f"Updated SMT panel layout for {sku}: {rows}x{cols}")
+                except Exception as e:
+                    self.logger.error(f"Error updating SMT panel layout: {e}")
 
         else:
             if self.current_mode != "WeightChecking":
@@ -647,8 +669,8 @@ def main():
     app = QApplication(sys.argv)
 
     # Set application properties
-    app.setApplicationName("Diode Dynamics Tester V4")
-    app.setApplicationVersion("4.0")
+    app.setApplicationName("Diode Dynamics Tester V5")
+    app.setApplicationVersion("5.0")
     app.setOrganizationName("Diode Dynamics")
 
     # Create and show main window

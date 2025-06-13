@@ -82,16 +82,19 @@ class BoardCell(QFrame):
     def _apply_background(self, color: QColor):
         print(f"[CELL COLOR DEBUG] Board {self.board_idx}: Applying background color {color.name()}")
         
-        pal = self.palette()
-        pal.setColor(QPalette.Window, color)
+        # Use style sheet instead of palette to avoid conflicts
+        border_style = "border: 2px solid #555555; border-radius: 4px;"
+        bg_style = f"background-color: {color.name()};"
+        self.setStyleSheet(f"{border_style} {bg_style}")
+        
+        # Update text color based on background brightness
         txt_color = QColor("white") if color.lightness() < 128 else QColor("black")
-        pal.setColor(QPalette.WindowText, txt_color)
-        self.setPalette(pal)
-
-        css_append = f" color: {txt_color.name()};"
-        self.label_board.setStyleSheet(self.label_board.styleSheet() + css_append)
+        text_style = self.TEXT_STYLE + f"color: {txt_color.name()};" + "font-weight: bold;"
+        self.label_board.setStyleSheet(text_style)
+        
+        # Update existing labels
         for lbl in self.measure_labels.values():
-            lbl.setStyleSheet(lbl.styleSheet() + css_append)
+            lbl.setStyleSheet(self.TEXT_STYLE + f"color: {txt_color.name()};")
 
     def set_pass(self):
         self._apply_background(self.PASS_COLOR)
@@ -134,13 +137,18 @@ class BoardCell(QFrame):
         for variant, cur in sorted(back_currents.items()):
             _add_line(f"{_variant_to_label(variant)} Current: {cur:.2f} A")
 
-        # Apply color based on pass/fail
-        if passed:
-            print(f"[CELL COLOR DEBUG] Board {self.board_idx}: Setting color to PASS (green)")
-            self.set_pass()
+        # Apply color based on pass/fail, but only if we have actual measurement data
+        if main_current is not None or back_currents:
+            if passed:
+                print(f"[CELL COLOR DEBUG] Board {self.board_idx}: Setting color to PASS (green)")
+                self.set_pass()
+            else:
+                print(f"[CELL COLOR DEBUG] Board {self.board_idx}: Setting color to FAIL (red)")
+                self.set_fail()
         else:
-            print(f"[CELL COLOR DEBUG] Board {self.board_idx}: Setting color to FAIL (red)")
-            self.set_fail()
+            # No data yet, keep grey
+            print(f"[CELL COLOR DEBUG] Board {self.board_idx}: No measurement data, keeping IDLE (grey)")
+            self.set_idle()
 
 
 # ---------------------------------------------------------------------------
@@ -164,6 +172,10 @@ class PCBPanelWidget(QWidget):
         if rows <= 0 or cols <= 0:
             return
         if rows == self.rows and cols == self.cols:
+            # Even if same layout, reset all cells to idle state
+            for cell in self.cells.values():
+                cell.set_idle()
+                cell.update_measurements(None, {}, True)
             return
         # clear existing widgets
         for cell in self.cells.values():
@@ -570,58 +582,6 @@ class SMTWidget(QWidget):
     def display_results(self, result):
         """Display test results - alias for update_from_test_result for compatibility."""
         self.update_from_test_result(result)
-        
-        # Update power group background based on results
-        all_boards_passed = True
-        for idx in range(1, 5):  # Check boards 1-4
-            if hasattr(self.panel_widget, 'cells') and idx in self.panel_widget.cells:
-                # Check if this board has any failed measurements
-                for name, data in getattr(result, "measurements", {}).items():
-                    if f"_board_{idx}_" in name and isinstance(data, dict):
-                        if not data.get('passed', True):
-                            all_boards_passed = False
-                            break
-            if not all_boards_passed:
-                break
-        
-        if all_boards_passed and hasattr(result, 'failures') and not result.failures:
-            # Green background for all passed
-            self.power_group.setStyleSheet("""
-                QGroupBox {
-                    color: white;
-                    border: 2px solid #51cf66;
-                    border-radius: 8px;
-                    margin-top: 1ex;
-                    font-weight: bold;
-                    font-size: 14px;
-                    background-color: #2d5a2d;
-                }
-                QGroupBox::title {
-                    subcontrol-origin: margin;
-                    left: 10px;
-                    padding: 0 5px 0 5px;
-                    background-color: #2d5a2d;
-                }
-            """)
-        else:
-            # Red background for any failures
-            self.power_group.setStyleSheet("""
-                QGroupBox {
-                    color: white;
-                    border: 2px solid #ff6b6b;
-                    border-radius: 8px;
-                    margin-top: 1ex;
-                    font-weight: bold;
-                    font-size: 14px;
-                    background-color: #5a2d2d;
-                }
-                QGroupBox::title {
-                    subcontrol-origin: margin;
-                    left: 10px;
-                    padding: 0 5px 0 5px;
-                    background-color: #5a2d2d;
-                }
-            """)
         
         # Update programming results if available
         programming_results = getattr(result, 'programming_results', None)

@@ -12,8 +12,8 @@ logger = logging.getLogger(__name__)  # Added
 def get_window_icon():
     """Get the window icon from the logo file"""
     try:
-        # Look for the logo file in the assets directory
-        logo_path = Path(__file__).parent.parent.parent.parent / "assets" / "logo.jpg"
+        # Look for the logo file in the resources directory
+        logo_path = Path(__file__).parent.parent.parent.parent / "resources" / "logo.jpg"
         if logo_path.exists():
             pixmap = QPixmap(str(logo_path))
             if not pixmap.isNull():
@@ -53,7 +53,7 @@ class HeaderBar(QWidget):
 
             # Company logo
             logo_label = QLabel()
-            logo_path = Path(__file__).parent.parent.parent.parent / "assets" / "logo.jpg"
+            logo_path = Path(__file__).parent.parent.parent.parent / "resources" / "logo.jpg"
             if logo_path.exists():
                 pixmap = QPixmap(str(logo_path))
                 if not pixmap.isNull():

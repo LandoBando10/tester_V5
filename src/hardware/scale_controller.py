@@ -99,7 +99,7 @@ class ScaleController(ResourceMixin):
         with self._weight_lock:
             self._current_weight = value
 
-    def connect(self, port: str) -> bool:
+    def connect(self, port: str, skip_comm_test: bool = False) -> bool:
         """Connect to scale on specified port - optimized"""
         if self.serial.connect(port):
             # Set serial timeout to be very short for non-blocking reads
@@ -112,7 +112,7 @@ class ScaleController(ResourceMixin):
                 except:
                     pass  # Some serial implementations don't support these methods
             
-            if self.test_communication():
+            if skip_comm_test or self.test_communication():
                 self.logger.info(f"Scale connected successfully on {port}")
                 return True
             else:
@@ -128,27 +128,29 @@ class ScaleController(ResourceMixin):
         self.cleanup_resources()  # Clean up all tracked resources
 
     def test_communication(self) -> bool:
-        """Test if scale is responding - optimized for speed"""
+        """Optimized communication test with early exit"""
         try:
-            # Clear any pending data
-            self.serial.flush_buffers()
-            time.sleep(0.05)  # Reduced from 0.1
-
-            # Try to get a reading with shorter timeout
-            weight = self._get_raw_weight_fast(timeout=0.3)  # Reduced from 1.0
-            if weight is not None:
-                self.logger.debug(f"Communication test successful, got weight: {weight}")
-                return True
-
-            # If direct reading fails, assume scale sends data continuously
-            # Just check if we can read anything (reduced iterations)
-            for _ in range(3):  # Reduced from 5
-                if self.serial.connection and self.serial.connection.in_waiting > 0:
+            # Check for existing data first - no delay if data already available
+            if self.serial.connection and self.serial.connection.in_waiting > 0:
+                # Try to parse immediately
+                weight = self._get_raw_weight_fast(timeout=0.05)
+                if weight is not None:
                     return True
-                time.sleep(0.05)  # Reduced from 0.1
-
-            return False
-
+            
+            # Only clear buffers if necessary
+            if self.serial.connection.in_waiting > 512:
+                self.serial.flush_buffers()
+                time.sleep(0.02)  # Reduced from 50ms
+            
+            # Single attempt with shorter timeout
+            weight = self._get_raw_weight_fast(timeout=0.15)  # Reduced from 300ms
+            if weight is not None:
+                return True
+                
+            # Quick check for any data (1 iteration, not 3)
+            time.sleep(0.05)
+            return self.serial.connection.in_waiting > 0
+            
         except Exception as e:
             self.logger.error(f"Communication test error: {e}")
             return False
@@ -175,34 +177,26 @@ class ScaleController(ResourceMixin):
             return False
 
     def start_reading(self, callback: Optional[Callable[[SensorReading], None]] = None, read_interval_s: Optional[float] = None):
-        """Start continuous weight reading with optimized performance"""
+        """Start reading with minimal initialization"""
         if self.is_reading:
-            self.logger.warning("Already reading weights")
             return
-
+            
         self.reading_callback = callback
         self.is_reading = True
         
-        # Clear any accumulated data and reset filters
-        if self.serial.connection:
-            try:
-                # More aggressive buffer clearing for faster startup
-                self.serial.connection.reset_input_buffer()
-                self.serial.flush_buffers()
-            except:
-                self.serial.flush_buffers()
-        self.clear_weight_history()
+        # Only clear if significant data accumulated
+        if self.serial.connection and self.serial.connection.in_waiting > 1024:
+            self.serial.connection.reset_input_buffer()
+        # Remove redundant flush_buffers() call
         
-        # Use provided interval or default
-        default_sensor_config = SensorConfig(sensor_type="SCALE", sensor_id="WEIGHT", read_interval_ms=50)  # Faster default
-        self._read_interval_s = read_interval_s if read_interval_s is not None else (self.sensors.get("WEIGHT", default_sensor_config).read_interval_ms / 1000.0)
-
-        # Start reading thread with resource tracking
+        # Don't clear weight history on start - keep continuity
+        # self.clear_weight_history()  # REMOVE THIS
+        
+        # Start thread immediately
+        self._read_interval_s = read_interval_s or 0.05
         self.reading_thread = threading.Thread(target=self._optimized_reading_loop, daemon=True)
-        thread_id = self.register_thread(self.reading_thread, "scale_reading")
+        self.register_thread(self.reading_thread, "scale_reading")
         self.reading_thread.start()
-
-        self.logger.info(f"Started continuous weight reading with interval {self._read_interval_s}s")
 
     def stop_reading(self):
         """Stop continuous weight reading"""
