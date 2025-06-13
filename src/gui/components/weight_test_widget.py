@@ -57,11 +57,9 @@ class UIMessages:
     STATUS_READY_AUTO_TEST = "Ready. Place part on scale for auto-test."
     REMOVE_PART_FOR_NEXT = "Remove part to test next unit."
     PART_REMOVED_READY_NEXT = "Part removed - ready for next test."
-    TEST_STOPPED_BY_USER = "Test stopped by user."
     READY_TO_TEST = "READY TO TEST"
     TESTING = "TESTING..."
     ERROR = "ERROR"
-    TEST_STOPPED = "TEST STOPPED"
 
 
 class StyleManager:
@@ -79,7 +77,6 @@ class StyleManager:
     def _load_styles(cls):
         # Base styles
         base = "font-size: 12px;"
-        btn_base = "border: none; border-radius: 6px; padding: 8px 16px; font-size: 12px; font-weight: bold;"
         weight_display_base = "background-color: #222222; border-radius: 8px; padding: 20px; margin: 10px;"
         indicator_base = "border-radius: 10px; padding: 15px; margin: 5px; font-weight: bold;"
         
@@ -88,22 +85,17 @@ class StyleManager:
             'title_label': "color: white; margin-bottom: 10px;",
             'groupbox': "QGroupBox { font-weight: bold; margin-top: 10px; }",
             
-            # Weight display styles
-            'weight_display_live': f"color: #51cf66; border: 2px solid #51cf66; {weight_display_base}",
-            'weight_display_waiting': f"color: #ffa500; border: 2px solid #ffa500; {weight_display_base}",
-            'weight_display_disconnected': f"color: #666666; border: 2px solid #555555; {weight_display_base}",
+            # Weight display styles (updated for new design)
+            'weight_display_live': "color: #ffffff;",
+            'weight_display_waiting': "color: #ffa500;", 
+            'weight_display_disconnected': "color: #444444;",
             
-            # Status indicator styles
-            'indicator_ready': f"background-color: #333333; color: #cccccc; border: 3px solid #555555; {indicator_base}",
-            'indicator_testing': f"background-color: #4a4a2d; color: #ffd43b; border: 3px solid #ffd43b; {indicator_base}",
-            'indicator_pass': f"background-color: #2d5a2d; color: #51cf66; border: 3px solid #51cf66; {indicator_base}",
-            'indicator_fail': f"background-color: #5a2d2d; color: #ff6b6b; border: 3px solid #ff6b6b; {indicator_base}",
+            # Status indicator styles (new simple design)
+            'indicator_ready': "color: #666666; background-color: #1a1a1a;",
+            'indicator_testing': "color: #ffd43b; background-color: #2a2a1a;",
+            'indicator_pass': "color: #51cf66; background-color: #1a2a1a;",
+            'indicator_fail': "color: #ff6b6b; background-color: #2a1a1a;",
             
-            # Button styles
-            'btn_disabled': "background-color: #444444; color: #999999;",
-            'btn_zero': f"QPushButton {{ background-color: #666666; color: white; {btn_base} }} QPushButton:hover {{ background-color: #777777; }}",
-            'btn_manual_test': f"QPushButton {{ background-color: #4a90a4; color: white; {btn_base} }} QPushButton:hover {{ background-color: #357a8a; }}",
-            'btn_stop_test': f"QPushButton {{ background-color: #ff6b6b; color: white; {btn_base} }} QPushButton:hover {{ background-color: #ff5252; }}",
             
             # Status label styles
             'status_default': "color: #ff6b6b; font-weight: bold; font-size: 12px;",
@@ -179,130 +171,124 @@ class WeightTestWidget(QWidget, ResourceMixin):
     def setup_ui(self):
         """Setup the main UI layout."""
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(20, 20, 20, 20)
-        main_layout.setSpacing(15)
+        main_layout.setContentsMargins(40, 40, 40, 40)
+        main_layout.setSpacing(30)
+        
+        # Set dark background for the whole widget
+        self.setStyleSheet("""
+            background-color: #1a1a1a;
+        """)
 
-        # Title
-        title_label = QLabel("Weight Checking Mode")
-        title_label.setFont(QFont("Arial", 18, QFont.Bold))
-        title_label.setAlignment(Qt.AlignCenter)
-        title_label.setStyleSheet(StyleManager.get_style('title_label'))
-        main_layout.addWidget(title_label)
+        # Add stretch at top to center content
+        main_layout.addStretch(1)
 
-        # Setup component groups
-        self._setup_weight_display_group(main_layout)
-        self._setup_test_controls_group(main_layout)
-        self._setup_status_indicator_group(main_layout)
+        # Main content container
+        content_container = QWidget()
+        content_container.setStyleSheet("""
+            background-color: #2b2b2b;
+            border-radius: 20px;
+        """)
+        content_container.setContentsMargins(40, 40, 40, 40)
+        content_layout = QVBoxLayout(content_container)
+        content_layout.setSpacing(25)
 
-        # Progress bar
+        # Setup components
+        self._setup_weight_display(content_layout)
+        self._setup_range_display(content_layout)
+        self._setup_status_display(content_layout)
+
+        main_layout.addWidget(content_container)
+        main_layout.addStretch(1)
+        
+        # Hidden elements for functionality
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
-        self.progress_bar.setStyleSheet(StyleManager.get_style('progress_bar'))
-        main_layout.addWidget(self.progress_bar)
-
-        # Results text area
+        
+        # Hidden text area for logging (keep for functionality)
         self.results_text = QTextEdit()
-        self.results_text.setMaximumHeight(150)
-        self.results_text.setStyleSheet(StyleManager.get_style('results_text'))
-        self.results_text.setPlaceholderText("Test results will appear here...")
-        main_layout.addWidget(self.results_text)
+        self.results_text.setVisible(False)
 
-        main_layout.addStretch()
-        self.setStyleSheet(StyleManager.get_style('groupbox'))
-
-    def _setup_weight_display_group(self, parent_layout):
-        """Setup the weight display group."""
-        weight_group = QGroupBox("Scale")
-        layout = QVBoxLayout(weight_group)
-
+    def _setup_weight_display(self, parent_layout):
+        """Setup the main weight display."""
+        # Weight reading label
+        weight_title = QLabel("LIVE WEIGHT")
+        weight_title.setAlignment(Qt.AlignCenter)
+        weight_title.setFont(QFont("Arial", 12))
+        weight_title.setStyleSheet("color: #666666; letter-spacing: 2px;")
+        parent_layout.addWidget(weight_title)
+        
         # Main weight display
-        self.weight_display_label = QLabel("--- g")
-        self.weight_display_label.setFont(QFont("Arial", 24, QFont.Bold))
+        self.weight_display_label = QLabel("---")
+        self.weight_display_label.setFont(QFont("Arial", 72, QFont.Bold))
         self.weight_display_label.setAlignment(Qt.AlignCenter)
-        self.weight_display_label.setStyleSheet(StyleManager.get_style('weight_display_disconnected'))
-        layout.addWidget(self.weight_display_label)
+        self.weight_display_label.setMinimumHeight(100)
+        self.weight_display_label.setStyleSheet("""
+            color: #ffffff;
+            background-color: transparent;
+            padding: 10px;
+        """)
+        parent_layout.addWidget(self.weight_display_label)
 
-        # SKU parameters display
-        sku_layout = QHBoxLayout()
-        self.sku_min_label = QLabel("MIN: ---g")
-        self.sku_max_label = QLabel("MAX: ---g")
+    def _setup_range_display(self, parent_layout):
+        """Setup the min/max range display."""
+        # Range container
+        range_container = QWidget()
+        range_layout = QHBoxLayout(range_container)
+        range_layout.setSpacing(50)
         
-        for label in [self.sku_min_label, self.sku_max_label]:
-            label.setStyleSheet("color: #4a90a4; font-size: 12px; font-weight: bold;")
-            sku_layout.addWidget(label)
+        # Min display
+        self.sku_min_label = QLabel("---")
+        self.sku_min_label.setAlignment(Qt.AlignCenter)
+        self.sku_min_label.setFont(QFont("Arial", 24))
+        self.sku_min_label.setStyleSheet("""
+            color: #888888;
+            padding: 5px 15px;
+        """)
         
-        sku_layout.addStretch()
-        layout.addLayout(sku_layout)
-        parent_layout.addWidget(weight_group)
-
-    def _setup_test_controls_group(self, parent_layout):
-        """Setup the test controls group."""
-        controls_group = QGroupBox("Test Controls")
-        layout = QVBoxLayout(controls_group)
-
-        # Status display
-        status_layout = QHBoxLayout()
-        status_layout.addWidget(QLabel("Status:"))
-        self.status_label = QLabel(UIMessages.STATUS_WAITING_SKU_CONN)
-        self.status_label.setStyleSheet(StyleManager.get_style('status_default'))
-        status_layout.addWidget(self.status_label)
-        status_layout.addStretch()
-        layout.addLayout(status_layout)
-
-        # Threshold display
-        threshold_layout = QHBoxLayout()
-        threshold_layout.addWidget(QLabel("Auto-test threshold:"))
-        self.threshold_label = QLabel("---g (80% of min weight)")
-        self.threshold_label.setStyleSheet("color: #cccccc; font-size: 12px;")
-        threshold_layout.addWidget(self.threshold_label)
-        threshold_layout.addStretch()
-        layout.addLayout(threshold_layout)
-
-        # Control buttons
-        self._setup_control_buttons(layout)
-        parent_layout.addWidget(controls_group)
-
-    def _setup_control_buttons(self, parent_layout):
-        """Setup control buttons with proper styling."""
-        button_layout = QHBoxLayout()
+        # Max display
+        self.sku_max_label = QLabel("---")
+        self.sku_max_label.setAlignment(Qt.AlignCenter) 
+        self.sku_max_label.setFont(QFont("Arial", 24))
+        self.sku_max_label.setStyleSheet("""
+            color: #888888;
+            padding: 5px 15px;
+        """)
         
-        # Zero button
-        self.zero_btn = QPushButton("Zero Scale")
-        self.zero_btn.clicked.connect(self.zero_scale)
-        self.zero_btn.setStyleSheet(StyleManager.get_style('btn_zero'))
-        button_layout.addWidget(self.zero_btn)
-
-        # Manual test button
-        self.manual_test_btn = QPushButton("Start Manual Test")
-        self.manual_test_btn.clicked.connect(lambda: self.start_weight_test(auto_triggered=False))
-        self.manual_test_btn.setStyleSheet(StyleManager.get_style('btn_manual_test'))
-        button_layout.addWidget(self.manual_test_btn)
-
-        # Stop test button
-        self.stop_test_btn = QPushButton("Stop Test")
-        self.stop_test_btn.clicked.connect(self.stop_weight_test)
-        self.stop_test_btn.setStyleSheet(StyleManager.get_style('btn_stop_test'))
-        button_layout.addWidget(self.stop_test_btn)
+        range_layout.addStretch()
+        range_layout.addWidget(self.sku_min_label)
+        range_layout.addWidget(QLabel("-", alignment=Qt.AlignCenter, styleSheet="color: #555555; font-size: 24px;"))
+        range_layout.addWidget(self.sku_max_label)
+        range_layout.addStretch()
         
-        button_layout.addStretch()
-        parent_layout.addLayout(button_layout)
+        parent_layout.addWidget(range_container)
         
-        self.update_test_button_state()
+        # Hidden elements for functionality
+        self.status_label = QLabel()
+        self.status_label.setVisible(False)
+        self.threshold_label = QLabel()
+        self.threshold_label.setVisible(False)
 
-    def _setup_status_indicator_group(self, parent_layout):
-        """Setup the status indicator group."""
-        status_group = QGroupBox("Test Status")
-        layout = QVBoxLayout(status_group)
 
-        # Result indicator
-        self.result_indicator = QLabel(UIMessages.READY_TO_TEST)
-        self.result_indicator.setFont(QFont("Arial", 20, QFont.Bold))
+    def _setup_status_display(self, parent_layout):
+        """Setup the test status display."""
+        # Add separator line
+        separator = QWidget()
+        separator.setFixedHeight(2)
+        separator.setStyleSheet("background-color: #333333;")
+        parent_layout.addWidget(separator)
+        
+        # Status indicator
+        self.result_indicator = QLabel("READY TO TEST")
+        self.result_indicator.setFont(QFont("Arial", 28, QFont.Bold))
         self.result_indicator.setAlignment(Qt.AlignCenter)
-        self.result_indicator.setMinimumHeight(60)
-        self.result_indicator.setStyleSheet(StyleManager.get_style('indicator_ready'))
-        layout.addWidget(self.result_indicator)
-        
-        parent_layout.addWidget(status_group)
+        self.result_indicator.setMinimumHeight(80)
+        self.result_indicator.setStyleSheet("""
+            color: #666666;
+            background-color: #1a1a1a;
+            border-radius: 15px;
+            padding: 20px;
+        """)
+        parent_layout.addWidget(self.result_indicator)
 
     def set_sku(self, sku: Optional[str]):
         """Set the current SKU and update related parameters."""
@@ -322,8 +308,15 @@ class WeightTestWidget(QWidget, ResourceMixin):
     def _reset_auto_test_state(self):
         """Reset auto-test state when SKU changes."""
         self.auto_test_state = AutoTestState.WAITING
-        self.result_indicator.setText(UIMessages.READY_TO_TEST)
-        self.result_indicator.setStyleSheet(StyleManager.get_style('indicator_ready'))
+        self.result_indicator.setText("READY TO TEST")
+        self.result_indicator.setStyleSheet("""
+            color: #666666;
+            background-color: #1a1a1a;
+            border-radius: 15px;
+            padding: 20px;
+            font-size: 28px;
+            font-weight: bold;
+        """)
         self.recent_weights.clear()
         self.weight_stable_start = None
 
@@ -488,18 +481,6 @@ class WeightTestWidget(QWidget, ResourceMixin):
         """Callback for weight readings from scale controller."""
         self.live_reading_count += 1
 
-    def zero_scale(self):
-        """Zero the scale with current weight reading."""
-        if not self._can_operate_scale():
-            self.logger.warning("Cannot zero scale: scale not connected.")
-            return
-
-        current_weight = self.get_adjusted_weight()
-        if current_weight is not None:
-            self.zero_offset = current_weight
-            self.logger.info(f"Scale zeroed. New tare offset: {self.zero_offset:.2f}g")
-        else:
-            self.logger.warning("Cannot zero scale: no weight reading from scale.")
 
     def _can_operate_scale(self) -> bool:
         """Check if scale operations are possible."""
@@ -538,23 +519,23 @@ class WeightTestWidget(QWidget, ResourceMixin):
 
     def _display_disconnected_weight(self):
         """Display disconnected state."""
-        self.weight_display_label.setText("--- g")
+        self.weight_display_label.setText("---")
         self.weight_display_label.setStyleSheet(StyleManager.get_style('weight_display_disconnected'))
 
     def _display_live_weight(self, weight: float):
         """Display live weight reading."""
-        self.weight_display_label.setText(f"{weight:.2f} g")
+        self.weight_display_label.setText(f"{weight:.1f} g")
         self.weight_display_label.setStyleSheet(StyleManager.get_style('weight_display_live'))
 
     def _display_waiting_weight(self):
         """Display waiting state."""
-        self.weight_display_label.setText("Waiting...")
-        self.weight_display_label.setStyleSheet(StyleManager.get_style('weight_display_waiting'))
+        self.weight_display_label.setText("---")
+        self.weight_display_label.setStyleSheet("color: #666666;")
 
     def _display_error_weight(self):
         """Display error state."""
-        self.weight_display_label.setText("Error")
-        self.weight_display_label.setStyleSheet(StyleManager.get_style('weight_display_waiting'))
+        self.weight_display_label.setText("---")
+        self.weight_display_label.setStyleSheet("color: #666666;")
 
     def handle_auto_test_trigger(self, current_weight: float):
         """Handle auto-test triggering based on current weight."""
@@ -608,8 +589,9 @@ class WeightTestWidget(QWidget, ResourceMixin):
     def _update_threshold_display(self, threshold_weight: float, min_weight: float):
         """Update the threshold display label."""
         percentage = self.config.WEIGHT_THRESHOLD_PERCENTAGE * 100
-        self.threshold_label.setText(
-            f"{threshold_weight:.1f}g ({percentage:.0f}% of {min_weight:.1f}g min)"
+        self.threshold_label.setText(f"{threshold_weight:.1f} g")
+        self.threshold_label.setToolTip(
+            f"{percentage:.0f}% of minimum weight ({min_weight:.1f}g)"
         )
 
     def _handle_autotest_waiting(self, current_weight: float, threshold_weight: float, weight_range: WeightRange):
@@ -639,8 +621,15 @@ class WeightTestWidget(QWidget, ResourceMixin):
         if current_weight < min_weight_for_presence:
             self._reset_to_waiting_state()
             self.logger.info(UIMessages.PART_REMOVED_READY_NEXT)
-            self.result_indicator.setText(UIMessages.READY_TO_TEST)
-            self.result_indicator.setStyleSheet(StyleManager.get_style('indicator_ready'))
+            self.result_indicator.setText("READY TO TEST")
+            self.result_indicator.setStyleSheet("""
+                color: #666666;
+                background-color: #1a1a1a;
+                border-radius: 15px;
+                padding: 20px;
+                font-size: 28px;
+                font-weight: bold;
+            """)
 
     def _start_auto_test(self, current_weight: float):
         """Start auto-triggered test."""
@@ -670,8 +659,8 @@ class WeightTestWidget(QWidget, ResourceMixin):
             for w in relevant_weights
         )
 
-    def start_weight_test(self, auto_triggered: bool = False):
-        """Start a weight test (manual or auto-triggered)."""
+    def start_weight_test(self, auto_triggered: bool = True):
+        """Start an auto-triggered weight test."""
         validation_error = self._validate_test_preconditions()
         if validation_error:
             self.logger.warning(f"Cannot start test: {validation_error}")
@@ -704,8 +693,15 @@ class WeightTestWidget(QWidget, ResourceMixin):
             self.auto_test_state = AutoTestState.TESTING
         
         self.update_test_button_state()
-        self.result_indicator.setText(UIMessages.TESTING)
-        self.result_indicator.setStyleSheet(StyleManager.get_style('indicator_testing'))
+        self.result_indicator.setText("TESTING...")
+        self.result_indicator.setStyleSheet("""
+            color: #ffd43b;
+            background-color: #2a2a1a;
+            border-radius: 15px;
+            padding: 20px;
+            font-size: 28px;
+            font-weight: bold;
+        """)
         
         self.perform_weight_measurement(self.cached_sku_params, auto_triggered)
 
@@ -813,11 +809,26 @@ class WeightTestWidget(QWidget, ResourceMixin):
 
     def _update_result_indicator(self, result):
         """Update the result indicator based on test outcome."""
-        status_msg = "PASS" if result.passed else "FAIL"
-        self.result_indicator.setText(f"TEST {status_msg}")
-        
-        style = StyleManager.get_style('indicator_pass' if result.passed else 'indicator_fail')
-        self.result_indicator.setStyleSheet(style)
+        if result.passed:
+            self.result_indicator.setText("PASS")
+            self.result_indicator.setStyleSheet("""
+                color: #51cf66;
+                background-color: #1a2a1a;
+                border-radius: 15px;
+                padding: 20px;
+                font-size: 32px;
+                font-weight: bold;
+            """)
+        else:
+            self.result_indicator.setText("FAIL")
+            self.result_indicator.setStyleSheet("""
+                color: #ff6b6b;
+                background-color: #2a1a1a;
+                border-radius: 15px;
+                padding: 20px;
+                font-size: 32px;
+                font-weight: bold;
+            """)
 
     def _log_test_results(self, result):
         """Log detailed test results to the results text area."""
@@ -866,46 +877,20 @@ class WeightTestWidget(QWidget, ResourceMixin):
 
     def _set_result_indicator_error(self, details: str = ""):
         """Set the result indicator to error state."""
-        error_text = UIMessages.ERROR
-        if details:
-            error_text += f": {details[:20]}"
-        
-        self.result_indicator.setText(error_text)
-        self.result_indicator.setStyleSheet(StyleManager.get_style('indicator_fail'))
+        self.result_indicator.setText("ERROR")
+        self.result_indicator.setStyleSheet("""
+            color: #ff6b6b;
+            background-color: #2a1a1a;
+            border-radius: 15px;
+            padding: 20px;
+            font-size: 28px;
+            font-weight: bold;
+        """)
 
-    def stop_weight_test(self):
-        """Stop the current weight test."""
-        self.is_testing = False
-        self.progress_bar.setVisible(False)
-        self.auto_test_state = AutoTestState.WAITING
-        self.recent_weights.clear()
-        
-        self.result_indicator.setText(UIMessages.TEST_STOPPED)
-        self.result_indicator.setStyleSheet(StyleManager.get_style('indicator_ready'))
-        
-        self.update_test_button_state()
-        self.logger.info(UIMessages.TEST_STOPPED_BY_USER)
 
     def update_test_button_state(self):
-        """Update the state of test control buttons and status display."""
-        button_states = self._calculate_button_states()
-        
-        self.zero_btn.setEnabled(button_states['zero'])
-        self.manual_test_btn.setEnabled(button_states['manual_test'])
-        self.stop_test_btn.setEnabled(button_states['stop_test'])
-        
+        """Update the status display (no buttons to manage)."""
         self._update_status_label()
-
-    def _calculate_button_states(self) -> Dict[str, bool]:
-        """Calculate the enabled state for each button."""
-        can_operate = self._can_operate_scale()
-        has_sku = bool(self.current_sku)
-        
-        return {
-            'zero': can_operate,
-            'manual_test': can_operate and has_sku and not self.is_testing,
-            'stop_test': self.is_testing
-        }
 
     def _update_status_label(self):
         """Update the status label based on current state."""
@@ -970,9 +955,12 @@ class WeightTestWidget(QWidget, ResourceMixin):
 
     def reset_weight_statistics(self):
         """Reset weight statistics display."""
-        self.sku_min_label.setText("MIN: ---g")
-        self.sku_max_label.setText("MAX: ---g")
-        self.threshold_label.setText("---g (80% of min weight)")
+        self.sku_min_label.setText("---")
+        self.sku_max_label.setText("---")
+        self.sku_min_label.setStyleSheet("color: #888888; padding: 5px 15px;")
+        self.sku_max_label.setStyleSheet("color: #888888; padding: 5px 15px;")
+        if hasattr(self, 'threshold_label'):
+            self.threshold_label.setText("--- g")
 
     def update_sku_parameter_display(self):
         """Update SKU parameter display."""
@@ -985,8 +973,11 @@ class WeightTestWidget(QWidget, ResourceMixin):
             min_w = weight_params.get("min_weight_g", 0.0)
             max_w = weight_params.get("max_weight_g", 0.0)
             
-            self.sku_min_label.setText(f"MIN: {min_w:.1f}g")
-            self.sku_max_label.setText(f"MAX: {max_w:.1f}g")
+            # Update range display with actual values
+            self.sku_min_label.setText(f"{min_w:.0f} g")
+            self.sku_max_label.setText(f"{max_w:.0f} g")
+            self.sku_min_label.setStyleSheet("color: #4a90a4; padding: 5px 15px;")
+            self.sku_max_label.setStyleSheet("color: #4a90a4; padding: 5px 15px;")
             
         except (KeyError, TypeError) as e:
             self.logger.error(f"Error updating SKU display: {e}")
@@ -1007,7 +998,9 @@ class WeightTestWidget(QWidget, ResourceMixin):
 
     def add_result_message(self, message: str):
         """Add a message to the results text area."""
-        self.results_text.append(message)
+        # Results are hidden in the new design, but keep for logging
+        if hasattr(self, 'results_text'):
+            self.results_text.append(message)
 
     def cleanup(self):
         """Clean up widget resources."""
