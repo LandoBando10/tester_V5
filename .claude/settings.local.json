@@ -25,7 +25,8 @@
       "Bash(git add:*)",
       "Bash(git commit:*)",
       "WebFetch(domain:docs.anthropic.com)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Bash(touch:*)"
     ],
     "deny": []
   }

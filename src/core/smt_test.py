@@ -380,76 +380,63 @@ class SMTTest(BaseTest):
     def _measure_group(self, relays: str, timeout: float = 15.0) -> Dict[str, Dict]:
         """
         Measure a group of relays and map results back to board numbers
-        PHASE 1 FIX: Use proper send_command instead of direct serial write
+        Uses new individual command approach (Phase 1.1)
         """
         board_results = {}
-        relay_list = relays.split(',')
+        relay_list = [int(r.strip()) for r in relays.split(',') if r.strip()]
         
         # PHASE 1: Enforce test cooldown if this is a new test
         self.arduino.enforce_test_cooldown()
         
         # PHASE 1: Verify Arduino is responsive before starting
         if not self.arduino.verify_arduino_responsive():
-            self.logger.error("Arduino not responsive before MEASURE_GROUP")
+            self.logger.error("Arduino not responsive before measurements")
             if not self.arduino.recover_communication():
                 self.logger.error("Failed to recover Arduino communication")
                 return board_results
         
-        # MEASURE_GROUP command handles relay switching internally
-        self.logger.info(f"Sending MEASURE_GROUP:{relays}")
+        # Use new measure_relays method with individual commands
+        self.logger.info(f"Measuring relays using individual commands: {relay_list}")
         
-        # PHASE 1 CRITICAL FIX: Use send_measure_group method
-        success, response_lines = self.arduino.send_measure_group(relays, timeout)
+        # Get measurements
+        measurement_results = self.arduino.measure_relays(relay_list, timeout=2.0)
         
-        if not success:
-            self.logger.error("MEASURE_GROUP command failed")
+        if not measurement_results:
+            self.logger.error("No measurements received")
             self.result.failures.append("Failed to communicate with Arduino during measurement")
             return board_results
         
-        # Join all response lines
-        full_response = '\n'.join(response_lines)
-        self.logger.info(f"Full response:\n{full_response}")
-
-        # Parse measurement lines and map to boards
-        for line in response_lines:
-            if line.startswith("MEASUREMENT:"):
-                try:
-                    _, relay, rest = line.split(":", 2)
-                    relay_num = int(relay)
-                    
-                    # Get board number from relay mapping
-                    board_num = self.smt_controller.get_board_from_relay(relay_num)
-                    if not board_num:
-                        self.logger.warning(f"No board mapping found for relay {relay_num}")
-                        continue
-                    
-                    data = {}
-                    for pair in rest.split(","):
-                        if "=" in pair:
-                            k, v = pair.split("=", 1)
-                            data[k.strip()] = float(v.strip())
-                    
-                    board_results[f"Board {board_num}"] = {
-                        "relay": relay_num,
-                        "voltage": data.get("V", 0),
-                        "current": data.get("I", 0),
-                        "power": data.get("P", 0)
-                    }
-                except Exception as e:
-                    self.logger.error(f"Error parsing measurement line '{line}': {e}")
+        # Map results to boards
+        for relay_num, measurement in measurement_results.items():
+            if measurement is None:
+                self.logger.warning(f"No measurement for relay {relay_num}")
+                continue
+                
+            # Get board number from relay mapping
+            board_num = self.smt_controller.get_board_from_relay(relay_num)
+            if not board_num:
+                self.logger.warning(f"No board mapping found for relay {relay_num}")
+                continue
+            
+            board_results[f"Board {board_num}"] = {
+                "relay": relay_num,
+                "voltage": measurement.get("voltage", 0),
+                "current": measurement.get("current", 0),
+                "power": measurement.get("power", 0)
+            }
         
         self.logger.info(f"Parsed board results: {list(board_results.keys())}")
         
-        # PHASE 1: Validate we got measurements
+        # Validate we got measurements
         expected_count = len(relay_list)
         actual_count = len(board_results)
         
         if actual_count == 0:
-            self.logger.error(f"No measurements received for relays {relays}")
-            self.result.failures.append(f"No measurements received from Arduino for relays {relays}")
+            self.logger.error(f"No measurements received for relays {relay_list}")
+            self.result.failures.append(f"No measurements received from Arduino for relays {relay_list}")
         elif actual_count < expected_count:
             self.logger.warning(f"Only received {actual_count}/{expected_count} measurements")
-            missing_relays = [r for r in relay_list if not any(br['relay'] == int(r) for br in board_results.values())]
+            missing_relays = [r for r in relay_list if r not in measurement_results or measurement_results[r] is None]
             self.logger.warning(f"Missing measurements for relays: {missing_relays}")
         
         return board_results

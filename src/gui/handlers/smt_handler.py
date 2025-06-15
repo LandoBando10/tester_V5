@@ -60,9 +60,10 @@ class SMTHandler(QObject, ResourceMixin):
                 self.logger.warning(f"Reached {self.max_consecutive_tests} consecutive tests - enforcing extended cooldown")
                 self.main_window.update_status("Extended cooldown (10s) - relay recovery", "yellow")
                 
-                # Turn off all relays during cooldown
+                # Turn off all relays during cooldown (using individual commands)
                 if hasattr(self.main_window, 'arduino_controller') and self.main_window.arduino_controller:
-                    self.main_window.arduino_controller.send_command("RELAY_ALL:OFF")
+                    for relay in range(1, 9):  # Turn off relays 1-8
+                        self.main_window.arduino_controller.send_command(f"RELAY:{relay}:OFF")
                 
                 time.sleep(10.0)
                 self.consecutive_test_count = 0
@@ -86,6 +87,16 @@ class SMTHandler(QObject, ResourceMixin):
                                 QMessageBox.critical(self.main_window, "Error", 
                                                    "Arduino not responding. Please reconnect.")
                                 return
+                
+                # CRC validation should already be enabled during connection
+                # Log current CRC status for verification
+                if hasattr(arduino, 'is_crc_enabled'):
+                    crc_status = arduino.is_crc_enabled()
+                    self.logger.info(f"CRC validation status: {'enabled' if crc_status else 'disabled'}")
+                    
+                    # Update main window CRC status if method exists
+                    if hasattr(self.main_window, 'update_crc_status'):
+                        self.main_window.update_crc_status(crc_status)
             # Validation
             if not sku or sku == "-- Select SKU --":
                 self.logger.warning("SKU not selected.")
@@ -315,9 +326,10 @@ class SMTHandler(QObject, ResourceMixin):
             # PHASE 1: Record test end time for cooldown tracking
             self._last_test_end_time = time.time()
             
-            # PHASE 1: Always turn off relays after test
+            # PHASE 1: Always turn off relays after test (using individual commands)
             if hasattr(self.main_window, 'arduino_controller') and self.main_window.arduino_controller:
-                self.main_window.arduino_controller.send_command("RELAY_ALL:OFF")
+                for relay in range(1, 9):  # Turn off relays 1-8
+                    self.main_window.arduino_controller.send_command(f"RELAY:{relay}:OFF")
             
             # If test failed, add extra recovery time
             if not result.passed:

@@ -24,6 +24,7 @@ class ConnectionDialog(QDialog):
         self.scale_connected = False
         self.arduino_port = None
         self.scale_port = None
+        self.arduino_crc_enabled = False  # Track CRC status
 
         self.setup_ui()
         self.refresh_ports()
@@ -204,11 +205,19 @@ class ConnectionDialog(QDialog):
 
         logger.info(f"Attempting to connect to Arduino on port: {port}")
         try:
-            from src.hardware.arduino_controller import ArduinoController
+            # Import the appropriate controller based on mode
+            current_mode = self.parent().current_mode
             
-            # Create Arduino instance if it doesn't exist
-            if not self.parent().arduino_controller:
-                self.parent().arduino_controller = ArduinoController(baud_rate=115200)
+            if current_mode == "SMT":
+                from src.hardware.smt_arduino_controller import SMTArduinoController
+                # Create SMT Arduino instance if it doesn't exist
+                if not self.parent().arduino_controller:
+                    self.parent().arduino_controller = SMTArduinoController(baud_rate=115200)
+            else:
+                from src.hardware.arduino_controller import ArduinoController
+                # Create Arduino instance if it doesn't exist
+                if not self.parent().arduino_controller:
+                    self.parent().arduino_controller = ArduinoController(baud_rate=115200)
             
             arduino = self.parent().arduino_controller
             
@@ -265,12 +274,26 @@ class ConnectionDialog(QDialog):
                     arduino._sensors_configured = True
                     logger.info(f"Sensors configured for {current_mode} mode")
                     
-                    # Set up button callback for SMT mode
+                    # Enable CRC-16 validation if supported (BEFORE starting reading loop)
+                    crc_enabled = False
+                    try:
+                        # Check if this is SMT Arduino controller with CRC support
+                        if hasattr(arduino, 'enable_crc_validation'):
+                            logger.info("Attempting to enable CRC-16 validation...")
+                            crc_enabled = arduino.enable_crc_validation(True)
+                            if crc_enabled:
+                                logger.info("CRC-16 validation enabled successfully")
+                            else:
+                                logger.info("CRC-16 not supported by firmware - continuing without it")
+                    except Exception as crc_error:
+                        logger.warning(f"Could not enable CRC: {crc_error}")
+                    
+                    # Set up button callback for SMT mode (AFTER CRC setup)
                     if current_mode == "SMT" and hasattr(self.parent(), 'smt_handler'):
                         logger.info("Setting up physical button callback for SMT mode")
                         arduino.set_button_callback(self.parent().smt_handler.handle_button_event)
                         
-                        # Start the reading loop to process button events
+                        # Start the reading loop to process button events (AFTER CRC is configured)
                         if not arduino.is_reading:
                             logger.info("Starting Arduino reading loop for button events")
                             arduino.start_reading()
@@ -278,10 +301,14 @@ class ConnectionDialog(QDialog):
                     # Don't disconnect - keep it connected!
                     self.arduino_connected = True
                     self.arduino_port = port
-                    self.arduino_status_label.setText(f"Status: Connected ({port}) - {firmware_type}")
+                    self.arduino_crc_enabled = crc_enabled  # Store CRC status
+                    
+                    # Update status label to show CRC status
+                    crc_status = " [CRC ON]" if crc_enabled else ""
+                    self.arduino_status_label.setText(f"Status: Connected ({port}) - {firmware_type}{crc_status}")
                     self.arduino_status_label.setStyleSheet("color: green; font-weight: bold;")
                     self.arduino_connect_btn.setText("Disconnect")
-                    logger.info(f"Successfully connected to {firmware_type} Arduino on {port}.")
+                    logger.info(f"Successfully connected to {firmware_type} Arduino on {port} with CRC={'enabled' if crc_enabled else 'disabled'}.")
                 else:
                     arduino.disconnect()
                     self.parent().arduino_controller = None
@@ -318,6 +345,7 @@ class ConnectionDialog(QDialog):
         
         self.arduino_connected = False
         self.arduino_port = None
+        self.arduino_crc_enabled = False
         self.arduino_status_label.setText("Status: Disconnected")
         self.arduino_status_label.setStyleSheet("color: red; font-weight: bold;")
         self.arduino_connect_btn.setText("Connect")
@@ -549,6 +577,7 @@ class ConnectionDialog(QDialog):
         status = {
             'arduino_connected': self.arduino_connected,
             'arduino_port': self.arduino_port,
+            'arduino_crc_enabled': self.arduino_crc_enabled,
             'scale_connected': self.scale_connected,
             'scale_port': self.scale_port
         }
