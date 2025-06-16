@@ -65,13 +65,12 @@ class SensorConfig:
 class SMTArduinoController(ResourceMixin):
     """Specialized Arduino controller for SMT panel testing with Phase 1 fixes"""
 
-    def __init__(self, baud_rate: int = 115200, enable_framing: bool = False, enable_binary: bool = False):
+    def __init__(self, baud_rate: int = 115200, enable_framing: bool = False):
         super().__init__()  # Initialize ResourceMixin
         # Start with CRC disabled - will auto-detect during connection
         self.serial = SerialManager(baud_rate=baud_rate, enable_crc=False, enable_framing=enable_framing)
         self.logger = logging.getLogger(self.__class__.__name__)
         self.framing_enabled = enable_framing
-        self.binary_enabled = enable_binary
 
         # Sensor management
         self.sensors: Dict[str, SensorConfig] = {}
@@ -80,6 +79,7 @@ class SMTArduinoController(ResourceMixin):
 
         # Reading control
         self.is_reading = False
+        self.is_shutting_down = False  # Graceful shutdown flag
         self.reading_thread: Optional[threading.Thread] = None
         self.reading_lock = threading.Lock()
 
@@ -97,22 +97,17 @@ class SMTArduinoController(ResourceMixin):
         
         # Test timing control (PHASE 1)
         self.last_test_end_time = 0
-        self.min_test_interval = 2.0  # Minimum seconds between tests
+        self.min_test_interval = 0.1  # 0.1s minimum between tests (was 0.5s)
         
         
         # Command throttling (PHASE 1.2)
-        self.min_command_interval = 0.05  # 50ms minimum between commands
+        self.min_command_interval = 0.005  # 5ms minimum between commands (was 10ms)
         
         # CRC-16 support (Phase 2.1)
         self.crc_supported = False
         self.crc_enabled = False
         self.firmware_version = None
         
-        # Binary protocol support (Phase 4.4)
-        self.binary_protocol = None
-        self.binary_supported = False
-        if enable_binary:
-            self._initialize_binary_protocol()
 
     def _detect_crc_capability(self) -> bool:
         """Detect if Arduino firmware supports CRC-16 validation (Phase 2.1)"""
@@ -123,14 +118,12 @@ class SMTArduinoController(ResourceMixin):
                 self.firmware_version = response
                 # Check if version indicates CRC support
                 if "CRC16_SUPPORT" in response or "5.1.0" in response:
-                    self.crc_supported = True
-                    self.logger.info(f"Arduino firmware supports CRC-16: {response}")
-                    
-                    # Test CRC functionality with a simple command
-                    test_response = self.serial.query("CRC:STATUS", response_timeout=2.0)
-                    if test_response and "CRC_ENABLED" in test_response:
-                        self.logger.info("CRC-16 functionality verified")
-                        return True
+                    # Arduino claims CRC support but doesn't actually append CRC to responses
+                    # Disable CRC support until Arduino firmware is fixed
+                    self.crc_supported = False
+                    self.logger.warning(f"Arduino firmware claims CRC-16 support but implementation is incomplete: {response}")
+                    self.logger.warning("CRC validation disabled - Arduino firmware does not append CRC to responses")
+                    return False
                 else:
                     self.crc_supported = False
                     self.logger.info(f"Arduino firmware does not support CRC-16: {response}")
@@ -229,33 +222,120 @@ class SMTArduinoController(ResourceMixin):
         return self.crc_enabled
 
     def connect(self, port: str) -> bool:
-        """Connect to Arduino on specified port with enhanced recovery"""
+        """Connect to Arduino on specified port with enhanced recovery and protocol verification"""
         if self.serial.connect(port):
             # PHASE 1: Clear buffers immediately
             self.serial.flush_buffers()
             time.sleep(0.1)  # Small delay for Arduino to stabilize
             
-            # Test communication
+            # Test basic communication
             if self.test_communication():
                 self.logger.info(f"SMT Arduino connected successfully on {port}")
                 self.consecutive_errors = 0
+                
+                # Phase 4: Establish communication protocols
+                self._establish_communication_protocols()
+                
                 return True
             else:
                 self.logger.error("Arduino connected but communication test failed")
                 self.serial.disconnect()
                 return False
         return False
+    
+    def _establish_communication_protocols(self):
+        """Phase 4: Establish and verify communication protocols with Arduino"""
+        try:
+            self.logger.info("Establishing communication protocols with Arduino...")
+            
+            # 1. Query firmware capabilities
+            response = self.send_command("VERSION", timeout=3.0)
+            if response:
+                self.firmware_version = response
+                self.logger.info(f"Arduino firmware: {response}")
+                
+                # Check for required features - no backward compatibility
+                required_capabilities = []
+                optional_capabilities = []
+                
+                if "CRC16_SUPPORT" in response or "5.1.0" in response or "5.2.0" in response or "5.3.0" in response or "5.4.0" in response:
+                    optional_capabilities.append("CRC-16")
+                if "FRAMING_SUPPORT" in response or "5.2.0" in response or "5.3.0" in response or "5.4.0" in response:
+                    optional_capabilities.append("Binary Framing")
+                if "BINARY_PROTOCOL" in response or "5.3.0" in response or "5.4.0" in response:
+                    optional_capabilities.append("Binary Protocol")
+                if "CONFIG_SUPPORT" in response or "5.4.0" in response:
+                    required_capabilities.append("Timing Configuration")
+                
+                if required_capabilities:
+                    self.logger.info(f"Arduino required capabilities: {', '.join(required_capabilities)}")
+                if optional_capabilities:
+                    self.logger.info(f"Arduino optional capabilities: {', '.join(optional_capabilities)}")
+                
+                # Verify minimum firmware version
+                # Extract version number from response like "VERSION:5.4.1:..."
+                version_parts = response.split(':')
+                if len(version_parts) > 1:
+                    version_str = version_parts[1]  # Get "5.4.1"
+                    try:
+                        # Parse major.minor.patch
+                        version_nums = version_str.split('.')
+                        major = int(version_nums[0])
+                        minor = int(version_nums[1]) if len(version_nums) > 1 else 0
+                        
+                        # Check if version is 5.1 or higher
+                        if major < 5 or (major == 5 and minor < 1):
+                            self.logger.error(f"Arduino firmware {version_str} is too old - requires version 5.1.0 or higher")
+                            raise Exception("Incompatible Arduino firmware version")
+                        else:
+                            self.logger.info(f"Arduino firmware version {version_str} is compatible")
+                    except (ValueError, IndexError):
+                        self.logger.warning(f"Could not parse firmware version from: {response}")
+                else:
+                    self.logger.warning("Could not determine Arduino firmware version")
+            
+            # 2. Test basic relay control
+            relay_test = self.send_command("RELAY:1:OFF", timeout=2.0)
+            if relay_test and ("OK" in relay_test or "RELAY" in relay_test):
+                self.logger.debug("Relay control verified")
+            else:
+                self.logger.warning(f"Relay control test failed: {relay_test}")
+            
+            # 3. Test measurement capability
+            status_response = self.send_command("STATUS", timeout=2.0)
+            if status_response and "RELAYS:" in status_response:
+                self.logger.debug("Status reporting verified")
+            else:
+                self.logger.warning(f"Status reporting test failed: {status_response}")
+            
+            # 4. Test configuration support (Phase 4) - REQUIRED
+            config_test = self.send_command("CONFIG:STATUS", timeout=2.0)
+            if config_test and ("CONFIG:" in config_test or "OK:" in config_test):
+                self.logger.info("Arduino supports timing configuration")
+            else:
+                self.logger.error("Arduino firmware does not support timing configuration")
+                self.logger.error("Please update Arduino firmware to version 5.4.0 or higher")
+                raise Exception("Incompatible Arduino firmware - timing configuration not supported")
+            
+            # 5. Enable CRC if supported (Phase 2.1)
+            if self.crc_supported:
+                self.enable_crc_validation(True)
+            
+            self.logger.info("Communication protocols established successfully")
+            
+        except Exception as e:
+            self.logger.error(f"Error establishing communication protocols: {e}")
+            # Don't fail connection for protocol setup errors
 
     def disconnect(self):
         """Disconnect from Arduino with proper cleanup"""
         self.stop_reading()
         
-        # PHASE 1: Turn off all relays individually before disconnecting
+        # PHASE 1: Turn off all relays using batch command before disconnecting
         if self.is_connected():
             try:
-                for relay in range(1, 9):  # Turn off relays 1-8
-                    self.send_command(f"RELAY:{relay}:OFF", timeout=0.5)
-                time.sleep(0.1)
+                self.send_command("RELAY:ALL:OFF", timeout=0.05)
+                time.sleep(0.05)
             except:
                 pass
         
@@ -355,24 +435,39 @@ class SMTArduinoController(ResourceMixin):
         self.logger.info("Started SMT reading loop for button events")
 
     def stop_reading(self):
-        """Stop reading loop"""
+        """Stop reading loop with graceful shutdown"""
         if not self.is_reading:
             return
 
+        # Set shutdown flag to prevent new commands
+        self.is_shutting_down = True
         self.is_reading = False
+
+        # Wait for command queue to empty (process pending commands)
+        timeout = time.time() + 2.0  # 2 second timeout
+        while not self.command_queue.empty() and time.time() < timeout:
+            time.sleep(0.05)  # Small delay to allow queue processing
+        
+        if not self.command_queue.empty():
+            self.logger.warning(f"Command queue still has {self.command_queue.qsize()} items after timeout")
+            # Clear remaining commands
+            while not self.command_queue.empty():
+                try:
+                    self.command_queue.get_nowait()
+                except Empty:
+                    break
 
         # Wait for reading thread to finish
         if self.reading_thread and self.reading_thread.is_alive():
-            self.reading_thread.join(timeout=2.0)  # Reduced timeout for faster response
+            self.reading_thread.join(timeout=2.0)
             if self.reading_thread.is_alive():
                 self.logger.warning("Reading thread did not terminate gracefully")
         
-        # Clear command queue
-        while not self.command_queue.empty():
-            try:
-                self.command_queue.get_nowait()
-            except Empty:
-                break
+        # Add small delay to ensure last command completes
+        time.sleep(0.1)
+        
+        # Reset shutdown flag
+        self.is_shutting_down = False
 
         self.logger.info("Stopped SMT reading loop")
 
@@ -484,6 +579,12 @@ class SMTArduinoController(ResourceMixin):
             return resp.startswith("OK:RELAY") or resp.startswith("ERROR:RELAY") or resp.startswith("ERR:")
         elif cmd == "RESET":
             return resp.startswith("OK:RESET") or resp == "RESET"
+        elif cmd == "RELAY:ALL:OFF":
+            return resp.startswith("OK:ALL_RELAYS_OFF") or resp.startswith("OK:RELAY_ALL:OFF")
+        elif cmd == "RELAY:ALL:ON":
+            return resp.startswith("OK:ALL_RELAYS_ON")
+        elif cmd.startswith("RELAY:GROUP:"):
+            return resp.startswith("OK:GROUP_") or resp.startswith("ERR:")
         elif cmd == "SENSOR_CHECK":
             return resp.startswith("OK:SENSOR") or resp.startswith("WARNING:SENSOR")
         elif cmd == "CRC:ENABLE":
@@ -496,6 +597,12 @@ class SMTArduinoController(ResourceMixin):
             return "VERSION:" in resp
         elif cmd.startswith("MEASURE:"):
             return resp.startswith("MEASUREMENT:") or resp.startswith("ERR:")
+        elif cmd.startswith("CONFIG:"):
+            # Configuration commands (Phase 4)
+            if cmd == "CONFIG:STATUS":
+                return resp.startswith("CONFIG:") or resp.startswith("OK:CONFIG") or resp.startswith("ERROR:")
+            else:
+                return resp.startswith("OK:CONFIG") or resp.startswith("ERROR:CONFIG") or resp.startswith("OK:") or resp.startswith("ERROR:")
         else:
             # Generic OK/ERROR responses
             return resp.startswith("OK:") or resp.startswith("ERROR:") or resp.startswith("ERR:")
@@ -539,6 +646,11 @@ class SMTArduinoController(ResourceMixin):
 
     def send_command(self, command: str, timeout: float = 2.0) -> Optional[str]:
         """Send command with PHASE 1 improvements including throttling"""
+        # Check if we're shutting down
+        if self.is_shutting_down:
+            self.logger.debug(f"Ignoring command during shutdown: {command}")
+            return None
+            
         # Apply command throttling
         self._throttle_command()
         
@@ -566,35 +678,38 @@ class SMTArduinoController(ResourceMixin):
             # Normal query when reading loop is not active
             return self.serial.query(command, response_timeout=timeout)
 
-    def measure_relays(self, relay_list: List[int], timeout: float = 2.0) -> Dict[int, Dict[str, float]]:
+    def measure_relays(self, relay_list: List[int], timeout: float = 0.1) -> Dict[int, Dict[str, float]]:
         """
-        Measure multiple relays using individual commands.
+        Measure multiple relays using individual commands - OPTIMIZED VERSION.
         Returns dict of relay_number -> measurement results.
         
-        This replaces the complex MEASURE_GROUP approach with simple, reliable individual measurements.
-        Phase 1.1 implementation - eliminates buffer overflow risks.
+        Optimized for ~250ms per relay cycle with minimal delays.
         """
         results = {}
         
-        for relay in relay_list:
+        # Turn off all relays at once using batch command
+        self.send_command("RELAY:ALL:OFF", timeout=0.05)
+        # No stabilization delay needed
+        
+        for i, relay in enumerate(relay_list):
             try:
-                # Turn off all relays first (using individual commands)
-                for r in range(1, 9):  # Turn off relays 1-8
-                    self.send_command(f"RELAY:{r}:OFF", timeout=0.5)
-                time.sleep(0.05)  # Small delay for relay settling
+                # Only turn off previous relay if not first
+                if i > 0:
+                    prev_relay = relay_list[i-1]
+                    self.send_command(f"RELAY:{prev_relay}:OFF", timeout=0.05)
                 
                 # Turn on specific relay
                 relay_cmd = f"RELAY:{relay}:ON"
-                relay_response = self.send_command(relay_cmd, timeout=1.0)
+                relay_response = self.send_command(relay_cmd, timeout=0.1)
                 if not relay_response or "ERROR" in relay_response:
                     self.logger.error(f"Failed to turn on relay {relay}")
                     results[relay] = None
                     continue
                 
-                # Small delay for relay to stabilize
-                time.sleep(0.1)
+                # Minimal settle time
+                time.sleep(0.005)  # 5ms relay settle time
                 
-                # Send simple MEASURE command
+                # Send simple MEASURE command with reduced timeout
                 command = f"MEASURE:{relay}"
                 response = self.send_command(command, timeout=timeout)
                 
@@ -636,20 +751,16 @@ class SMTArduinoController(ResourceMixin):
                     self.logger.error(f"Measurement failed for relay {relay}: {response}")
                     results[relay] = None
                 
-                # Turn off relay after measurement
-                self.send_command(f"RELAY:{relay}:OFF", timeout=1.0)
-                
             except Exception as e:
                 self.logger.error(f"Error measuring relay {relay}: {e}")
                 results[relay] = None
             
-            # Small delay between measurements (Arduino needs time to settle)
-            if relay != relay_list[-1]:  # Don't delay after last relay
-                time.sleep(0.05)
+            # Minimal delay between measurements
+            # No delay between relays - go as fast as possible
         
-        # Ensure all relays are off after measurements (using individual commands)
-        for relay in range(1, 9):  # Turn off relays 1-8
-            self.send_command(f"RELAY:{relay}:OFF", timeout=0.5)
+        # Turn off last relay (or could use RELAY:ALL:OFF)
+        if relay_list:
+            self.send_command(f"RELAY:{relay_list[-1]}:OFF", timeout=0.05)
         
         return results
 
@@ -669,9 +780,8 @@ class SMTArduinoController(ResourceMixin):
     def mark_test_complete(self):
         """PHASE 1: Mark test as complete for cooldown tracking"""
         self.last_test_end_time = time.time()
-        # Always turn off relays after test (using individual commands)
-        for relay in range(1, 9):  # Turn off relays 1-8
-            self.send_command(f"RELAY:{relay}:OFF", timeout=0.5)
+        # Turn off all relays quickly using batch command
+        self.send_command("RELAY:ALL:OFF", timeout=0.05)
 
     def recover_communication(self) -> bool:
         """PHASE 1: Attempt to recover communication with Arduino"""
@@ -764,6 +874,79 @@ class SMTArduinoController(ResourceMixin):
         stats['controller_framing_enabled'] = self.framing_enabled
         return stats
     
+    def apply_timing_config(self, timing: Dict[str, Any]) -> bool:
+        """Apply timing configuration from SKU (Phase 4)"""
+        try:
+            self.logger.info(f"Applying timing configuration: {timing}")
+            
+            # Apply command interval if specified
+            if 'command_interval_ms' in timing:
+                new_interval = timing['command_interval_ms'] / 1000.0
+                old_interval = self.min_command_interval
+                self.min_command_interval = new_interval
+                self.logger.info(f"Command interval: {old_interval*1000:.0f}ms -> {new_interval*1000:.0f}ms")
+            
+            # Apply test cooldown if specified
+            if 'test_cooldown_s' in timing:
+                old_cooldown = self.min_test_interval
+                self.min_test_interval = timing['test_cooldown_s']
+                self.logger.info(f"Test cooldown: {old_cooldown:.1f}s -> {self.min_test_interval:.1f}s")
+            
+            # Send timing configuration to Arduino if connected
+            if self.is_connected():
+                success = self._configure_arduino_timing(timing)
+                if success:
+                    self.logger.info("Arduino timing configuration applied successfully")
+                    return True
+                else:
+                    self.logger.error("Failed to apply timing configuration to Arduino")
+                    return False
+            else:
+                self.logger.error("Arduino not connected - cannot apply timing configuration")
+                return False
+                
+        except Exception as e:
+            self.logger.error(f"Error applying timing configuration: {e}")
+            return False
+    
+    def _configure_arduino_timing(self, timing: Dict[str, Any]) -> bool:
+        """Send timing configuration to Arduino"""
+        try:
+            # Configure power stabilization time
+            if 'power_stabilization_s' in timing:
+                stabilization_ms = int(timing['power_stabilization_s'] * 1000)
+                response = self.send_command(f"CONFIG:STABILIZATION:{stabilization_ms}", timeout=2.0)
+                if not response or "ERROR" in response:
+                    self.logger.warning(f"Failed to set Arduino stabilization time: {response}")
+            
+            # Configure measurement duration if available
+            if 'default_test_duration_s' in timing:
+                duration_ms = int(timing['default_test_duration_s'] * 1000)
+                response = self.send_command(f"CONFIG:DURATION:{duration_ms}", timeout=2.0)
+                if not response or "ERROR" in response:
+                    self.logger.warning(f"Failed to set Arduino test duration: {response}")
+            
+            # Configure command throttling on Arduino side
+            if 'command_interval_ms' in timing:
+                interval_ms = int(timing['command_interval_ms'])
+                response = self.send_command(f"CONFIG:THROTTLE:{interval_ms}", timeout=2.0)
+                if not response or "ERROR" in response:
+                    self.logger.warning(f"Failed to set Arduino command throttling: {response}")
+            
+            # Verify configuration was applied
+            response = self.send_command("CONFIG:STATUS", timeout=2.0)
+            if response and "CONFIG:" in response:
+                self.logger.debug(f"Arduino timing configuration status: {response}")
+                return True
+            else:
+                self.logger.error("Arduino firmware does not support timing configuration commands")
+                self.logger.error("Please update Arduino firmware to version 5.4.0 or higher")
+                return False
+                
+        except Exception as e:
+            self.logger.error(f"Error configuring Arduino timing: {e}")
+            return False
+
     def get_health_status(self) -> Dict[str, Any]:
         """PHASE 1: Get health status of the controller"""
         return {
@@ -772,220 +955,13 @@ class SMTArduinoController(ResourceMixin):
             "consecutive_errors": self.consecutive_errors,
             "command_queue_depth": self.command_queue.qsize(),
             "time_since_last_command": time.time() - self.last_command_time if self.last_command_time > 0 else None,
-            "time_since_last_test": time.time() - self.last_test_end_time if self.last_test_end_time > 0 else None
+            "time_since_last_test": time.time() - self.last_test_end_time if self.last_test_end_time > 0 else None,
+            "current_timing": {
+                "command_interval_ms": self.min_command_interval * 1000,
+                "test_cooldown_s": self.min_test_interval
+            }
         }
 
-    # Binary protocol methods (Phase 4.4)
-    
-    def _initialize_binary_protocol(self):
-        """Initialize binary protocol support"""
-        try:
-            from src.protocols.binary_protocol import BinaryProtocol, BinaryProtocolConfig
-            from src.protocols.base_protocol import DeviceType
-            
-            config = BinaryProtocolConfig()
-            config.enable_compression = False  # Disabled for Arduino compatibility
-            config.max_retries = 3
-            config.response_timeout = 5.0
-            
-            self.binary_protocol = BinaryProtocol(
-                device_type=DeviceType.SMT_TESTER,
-                device_id="SMT_Arduino",
-                serial_manager=self.serial,
-                config=config
-            )
-            
-            self.logger.info("Binary protocol initialized")
-            
-        except ImportError as e:
-            self.logger.error(f"Failed to import binary protocol: {e}")
-            self.binary_enabled = False
-        except Exception as e:
-            self.logger.error(f"Failed to initialize binary protocol: {e}")
-            self.binary_enabled = False
-
-    async def connect_binary(self, port: str) -> bool:
-        """Connect using binary protocol"""
-        if not self.binary_enabled or not self.binary_protocol:
-            self.logger.error("Binary protocol not enabled or initialized")
-            return False
-        
-        try:
-            connection_params = {
-                'port': port,
-                'baud_rate': self.serial.baud_rate
-            }
-            
-            success = await self.binary_protocol.connect(connection_params)
-            if success:
-                self.binary_supported = True
-                self.logger.info(f"Connected to {port} using binary protocol")
-                return True
-            else:
-                self.logger.error("Binary protocol connection failed")
-                return False
-                
-        except Exception as e:
-            self.logger.error(f"Binary protocol connection error: {e}")
-            return False
-
-    async def measure_relays_binary(self, relay_list: List[int], timeout: float = 2.0) -> Dict[int, Dict[str, float]]:
-        """
-        Measure multiple relays using binary protocol.
-        More efficient than text-based commands.
-        """
-        if not self.binary_supported or not self.binary_protocol:
-            self.logger.error("Binary protocol not supported or initialized")
-            return {}
-        
-        results = {}
-        
-        try:
-            from src.protocols.base_protocol import CommandRequest, CommandType, TestType
-            
-            for relay in relay_list:
-                try:
-                    # Create measurement request
-                    request = CommandRequest(
-                        command_type=CommandType.MEASURE,
-                        device_id="SMT_Arduino",
-                        parameters={
-                            'relay_id': relay,
-                            'test_type': 'voltage_current'
-                        },
-                        timeout_seconds=timeout
-                    )
-                    
-                    # Send command using binary protocol
-                    response = await self.binary_protocol.send_command(request)
-                    
-                    if response.success and response.data:
-                        measurements = {
-                            'voltage': response.data.get('voltage', 0.0),
-                            'current': response.data.get('current', 0.0),
-                            'power': response.data.get('voltage', 0.0) * response.data.get('current', 0.0)
-                        }
-                        results[relay] = measurements
-                        self.logger.debug(f"Binary measurement relay {relay}: V={measurements['voltage']:.3f}, I={measurements['current']:.3f}")
-                    else:
-                        self.logger.error(f"Binary measurement failed for relay {relay}: {response.error}")
-                        results[relay] = None
-                
-                except Exception as e:
-                    self.logger.error(f"Error in binary measurement for relay {relay}: {e}")
-                    results[relay] = None
-                
-                # Small delay between measurements
-                if relay != relay_list[-1]:
-                    await asyncio.sleep(0.05)
-            
-            return results
-            
-        except Exception as e:
-            self.logger.error(f"Binary measurement error: {e}")
-            return {}
-
-    async def measure_group_binary(self, relay_list: List[int], timeout: float = 5.0) -> Dict[int, Dict[str, float]]:
-        """
-        Measure multiple relays as a group using binary protocol.
-        More efficient for multiple measurements.
-        """
-        if not self.binary_supported or not self.binary_protocol:
-            self.logger.error("Binary protocol not supported or initialized")
-            return {}
-        
-        try:
-            from src.protocols.base_protocol import CommandRequest, CommandType
-            
-            # Create group measurement request
-            request = CommandRequest(
-                command_type=CommandType.MEASURE_GROUP,
-                device_id="SMT_Arduino",
-                parameters={
-                    'relay_ids': relay_list,
-                    'test_type': 'voltage_current'
-                },
-                timeout_seconds=timeout
-            )
-            
-            # Send group command using binary protocol
-            response = await self.binary_protocol.send_command(request)
-            
-            results = {}
-            
-            if response.success and response.data and 'measurements' in response.data:
-                for measurement in response.data['measurements']:
-                    relay_id = measurement.get('relay_id')
-                    if relay_id is not None:
-                        results[relay_id] = {
-                            'voltage': measurement.get('voltage', 0.0),
-                            'current': measurement.get('current', 0.0),
-                            'power': measurement.get('voltage', 0.0) * measurement.get('current', 0.0)
-                        }
-                        
-                self.logger.debug(f"Binary group measurement completed for {len(results)} relays")
-            else:
-                self.logger.error(f"Binary group measurement failed: {response.error}")
-            
-            return results
-            
-        except Exception as e:
-            self.logger.error(f"Binary group measurement error: {e}")
-            return {}
-
-    def enable_binary_protocol(self, enabled: bool = True) -> bool:
-        """Enable or disable binary protocol"""
-        if enabled and not self.binary_protocol:
-            self._initialize_binary_protocol()
-        
-        self.binary_enabled = enabled
-        self.logger.info(f"Binary protocol {'enabled' if enabled else 'disabled'}")
-        return self.binary_enabled
-
-    def test_binary_protocol(self) -> bool:
-        """Test binary protocol connectivity"""
-        if not self.binary_supported or not self.binary_protocol:
-            return False
-        
-        try:
-            # Run async test in sync context
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            
-            try:
-                from src.protocols.base_protocol import CommandRequest, CommandType
-                
-                request = CommandRequest(
-                    command_type=CommandType.PING,
-                    device_id="SMT_Arduino",
-                    timeout_seconds=2.0
-                )
-                
-                response = loop.run_until_complete(self.binary_protocol.send_command(request))
-                
-                if response.success:
-                    self.logger.info("Binary protocol test successful")
-                    return True
-                else:
-                    self.logger.error(f"Binary protocol test failed: {response.error}")
-                    return False
-                    
-            finally:
-                loop.close()
-                
-        except Exception as e:
-            self.logger.error(f"Binary protocol test error: {e}")
-            return False
-
-    def get_binary_statistics(self) -> Dict[str, Any]:
-        """Get binary protocol statistics"""
-        if not self.binary_protocol:
-            return {'binary_enabled': False}
-        
-        stats = self.binary_protocol.get_statistics()
-        stats['binary_enabled'] = self.binary_enabled
-        stats['binary_supported'] = self.binary_supported
-        return stats
 
     def get_firmware_type(self) -> str:
         """Get the firmware type of connected Arduino"""

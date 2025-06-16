@@ -130,7 +130,8 @@ python -m serial.tools.list_ports
 - **Arduino UNO R4 WiFi**: 32KB SRAM, 256KB Flash
 - **Serial Buffer**: 512 bytes (Arduino default)
 - **Baud Rate**: 115200 (current standard)
-- **No backward compatibility required** - clean implementation
+- **Firmware Requirements**: Arduino firmware 5.1.0+ with timing configuration support
+- **No backward compatibility** - requires modern Arduino firmware with CONFIG commands
 - **GUI callbacks must use Qt signals** - no direct GUI updates from threads
 - **Maximum relay count**: 16 for SMT boards
 

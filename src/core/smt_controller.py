@@ -85,6 +85,5 @@ class SMTController:
         return mapping.get('board') if mapping else None
     
     def all_lights_off(self):
-        """Turn off all relays (using individual commands)"""
-        for relay in range(1, 9):  # Turn off relays 1-8
-            self.arduino.send_command(f"RELAY:{relay}:OFF")
+        """Turn off all relays using batch command"""
+        self.arduino.send_command("RELAY:ALL:OFF", timeout=0.05)

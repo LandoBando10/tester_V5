@@ -54,9 +54,9 @@ SENSOR_TIMINGS = {
         'color_interval_ms': 50
     },
     'smt_testing': {
-        'current_interval_ms': 25,      # Fast for SMT current monitoring
-        'voltage_interval_ms': 25,
-        'backlight_interval_ms': 100    # Slower for backlight testing
+        'current_interval_ms': 10,      # was 25
+        'voltage_interval_ms': 10,      # was 25
+        'backlight_interval_ms': 50     # was 100
     }
 }
 
@@ -112,7 +112,7 @@ TEST_SETTINGS = {
     'default_test_timeout': TIMEOUTS['default_test'],  # seconds
     'result_display_time': 3,    # seconds to show pass/fail result
     'log_all_measurements': True,
-    'sensor_stabilization_time': 2.0,  # seconds to wait after hardware setup
+    'sensor_stabilization_time': 1.0,  # seconds to wait after hardware setup
     'measurement_averaging_time': 1.0   # seconds to average sensor readings
 }
 

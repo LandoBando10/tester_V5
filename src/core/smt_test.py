@@ -1,7 +1,6 @@
 import time
 import json
 import logging
-import subprocess
 import threading
 from typing import Dict, Any, List, Optional, Tuple
 from pathlib import Path
@@ -9,10 +8,6 @@ from src.core.base_test import BaseTest, TestResult
 from src.core.programmer_controller import ProgrammerController
 from src.core.smt_controller import SMTController
 from src.hardware.smt_arduino_controller import SMTArduinoController, SMTSensorConfigurations
-from config.settings import SENSOR_TIMINGS, TEST_SENSOR_CONFIGS
-
-
-# Note: SMTArduinoController is now imported from smt_arduino_controller.py
 
 class SMTTest(BaseTest):
     """SMT panel testing with programming and power validation using dedicated SMT Arduino"""
@@ -110,8 +105,6 @@ class SMTTest(BaseTest):
             else:
                 self.logger.info("Sensors already configured, skipping")
 
-            # REMOVED: 2-second sleep for sensor stabilization
-            # The sensors should be ready immediately or after minimal delay
 
             # Get SMT configuration
             self.update_progress("Initializing SMT controller...", 30)
@@ -134,6 +127,18 @@ class SMTTest(BaseTest):
                 self.logger.error("Failed to initialize SMT controller")
                 return False
 
+            # Apply timing configuration from SKU (Phase 4) - REQUIRED
+            timing_config = smt_config.get("timing", {})
+            if timing_config:
+                self.update_progress("Applying timing configuration...", 35)
+                if not self.arduino.apply_timing_config(timing_config):
+                    self.logger.error("Failed to apply SKU timing configuration")
+                    return False
+                self.logger.info("SKU timing configuration applied successfully")
+            else:
+                self.logger.error("No timing configuration in SKU - this is required")
+                return False
+
             self.update_progress("Ready to test", 40)
             return True
 
@@ -142,85 +147,70 @@ class SMTTest(BaseTest):
             return False
 
     def run_test_sequence(self) -> TestResult:
-        """Execute SMT test sequence with programming and power validation"""
+        """Execute test sequence from configuration only"""
         try:
-            # Define test phases
             self.test_phases = []
-
-            # Add programming phase if enabled
+            
+            # Programming phase if enabled
             if self.programming_enabled and self.programmers:
                 self.test_phases.append({
                     "name": "Programming",
                     "duration": 30.0,
                     "action": "program_boards"
                 })
-
-            # Add power validation phases from configuration
-            smt_config = self.parameters
-            test_sequence = smt_config.get("test_sequence", [])
-
-            self.test_phases.extend([
-                {
-                    "name": "Power Stabilization",
-                    "duration": 2.0,
-                    "action": "stabilize_power"
-                },
-                {
-                    "name": "Mainbeam Power Test",
-                    "duration": 5.0,
-                    "action": "test_mainbeam_power"
-                },
-                {
-                    "name": "Backlight Power Test",
-                    "duration": 3.0,
-                    "action": "test_backlight_power"
-                }
-            ])
-
-            # Execute each phase
+            
+            # Power stabilization
+            timing = self.parameters.get("timing", {})
+            self.test_phases.append({
+                "name": "Power Stabilization",
+                "duration": timing.get("power_stabilization_s", 0.5),
+                "action": "stabilize_power"
+            })
+            
+            # Read test sequence from configuration
+            test_sequence = self.parameters.get("test_sequence", [])
+            if not test_sequence:
+                raise ValueError("No test_sequence defined in SKU configuration")
+            
+            # Create test phases from configuration
+            for test_config in test_sequence:
+                self.test_phases.append({
+                    "name": test_config["name"],
+                    "duration": test_config.get("duration", timing.get("default_test_duration_s", 2.0)),
+                    "action": "test_function",
+                    "function": test_config["function"],
+                    "limits": test_config["limits"]
+                })
+            
+            # Execute all phases
             for phase_idx, phase in enumerate(self.test_phases):
-                self.current_phase = phase_idx
+                base_progress = 45 + (phase_idx * 40 // len(self.test_phases))
                 success = self._execute_phase(phase, phase_idx)
                 if not success:
-                    self.result.failures.append(f"Phase '{phase['name']}' failed")
-                    # Continue with remaining phases for diagnostic info
-
-            # Analyze results
+                    self.result.failures.append(f"Failed: {phase['name']}")
+            
             self._analyze_results()
-
             return self.result
-
+            
         except Exception as e:
             self.logger.error(f"Test sequence error: {e}")
-            self.result.failures.append(f"Test sequence error: {str(e)}")
+            self.result.failures.append(str(e))
             return self.result
 
     def _execute_phase(self, phase: Dict[str, Any], phase_idx: int) -> bool:
         """Execute a single test phase"""
-        try:
-            phase_name = phase["name"]
-            duration = phase["duration"]
-            action = phase["action"]
-
-            # Calculate progress
-            base_progress = 45 + (phase_idx * 40 // len(self.test_phases))
-            self.update_progress(f"Executing {phase_name}...", base_progress)
-
-            # Execute phase action
-            if action == "program_boards":
-                return self._execute_programming_phase(duration, base_progress)
-            elif action == "stabilize_power":
-                return self._execute_power_stabilization(duration, base_progress)
-            elif action == "test_mainbeam_power":
-                return self._execute_mainbeam_power_test(duration, base_progress)
-            elif action == "test_backlight_power":
-                return self._execute_backlight_power_test(duration, base_progress)
-            else:
-                self.logger.warning(f"Unknown phase action: {action}")
-                return True
-
-        except Exception as e:
-            self.logger.error(f"Phase execution error: {e}")
+        action = phase["action"]
+        base_progress = 45 + (phase_idx * 40 // len(self.test_phases))
+        
+        if action == "program_boards":
+            return self._execute_programming_phase(phase["duration"], base_progress)
+        elif action == "stabilize_power":
+            time.sleep(phase["duration"])
+            return True
+        elif action == "test_function":
+            return self._execute_function_test(phase, base_progress)
+        else:
+            self.logger.error(f"Unknown action: {action}")
             return False
 
     def _execute_programming_phase(self, duration: float, base_progress: int) -> bool:
@@ -364,18 +354,6 @@ class SMTTest(BaseTest):
             self.logger.error(f"Programming phase error: {e}")
             return False
 
-    def _execute_power_stabilization(self, duration: float, base_progress: int) -> bool:
-        """Wait for power supplies to stabilize"""
-        try:
-            # Skip power stabilization delay - power should already be stable
-            self.logger.info("Power supplies ready")
-            self.update_progress("Power stabilized", base_progress + 25)
-            return True
-
-        except Exception as e:
-            self.logger.error(f"Power stabilization error: {e}")
-            return False
-
     # --- new helper ----------------------------------------------------
     def _measure_group(self, relays: str, timeout: float = 15.0) -> Dict[str, Dict]:
         """
@@ -398,8 +376,8 @@ class SMTTest(BaseTest):
         # Use new measure_relays method with individual commands
         self.logger.info(f"Measuring relays using individual commands: {relay_list}")
         
-        # Get measurements
-        measurement_results = self.arduino.measure_relays(relay_list, timeout=2.0)
+        # Get measurements with optimized timeout
+        measurement_results = self.arduino.measure_relays(relay_list, timeout=0.5)
         
         if not measurement_results:
             self.logger.error("No measurements received")
@@ -441,182 +419,115 @@ class SMTTest(BaseTest):
         
         return board_results
 
-    def _execute_mainbeam_power_test(self, duration: float, base_progress: int) -> bool:
+    def _execute_function_test(self, phase: Dict[str, Any], base_progress: int) -> bool:
+        """Execute test for any function based on configuration"""
         try:
-            self.update_progress("Measuring mainbeam current on all boards...", base_progress)
+            function_name = phase["function"]
+            limits = phase["limits"]
             
-            # Get mainbeam relays from mapping
-            mainbeam_relays = self.smt_controller.get_relays_for_function("mainbeam")
-            if not mainbeam_relays:
-                self.logger.error("No mainbeam relays found in configuration")
-                return False
-                
-            relay_str = ",".join(map(str, mainbeam_relays))
-            board_results = self._measure_group(relay_str)
+            self.update_progress(f"Testing {function_name}...", base_progress)
             
-            currents = [d["current"] for d in board_results.values()]
-            self.result.measurements["mainbeam_current_readings"] = {
-                "board_results": board_results,
-                "values": currents,
-                "average": sum(currents) / len(currents) if currents else 0
-            }
-            return True
-        except Exception as e:
-            self.logger.error(f"Mainbeam power test error: {e}")
-            return False
-
-    def _execute_backlight_power_test(self, duration: float, base_progress: int) -> bool:
-        try:
-            self.update_progress("Measuring backlight current on all boards...", base_progress)
-            
-            # Get all backlight relays (any function containing "backlight")
-            backlight_relays = []
-            for relay_str, mapping in self.relay_mapping.items():
-                if mapping and "backlight" in mapping.get("function", ""):
-                    backlight_relays.append(int(relay_str))
-            
-            if not backlight_relays:
-                self.logger.info("No backlight relays found - skipping backlight test")
+            # Get relays for this function from configuration
+            function_relays = self.smt_controller.get_relays_for_function(function_name)
+            if not function_relays:
+                self.logger.info(f"No relays configured for {function_name}")
                 return True
-                
-            backlight_relays.sort()
-            relay_str = ",".join(map(str, backlight_relays))
+            
+            # Measure all relays
+            relay_str = ",".join(map(str, function_relays))
             board_results = self._measure_group(relay_str)
             
-            currents = [d["current"] for d in board_results.values()]
-            self.result.measurements["backlight_current_readings"] = {
+            # Simply store the board results and limits for analysis
+            # No averaging needed - pass/fail is determined per board
+            self.result.measurements[f"{function_name}_readings"] = {
                 "board_results": board_results,
-                "values": currents,
-                "average": sum(currents) / len(currents) if currents else 0
+                "limits": limits
             }
+            
             return True
+            
         except Exception as e:
-            self.logger.error(f"Backlight power test error: {e}")
+            self.logger.error(f"Error testing {function_name}: {e}")
             return False
-
-    def _has_backlight_support(self) -> bool:
-        """Check if current SKU supports backlight testing"""
-        # This would check the SKU configuration
-        # For now, assume all SKUs support backlight
-        return True
 
     def _analyze_results(self):
-        """Analyze collected data and generate test results"""
+        """Analyze results based on configuration limits"""
         try:
             self.update_progress("Analyzing results...", 85)
-
-            # The parameters ARE the smt_testing configuration
-            smt_config = self.parameters
-            test_sequence = smt_config.get("test_sequence", [])
             
-            # Extract limits from test sequence
-            mainbeam_limits = {}
-            backlight_limits = {}
+            # Create a list of keys to avoid dictionary modification during iteration
+            measurement_keys = list(self.result.measurements.keys())
             
-            for test in test_sequence:
-                if test.get("function") == "mainbeam":
-                    mainbeam_limits = test.get("limits", {})
-                elif "backlight" in test.get("function", ""):
-                    backlight_limits = test.get("limits", {})
+            # Analyze each function's results
+            for function_name in measurement_keys:
+                if not function_name.endswith("_readings"):
+                    continue
+                    
+                data = self.result.measurements.get(function_name)
+                if not data:
+                    continue
+                    
+                function = function_name.replace("_readings", "")
+                board_results = data.get("board_results", {})
+                limits = data.get("limits", {})
+                
+                # Check each board against limits (pass/fail per board)
+                for board_name, measurements in board_results.items():
+                    self._check_limits(board_name, function, measurements, limits)
             
-            # Get current limits or use defaults
-            min_mainbeam_current = mainbeam_limits.get("current_A", {}).get("min", 0.5)
-            max_mainbeam_current = mainbeam_limits.get("current_A", {}).get("max", 2.0)
-            min_backlight_current = backlight_limits.get("current_A", {}).get("min", 0.1)
-            max_backlight_current = backlight_limits.get("current_A", {}).get("max", 0.5)
-
-            # Analyze mainbeam power
-            mainbeam_data = self.result.measurements.get("mainbeam_current_readings")
-            if mainbeam_data and mainbeam_data.get("board_results"):
-                board_results = mainbeam_data["board_results"]
-                self.logger.info(f"Analyzing mainbeam boards: {list(board_results.keys())}")
-                
-                # Check each board individually
-                for board_name, board_data in board_results.items():
-                    if "current" in board_data:
-                        current = board_data["current"]
-                        self.logger.info(f"{board_name} mainbeam current: {current:.3f}A (limits: {min_mainbeam_current:.3f} - {max_mainbeam_current:.3f}A)")
-                        
-                        # Add individual board measurement
-                        self.result.add_measurement(
-                            f"mainbeam_{board_name.replace(' ', '_').lower()}_current",
-                            current,
-                            min_mainbeam_current,
-                            max_mainbeam_current,
-                            "A"
-                        )
-                        
-                        # Check if board passes
-                        if current < min_mainbeam_current or current > max_mainbeam_current:
-                            self.result.failures.append(
-                                f"{board_name} mainbeam current {current:.3f}A outside limits ({min_mainbeam_current:.3f} - {max_mainbeam_current:.3f}A)"
-                            )
-                    elif "error" in board_data:
-                        self.result.failures.append(f"{board_name} mainbeam measurement failed: {board_data['error']}")
-                
-                # Add overall average
-                if mainbeam_data.get("average", 0) > 0:
-                    avg_current = mainbeam_data["average"]
-                    self.result.add_measurement(
-                        "mainbeam_average_current",
-                        avg_current,
-                        min_mainbeam_current,
-                        max_mainbeam_current,
-                        "A"
-                    )
-
-            # Analyze backlight power (if tested)
-            backlight_data = self.result.measurements.get("backlight_current_readings")
-            if backlight_data and backlight_data.get("board_results"):
-                board_results = backlight_data["board_results"]
-                self.logger.info(f"Analyzing backlight boards: {list(board_results.keys())}")
-                
-                # Check each board individually
-                for board_name, board_data in board_results.items():
-                    if "current" in board_data:
-                        current = board_data["current"]
-                        self.logger.info(f"{board_name} backlight current: {current:.3f}A (limits: {min_backlight_current:.3f} - {max_backlight_current:.3f}A)")
-                        
-                        # Add individual board measurement
-                        self.result.add_measurement(
-                            f"backlight_{board_name.replace(' ', '_').lower()}_current",
-                            current,
-                            min_backlight_current,
-                            max_backlight_current,
-                            "A"
-                        )
-                        
-                        # Check if board passes
-                        if current < min_backlight_current or current > max_backlight_current:
-                            self.result.failures.append(
-                                f"{board_name} backlight current {current:.3f}A outside limits ({min_backlight_current:.3f} - {max_backlight_current:.3f}A)"
-                            )
-                    elif "error" in board_data:
-                        self.result.failures.append(f"{board_name} backlight measurement failed: {board_data['error']}")
-                
-                # Add overall average
-                if backlight_data.get("average", 0) > 0:
-                    avg_current = backlight_data["average"]
-                    self.result.add_measurement(
-                        "backlight_average_current",
-                        avg_current,
-                        min_backlight_current,
-                        max_backlight_current,
-                        "A"
-                    )
-
             # Check programming results
-            if self.programming_results:
-                failed_boards = [r for r in self.programming_results if not r["success"]]
-                if failed_boards:
-                    for failed_board in failed_boards:
-                        self.result.failures.append(
-                            f"Programming failed for {failed_board['board']}: {failed_board['message']}"
-                        )
-
+            self._check_programming_results()
+            
         except Exception as e:
             self.logger.error(f"Analysis error: {e}")
             self.result.failures.append(f"Analysis error: {str(e)}")
+    
+    def _check_limits(self, board_name: str, function: str, measurements: Dict, limits: Dict):
+        """Check measurements against limits"""
+        board_key = board_name.replace(' ', '_').lower()
+        
+        # Check current
+        if "current" in measurements and "current_A" in limits:
+            current = measurements["current"]
+            min_val = limits["current_A"]["min"]
+            max_val = limits["current_A"]["max"]
+            
+            self.result.add_measurement(
+                f"{function}_{board_key}_current",
+                current, min_val, max_val, "A"
+            )
+            
+            if not (min_val <= current <= max_val):
+                self.result.failures.append(
+                    f"{board_name} {function} current {current:.3f}A "
+                    f"outside limits ({min_val:.3f}-{max_val:.3f}A)"
+                )
+        
+        # Check voltage
+        if "voltage" in measurements and "voltage_V" in limits:
+            voltage = measurements["voltage"]
+            min_val = limits["voltage_V"]["min"]
+            max_val = limits["voltage_V"]["max"]
+            
+            self.result.add_measurement(
+                f"{function}_{board_key}_voltage",
+                voltage, min_val, max_val, "V"
+            )
+            
+            if not (min_val <= voltage <= max_val):
+                self.result.failures.append(
+                    f"{board_name} {function} voltage {voltage:.3f}V "
+                    f"outside limits ({min_val:.3f}-{max_val:.3f}V)"
+                )
+    
+    def _check_programming_results(self):
+        """Check programming results if applicable"""
+        if self.programming_results:
+            failed = [r for r in self.programming_results if not r["success"]]
+            for failure in failed:
+                self.result.failures.append(
+                    f"Programming failed for {failure['board']}: {failure['message']}"
+                )
 
     def cleanup_hardware(self):
         """Clean up SMT Arduino and fixture"""
@@ -674,13 +585,25 @@ if __name__ == "__main__":
         }
     }
 
-    # Example test parameters
+    # Example test parameters - configuration-driven
     parameters = {
-        "POWER": {
-            "sequence_id": "SMT_SEQ_A",
-            "min_mainbeam_current_A": 0.85,
-            "max_mainbeam_current_A": 1.15
-        }
+        "timing": {
+            "power_stabilization_s": 0.5,
+            "default_test_duration_s": 1.5,
+            "command_interval_ms": 20,
+            "test_cooldown_s": 0.5
+        },
+        "test_sequence": [
+            {
+                "name": "function_test",
+                "function": "main_output",
+                "duration": 1.5,
+                "limits": {
+                    "current_A": {"min": 0.85, "max": 1.15},
+                    "voltage_V": {"min": 12.0, "max": 13.5}
+                }
+            }
+        ]
     }
 
 

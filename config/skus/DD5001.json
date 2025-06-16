@@ -3,60 +3,117 @@
   "description": "Product Beta - SS3 Max High Output",
   "pod_type": "SS3",
   "power_level": "Max",
-  "available_modes": ["Offroad", "SMT", "WeightChecking"],
-  
+  "available_modes": [
+    "Offroad",
+    "SMT",
+    "WeightChecking"
+  ],
   "offroad_testing": {
     "test_sequence": [
       {
         "name": "mainbeam",
         "relay": "main",
         "duration_ms": 500,
-        "measurements": ["current", "voltage", "lux", "color"],
+        "measurements": [
+          "current",
+          "voltage",
+          "lux",
+          "color"
+        ],
         "limits": {
-          "current_A": {"min": 2.0, "max": 2.5},
-          "lux": {"min": 4800, "max": 5800},
-          "color_x": {"center": 0.430, "tolerance": 0.010},
-          "color_y": {"center": 0.400, "tolerance": 0.010}
+          "current_A": {
+            "min": 2.0,
+            "max": 2.5
+          },
+          "lux": {
+            "min": 4800,
+            "max": 5800
+          },
+          "color_x": {
+            "center": 0.43,
+            "tolerance": 0.01
+          },
+          "color_y": {
+            "center": 0.4,
+            "tolerance": 0.01
+          }
         }
       },
       {
         "name": "backlight_left",
         "relay": "backlight_1",
         "duration_ms": 500,
-        "measurements": ["current", "voltage"],
+        "measurements": [
+          "current",
+          "voltage"
+        ],
         "limits": {
-          "current_A": {"min": 0.08, "max": 0.18}
+          "current_A": {
+            "min": 0.08,
+            "max": 0.18
+          }
         }
       },
       {
         "name": "backlight_right",
         "relay": "backlight_2",
         "duration_ms": 500,
-        "measurements": ["current", "voltage"],
+        "measurements": [
+          "current",
+          "voltage"
+        ],
         "limits": {
-          "current_A": {"min": 0.08, "max": 0.18}
+          "current_A": {
+            "min": 0.08,
+            "max": 0.18
+          }
         }
       }
     ]
   },
-  
   "smt_testing": {
     "panel_layout": {
       "rows": 1,
       "columns": 2,
       "total_boards": 2,
       "board_positions": {
-        "1": {"row": 1, "col": 1, "name": "Left"},
-        "2": {"row": 1, "col": 2, "name": "Right"}
+        "1": {
+          "row": 1,
+          "col": 1,
+          "name": "Left"
+        },
+        "2": {
+          "row": 1,
+          "col": 2,
+          "name": "Right"
+        }
       }
     },
     "relay_mapping": {
-      "1": {"board": 1, "function": "mainbeam"},
-      "2": {"board": 2, "function": "mainbeam"},
-      "3": {"board": 1, "function": "backlight_left"},
-      "4": {"board": 2, "function": "backlight_left"},
-      "5": {"board": 1, "function": "backlight_right"},
-      "6": {"board": 2, "function": "backlight_right"},
+      "1": {
+        "board": 1,
+        "function": "mainbeam"
+      },
+      "2": {
+        "board": 2,
+        "function": "mainbeam"
+      },
+      "3": {
+        "board": 1,
+        "function": "backlight_left"
+      },
+      "4": {
+        "board": 2,
+        "function": "backlight_left"
+      },
+      "5": {
+        "board": 1,
+        "function": "backlight_right"
+      },
+      "6": {
+        "board": 2,
+        "function": "backlight_right"
+      },
       "7": null,
       "8": null
     },
@@ -67,9 +124,16 @@
         "function": "mainbeam",
         "test_all_boards": true,
         "limits": {
-          "current_A": {"min": 1.8, "max": 2.3},
-          "voltage_V": {"min": 11.5, "max": 12.5}
-        }
+          "current_A": {
+            "min": 1.8,
+            "max": 2.3
+          },
+          "voltage_V": {
+            "min": 11.5,
+            "max": 12.5
+          }
+        },
+        "duration": 0.1
       },
       {
         "name": "backlight_left_test",
@@ -77,9 +141,16 @@
         "function": "backlight_left",
         "test_all_boards": true,
         "limits": {
-          "current_A": {"min": 0.08, "max": 0.18},
-          "voltage_V": {"min": 11.5, "max": 12.5}
-        }
+          "current_A": {
+            "min": 0.08,
+            "max": 0.18
+          },
+          "voltage_V": {
+            "min": 11.5,
+            "max": 12.5
+          }
+        },
+        "duration": 0.1
       },
       {
         "name": "backlight_right_test",
@@ -87,9 +158,16 @@
         "function": "backlight_right",
         "test_all_boards": true,
         "limits": {
-          "current_A": {"min": 0.08, "max": 0.18},
-          "voltage_V": {"min": 11.5, "max": 12.5}
-        }
+          "current_A": {
+            "min": 0.08,
+            "max": 0.18
+          },
+          "voltage_V": {
+            "min": 11.5,
+            "max": 12.5
+          }
+        },
+        "duration": 0.1
       }
     ],
     "programming": {
@@ -99,27 +177,75 @@
       "boards": {
         "1": {
           "components": [
-            {"name": "main_controller", "hex_file": "firmware/DD5001/main_v2.1.hex", "device": "STM8S003F3", "programmer": "stm8"},
-            {"name": "led_driver_1", "hex_file": "firmware/DD5001/led_driver_v1.5.hex", "device": "STM8S105K6", "programmer": "stm8"},
-            {"name": "led_driver_2", "hex_file": "firmware/DD5001/led_driver_v1.5.hex", "device": "STM8S105K6", "programmer": "stm8"},
-            {"name": "thermal_controller", "hex_file": "firmware/DD5001/thermal_v1.0.hex", "device": "PIC18F47J53", "programmer": "pic"}
+            {
+              "name": "main_controller",
+              "hex_file": "firmware/DD5001/main_v2.1.hex",
+              "device": "STM8S003F3",
+              "programmer": "stm8"
+            },
+            {
+              "name": "led_driver_1",
+              "hex_file": "firmware/DD5001/led_driver_v1.5.hex",
+              "device": "STM8S105K6",
+              "programmer": "stm8"
+            },
+            {
+              "name": "led_driver_2",
+              "hex_file": "firmware/DD5001/led_driver_v1.5.hex",
+              "device": "STM8S105K6",
+              "programmer": "stm8"
+            },
+            {
+              "name": "thermal_controller",
+              "hex_file": "firmware/DD5001/thermal_v1.0.hex",
+              "device": "PIC18F47J53",
+              "programmer": "pic"
+            }
           ]
         },
         "2": {
           "components": [
-            {"name": "main_controller", "hex_file": "firmware/DD5001/main_v2.1.hex", "device": "STM8S003F3", "programmer": "stm8"},
-            {"name": "led_driver_1", "hex_file": "firmware/DD5001/led_driver_v1.5.hex", "device": "STM8S105K6", "programmer": "stm8"},
-            {"name": "led_driver_2", "hex_file": "firmware/DD5001/led_driver_v1.5.hex", "device": "STM8S105K6", "programmer": "stm8"},
-            {"name": "thermal_controller", "hex_file": "firmware/DD5001/thermal_v1.0.hex", "device": "PIC18F47J53", "programmer": "pic"}
+            {
+              "name": "main_controller",
+              "hex_file": "firmware/DD5001/main_v2.1.hex",
+              "device": "STM8S003F3",
+              "programmer": "stm8"
+            },
+            {
+              "name": "led_driver_1",
+              "hex_file": "firmware/DD5001/led_driver_v1.5.hex",
+              "device": "STM8S105K6",
+              "programmer": "stm8"
+            },
+            {
+              "name": "led_driver_2",
+              "hex_file": "firmware/DD5001/led_driver_v1.5.hex",
+              "device": "STM8S105K6",
+              "programmer": "stm8"
+            },
+            {
+              "name": "thermal_controller",
+              "hex_file": "firmware/DD5001/thermal_v1.0.hex",
+              "device": "PIC18F47J53",
+              "programmer": "pic"
+            }
           ]
         }
       }
+    },
+    "timing": {
+      "power_stabilization_s": 0.05,
+      "default_test_duration_s": 0.1,
+      "command_interval_ms": 5,
+      "test_cooldown_s": 0.02
     }
   },
-  
   "weight_testing": {
     "limits": {
-      "weight_g": {"min": 210.0, "max": 215.0}
+      "weight_g": {
+        "min": 210.0,
+        "max": 215.0
+      }
     },
     "tare_g": 0.5
   }

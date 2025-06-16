@@ -198,15 +198,18 @@ class SerialManager(ResourceMixin):
                 if isinstance(data, bytes):
                     data = data.decode('utf-8')
                 
-                # Add CRC if enabled
-                if self.crc_enabled and self.crc_calculator:
-                    # Remove trailing newline for CRC calculation, add it back after
-                    message = data.rstrip('\r\n')
-                    data_with_crc = self.crc_calculator.append_crc(message)
-                    # Add newline back
-                    data = data_with_crc + '\r\n'
-                    self.logger.debug(f"Sending with CRC: {data_with_crc}")
+                # FIXED: Don't append CRC to outgoing messages
+                # The Arduino firmware doesn't parse CRC on incoming commands
+                # CRC should only be used for validating responses FROM Arduino
                 
+                # Original problematic code:
+                # if self.crc_enabled and self.crc_calculator:
+                #     message = data.rstrip('\r\n')
+                #     data_with_crc = self.crc_calculator.append_crc(message)
+                #     data = data_with_crc + '\r\n'
+                #     self.logger.debug(f"Sending with CRC: {data_with_crc}")
+                
+                # Just send the plain command
                 data_bytes = data.encode('utf-8')
                 bytes_written = self.connection.write(data_bytes)
                 self.connection.flush()

@@ -1,8 +1,8 @@
-# Diode Dynamics Tester V4: Project Overview and Architecture
+# Diode Dynamics Tester V5: Project Overview and Architecture
 
 ## 1. Primary Intent
 
-The Diode Dynamics Tester V4 is a comprehensive production-line testing application designed to validate the functionality and quality of Diode Dynamics' LED lighting products. The system automates and standardizes testing processes across various product Stock Keeping Units (SKUs), ensuring products meet defined specifications before shipment. The platform emphasizes reliability, user-friendliness for operators, and configurability to accommodate different product types and testing requirements.
+The Diode Dynamics Tester V5 is a comprehensive production-line testing application designed to validate the functionality and quality of Diode Dynamics' LED lighting products. The system automates and standardizes testing processes across various product Stock Keeping Units (SKUs), ensuring products meet defined specifications before shipment. The platform emphasizes reliability, user-friendliness for operators, and configurability to accommodate different product types and testing requirements.
 
 ## 2. System Architecture
 

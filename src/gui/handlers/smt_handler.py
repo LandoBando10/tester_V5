@@ -44,29 +44,6 @@ class SMTHandler(QObject, ResourceMixin):
         self.logger.info(f"Starting SMT test for SKU: {sku}, Enabled Tests: {enabled_tests}")
         
         try:
-            # PHASE 1: Enforce cooldown between tests
-            current_time = time.time()
-            time_since_last = current_time - self._last_test_end_time
-            
-            if time_since_last < self.min_test_interval:
-                wait_time = self.min_test_interval - time_since_last
-                self.logger.info(f"Enforcing {wait_time:.1f}s cooldown between tests")
-                self.main_window.update_status(f"Please wait {wait_time:.1f}s...", "yellow")
-                time.sleep(wait_time)
-            
-            # PHASE 1: Extended cooldown after many consecutive tests
-            self.consecutive_test_count += 1
-            if self.consecutive_test_count >= self.max_consecutive_tests:
-                self.logger.warning(f"Reached {self.max_consecutive_tests} consecutive tests - enforcing extended cooldown")
-                self.main_window.update_status("Extended cooldown (10s) - relay recovery", "yellow")
-                
-                # Turn off all relays during cooldown (using individual commands)
-                if hasattr(self.main_window, 'arduino_controller') and self.main_window.arduino_controller:
-                    for relay in range(1, 9):  # Turn off relays 1-8
-                        self.main_window.arduino_controller.send_command(f"RELAY:{relay}:OFF")
-                
-                time.sleep(10.0)
-                self.consecutive_test_count = 0
             
             # PHASE 1: Verify Arduino responsiveness
             if hasattr(self.main_window, 'arduino_controller') and self.main_window.arduino_controller:

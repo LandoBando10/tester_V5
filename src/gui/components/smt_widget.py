@@ -228,20 +228,23 @@ class PCBPanelWidget(QWidget):
             if "_board_" not in name:
                 continue
             
+            # Only process current measurements, not voltage
+            if not name.endswith("_current"):
+                continue
+            
             # Parse board number from names like "mainbeam_board_1_current" or "backlight_board_1_current"
             parts = name.split("_")
             try:
                 board_idx = parts.index("board")
                 b_idx = int(parts[board_idx + 1])
             except (ValueError, IndexError):
-                pass
                 continue
 
             # Determine variant (mainbeam or backlight)
             variant = parts[0]  # First part is usually the variant
             board_pass.setdefault(b_idx, True)
             
-            
+            # Store current values only
             if variant == "mainbeam":
                 main_vals[b_idx] = data["value"]
             elif variant == "backlight":
@@ -250,7 +253,6 @@ class PCBPanelWidget(QWidget):
             # Check pass/fail
             if not data.get("passed", True):
                 board_pass[b_idx] = False
-                # Debug: Board marked as FAILED due to measurement
 
         # Debug: Final board pass/fail status determined
         
