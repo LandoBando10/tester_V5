@@ -6,7 +6,7 @@ import queue
 from typing import Dict, List, Optional, Callable, Any
 from dataclasses import dataclass
 from .serial_manager import SerialManager
-from src.utils.resource_manager import ResourceMixin
+from src.utils.thread_cleanup import ThreadCleanupMixin
 from config.settings import SCALE_SETTINGS, WEIGHT_TESTING
 
 
@@ -30,7 +30,7 @@ class SensorConfig:
     enabled: bool = True
 
 
-class ScaleController(ResourceMixin):
+class ScaleController(ThreadCleanupMixin):
     """Optimized Scale controller with reduced latency and improved performance"""
     
     def __init__(self, baud_rate: Optional[int] = None):

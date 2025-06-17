@@ -77,16 +77,8 @@
       "columns": 2,
       "total_boards": 2,
       "board_positions": {
-        "1": {
-          "row": 1,
-          "col": 1,
-          "name": "Left"
-        },
-        "2": {
-          "row": 1,
-          "col": 2,
-          "name": "Right"
-        }
+        "1": [1, 1],
+        "2": [1, 2]
       }
     },
     "relay_mapping": {
@@ -119,10 +111,7 @@
     },
     "test_sequence": [
       {
-        "name": "mainbeam_test",
-        "description": "Test mainbeam current on all boards",
         "function": "mainbeam",
-        "test_all_boards": true,
         "limits": {
           "current_A": {
             "min": 1.8,
@@ -132,14 +121,10 @@
             "min": 11.5,
             "max": 12.5
           }
-        },
-        "duration": 0.1
+        }
       },
       {
-        "name": "backlight_left_test",
-        "description": "Test left backlight current on all boards",
         "function": "backlight_left",
-        "test_all_boards": true,
         "limits": {
           "current_A": {
             "min": 0.08,
@@ -149,14 +134,10 @@
             "min": 11.5,
             "max": 12.5
           }
-        },
-        "duration": 0.1
+        }
       },
       {
-        "name": "backlight_right_test",
-        "description": "Test right backlight current on all boards",
         "function": "backlight_right",
-        "test_all_boards": true,
         "limits": {
           "current_A": {
             "min": 0.08,
@@ -166,78 +147,12 @@
             "min": 11.5,
             "max": 12.5
           }
-        },
-        "duration": 0.1
+        }
       }
     ],
     "programming": {
       "enabled": true,
-      "stm8_programmer_path": "C:/Program Files (x86)/STMicroelectronics/st_toolset/stvp/STVP_CmdLine.exe",
-      "pic_programmer_path": "C:/Program Files/Microchip/MPLABX/v6.25/mplab_platform/mplab_ipe/pk3cmd.exe",
-      "boards": {
-        "1": {
-          "components": [
-            {
-              "name": "main_controller",
-              "hex_file": "firmware/DD5001/main_v2.1.hex",
-              "device": "STM8S003F3",
-              "programmer": "stm8"
-            },
-            {
-              "name": "led_driver_1",
-              "hex_file": "firmware/DD5001/led_driver_v1.5.hex",
-              "device": "STM8S105K6",
-              "programmer": "stm8"
-            },
-            {
-              "name": "led_driver_2",
-              "hex_file": "firmware/DD5001/led_driver_v1.5.hex",
-              "device": "STM8S105K6",
-              "programmer": "stm8"
-            },
-            {
-              "name": "thermal_controller",
-              "hex_file": "firmware/DD5001/thermal_v1.0.hex",
-              "device": "PIC18F47J53",
-              "programmer": "pic"
-            }
-          ]
-        },
-        "2": {
-          "components": [
-            {
-              "name": "main_controller",
-              "hex_file": "firmware/DD5001/main_v2.1.hex",
-              "device": "STM8S003F3",
-              "programmer": "stm8"
-            },
-            {
-              "name": "led_driver_1",
-              "hex_file": "firmware/DD5001/led_driver_v1.5.hex",
-              "device": "STM8S105K6",
-              "programmer": "stm8"
-            },
-            {
-              "name": "led_driver_2",
-              "hex_file": "firmware/DD5001/led_driver_v1.5.hex",
-              "device": "STM8S105K6",
-              "programmer": "stm8"
-            },
-            {
-              "name": "thermal_controller",
-              "hex_file": "firmware/DD5001/thermal_v1.0.hex",
-              "device": "PIC18F47J53",
-              "programmer": "pic"
-            }
-          ]
-        }
-      }
-    },
-    "timing": {
-      "power_stabilization_s": 0.05,
-      "default_test_duration_s": 0.1,
-      "command_interval_ms": 5,
-      "test_cooldown_s": 0.02
+      "note": "Multi-component boards with STM8S003F3 main controller, STM8S105K6 LED drivers, and PIC18F47J53 thermal controller"
     }
   },
   "weight_testing": {

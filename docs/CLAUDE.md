@@ -49,7 +49,7 @@
 - Integrated framing protocol into SerialManager
 - Added framing capabilities to SMT Arduino controller
 - Created comprehensive Phase 3 verification test suite
-- Files: `src/protocols/frame_protocol.py`, `test_phase3_verification.py`
+- Files: `test_phase3_verification.py` (deprecated)
 
 ### ✅ Phase 4.4 - Binary Protocol Implementation (COMPLETED)
 - Designed comprehensive binary message schemas for all command types
@@ -62,7 +62,7 @@
 - Comprehensive binary message format verification test suite
 - Performance benchmarking showing 38.5% bandwidth savings for group operations
 - Excellent memory efficiency (under 100KB for 1000 messages)
-- Files: `src/protocols/binary_message_formats.py`, `src/protocols/binary_protocol.py`, `Arduino_firmware/SMT_Board_Tester_Binary_v5.3.0.ino`, `test_phase4_4_verification.py`, `test_phase4_4_performance_benchmark.py`
+- Files: `Arduino_firmware/SMT_Board_Tester_Binary_v5.3.0.ino` (deprecated)
 
 ### Testing Commands
 ```bash

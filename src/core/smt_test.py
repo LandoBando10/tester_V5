@@ -7,7 +7,7 @@ from pathlib import Path
 from src.core.base_test import BaseTest, TestResult
 from src.core.programmer_controller import ProgrammerController
 from src.core.smt_controller import SMTController
-from src.hardware.smt_arduino_controller import SMTArduinoController, SMTSensorConfigurations
+from src.hardware.smt_arduino_controller import SMTArduinoController
 
 class SMTTest(BaseTest):
     """SMT panel testing with programming and power validation using dedicated SMT Arduino"""
@@ -75,7 +75,7 @@ class SMTTest(BaseTest):
             self.programming_enabled = False
 
     def setup_hardware(self) -> bool:
-        """Initialize SMT Arduino and bed-of-nails fixture"""
+        """Initialize SMT Arduino - simplified setup"""
         try:
             self.update_progress("Setting up SMT test...", 10)
 
@@ -85,26 +85,6 @@ class SMTTest(BaseTest):
                 if not self.arduino.connect(self.port):
                     self.logger.error(f"Failed to connect to SMT Arduino on port {self.port}")
                     return False
-
-            # Skip sensor configuration if already configured
-            if not hasattr(self.arduino, '_sensors_configured'):
-                self.update_progress("Configuring sensors...", 20)
-                sensor_configs = SMTSensorConfigurations.smt_panel_sensors()
-                
-                if not self.arduino.configure_sensors(sensor_configs):
-                    self.logger.error("Failed to configure sensors")
-                    self.logger.error("Please check:")
-                    self.logger.error("1. INA260 sensor is properly connected to I2C bus")
-                    self.logger.error("2. Sensor has power (check VCC and GND connections)")
-                    self.logger.error("3. I2C pull-up resistors are present")
-                    self.logger.error("4. No I2C address conflicts (INA260 default is 0x40)")
-                    return False
-                
-                self.arduino._sensors_configured = True
-                self.logger.info("Sensors configured successfully")
-            else:
-                self.logger.info("Sensors already configured, skipping")
-
 
             # Get SMT configuration
             self.update_progress("Initializing SMT controller...", 30)
@@ -125,18 +105,6 @@ class SMTTest(BaseTest):
             # Initialize SMT controller with Arduino
             if not self.smt_controller.initialize_arduino():
                 self.logger.error("Failed to initialize SMT controller")
-                return False
-
-            # Apply timing configuration from SKU (Phase 4) - REQUIRED
-            timing_config = smt_config.get("timing", {})
-            if timing_config:
-                self.update_progress("Applying timing configuration...", 35)
-                if not self.arduino.apply_timing_config(timing_config):
-                    self.logger.error("Failed to apply SKU timing configuration")
-                    return False
-                self.logger.info("SKU timing configuration applied successfully")
-            else:
-                self.logger.error("No timing configuration in SKU - this is required")
                 return False
 
             self.update_progress("Ready to test", 40)
@@ -172,13 +140,14 @@ class SMTTest(BaseTest):
             if not test_sequence:
                 raise ValueError("No test_sequence defined in SKU configuration")
             
-            # Create test phases from configuration
+            # Create test phases from configuration (new format only)
             for test_config in test_sequence:
+                function = test_config["function"]
+                
                 self.test_phases.append({
-                    "name": test_config["name"],
                     "duration": test_config.get("duration", timing.get("default_test_duration_s", 2.0)),
                     "action": "test_function",
-                    "function": test_config["function"],
+                    "function": function,
                     "limits": test_config["limits"]
                 })
             
@@ -187,7 +156,8 @@ class SMTTest(BaseTest):
                 base_progress = 45 + (phase_idx * 40 // len(self.test_phases))
                 success = self._execute_phase(phase, phase_idx)
                 if not success:
-                    self.result.failures.append(f"Failed: {phase['name']}")
+                    function_name = phase.get('function', phase.get('action', 'unknown'))
+                    self.result.failures.append(f"Failed: {function_name}")
             
             self._analyze_results()
             return self.result
@@ -363,21 +333,11 @@ class SMTTest(BaseTest):
         board_results = {}
         relay_list = [int(r.strip()) for r in relays.split(',') if r.strip()]
         
-        # PHASE 1: Enforce test cooldown if this is a new test
-        self.arduino.enforce_test_cooldown()
+        # Use simplified measure_relays method
+        self.logger.info(f"Measuring relays: {relay_list}")
         
-        # PHASE 1: Verify Arduino is responsive before starting
-        if not self.arduino.verify_arduino_responsive():
-            self.logger.error("Arduino not responsive before measurements")
-            if not self.arduino.recover_communication():
-                self.logger.error("Failed to recover Arduino communication")
-                return board_results
-        
-        # Use new measure_relays method with individual commands
-        self.logger.info(f"Measuring relays using individual commands: {relay_list}")
-        
-        # Get measurements with optimized timeout
-        measurement_results = self.arduino.measure_relays(relay_list, timeout=0.5)
+        # Get measurements
+        measurement_results = self.arduino.measure_relays(relay_list)
         
         if not measurement_results:
             self.logger.error("No measurements received")
@@ -537,8 +497,8 @@ class SMTTest(BaseTest):
             # Turn off all outputs using SMT controller
             self.smt_controller.all_lights_off()
             
-            # PHASE 1: Mark test as complete for cooldown tracking
-            self.arduino.mark_test_complete()
+            # Turn off all relays
+            self.arduino.all_relays_off()
 
             # Only disconnect if we own the Arduino instance
             if self.owns_arduino:

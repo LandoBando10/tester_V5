@@ -1,12 +1,13 @@
 """
 Configuration module for Diode Dynamics Production Test System
 
-This module provides centralized access to all configuration settings
-and utilities for the test system.
+This module provides centralized access to all configuration settings.
+For SKU-specific data, use src.data.sku_manager directly.
 """
 
 # Import main configuration dictionaries from settings
 from .settings import (
+    TIMEOUTS,
     DEVICE_SERIAL_SETTINGS,
     ARDUINO_SETTINGS,
     SENSOR_TIMINGS,
@@ -15,27 +16,15 @@ from .settings import (
     SCALE_SETTINGS,
     TEST_SETTINGS,
     GUI_SETTINGS,
+    PRESSURE_SETTINGS,
+    PROGRAMMING_SETTINGS,
     PATHS,
     LOGGING
 )
 
-# Import configuration utilities
-from .config_utils import (
-    load_test_parameters,
-    get_weight_parameters,
-    load_programming_config,
-    load_sku_config,
-    load_individual_sku_config,
-    load_template,
-    get_all_available_skus,
-    resolve_template_references,
-    get_full_sku_config,
-    validate_config
-)
-
 # Define what's available when using "from config import *"
 __all__ = [
-    # Settings dictionaries
+    'TIMEOUTS',
     'DEVICE_SERIAL_SETTINGS',
     'ARDUINO_SETTINGS',
     'SENSOR_TIMINGS',
@@ -44,20 +33,11 @@ __all__ = [
     'SCALE_SETTINGS',
     'TEST_SETTINGS',
     'GUI_SETTINGS',
+    'PRESSURE_SETTINGS',
+    'PROGRAMMING_SETTINGS',
     'PATHS',
-    'LOGGING',
-    # Utility functions
-    'load_test_parameters',
-    'get_weight_parameters',
-    'load_programming_config',
-    'load_sku_config',
-    'load_individual_sku_config',
-    'load_template',
-    'get_all_available_skus',
-    'resolve_template_references',
-    'get_full_sku_config',
-    'validate_config'
+    'LOGGING'
 ]
 
 # Module version
-__version__ = '1.0.0'
+__version__ = '2.0.0'

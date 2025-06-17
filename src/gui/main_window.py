@@ -20,7 +20,7 @@ from src.gui.handlers.smt_handler import SMTHandler
 from src.gui.handlers.weight_handler import WeightHandler
 from src.gui.handlers.connection_handler import ConnectionHandler
 from src.core.base_test import TestResult
-from src.utils.resource_manager import ResourceManager # Added import
+from src.utils.thread_cleanup import GlobalCleanupManager # Added import
 
 
 class MainWindow(QMainWindow):
@@ -586,11 +586,11 @@ class MainWindow(QMainWindow):
 
             # Perform comprehensive resource cleanup
             try:
-                resource_manager = ResourceManager()
-                resource_manager.cleanup_all()
-                self.logger.info("All resources cleaned up via ResourceManager.")
+                cleanup_manager = GlobalCleanupManager()
+                cleanup_manager.cleanup_all()
+                self.logger.info("All resources cleaned up via GlobalCleanupManager.")
             except Exception as rm_error:
-                self.logger.error(f"Error during ResourceManager cleanup: {rm_error}")
+                self.logger.error(f"Error during GlobalCleanupManager cleanup: {rm_error}")
 
             event.accept()
 

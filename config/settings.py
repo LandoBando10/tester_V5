@@ -30,13 +30,10 @@ DEVICE_SERIAL_SETTINGS = {
     }
 }
 
-# Arduino Communication
+# Arduino Communication (simplified)
 ARDUINO_SETTINGS = {
     'connection_timeout': TIMEOUTS['arduino_connection'],
-    'sensor_read_delay': 0.001,  # 1ms between sensor reads for high speed
-    'max_retries': 3,
-    'max_stored_readings': 10000,
-    'communication_test_timeout': TIMEOUTS['communication_test']
+    'max_retries': 3
 }
 
 # Sensor Reading Configurations (per test type)
@@ -52,11 +49,6 @@ SENSOR_TIMINGS = {
         'lux_interval_ms': 50,
         'pressure_interval_ms': 100,
         'color_interval_ms': 50
-    },
-    'smt_testing': {
-        'current_interval_ms': 10,      # was 25
-        'voltage_interval_ms': 10,      # was 25
-        'backlight_interval_ms': 50     # was 100
     }
 }
 
@@ -71,15 +63,10 @@ TEST_SENSOR_CONFIGS = {
         'required_sensors': ['INA260', 'VEML7700', 'PRESSURE', 'COLOR'],
         'optional_sensors': [],
         'timing_profile': 'offroad_fast'
-    },
-    'smt_panel': {
-        'required_sensors': ['INA260'],
-        'optional_sensors': ['VEML7700'],  # For backlight testing
-        'timing_profile': 'smt_testing'
     }
 }
 
-# Weight Testing Configuration (weight parameters moved to skus.json)
+# Weight Testing Configuration (weight parameters in individual SKU files)
 WEIGHT_TESTING = {
     'test_timings': {
         'part_detection_timeout': TIMEOUTS['part_detection'],
@@ -111,9 +98,7 @@ SCALE_SETTINGS = {
 TEST_SETTINGS = {
     'default_test_timeout': TIMEOUTS['default_test'],  # seconds
     'result_display_time': 3,    # seconds to show pass/fail result
-    'log_all_measurements': True,
-    'sensor_stabilization_time': 1.0,  # seconds to wait after hardware setup
-    'measurement_averaging_time': 1.0   # seconds to average sensor readings
+    'log_all_measurements': True
 }
 
 # GUI Settings
@@ -125,10 +110,37 @@ GUI_SETTINGS = {
     'real_time_display': True   # Show live sensor readings during test
 }
 
+# Pressure Testing Configuration (consolidated from global_parameters.json)
+PRESSURE_SETTINGS = {
+    'min_initial_psi': 14.0,
+    'max_initial_psi': 16.0,
+    'max_delta_psi': 0.5,
+    'pressure_timings': {
+        'fill_ms': 1500,
+        'isolate_ms': 500,
+        'test_ms': 2500,
+        'exhaust_ms': 500
+    }
+}
+
+# Programming Configuration (consolidated from programming_config.json)
+PROGRAMMING_SETTINGS = {
+    'enabled': False,
+    'programmers': {
+        'STM8': {
+            'type': 'STM8',
+            'path': 'C:\\Program Files\\STMicroelectronics\\st_toolset\\stvp\\STVP_CmdLine.exe'
+        },
+        'PIC': {
+            'type': 'PIC', 
+            'path': 'C:\\Program Files\\Microchip\\IPE\\ipecmd.exe'
+        }
+    }
+}
+
 # File Paths (using pathlib for cross-platform compatibility)
 PATHS = {
-    'sku_config': Path('config') / 'skus.json',
-    'programming_config': Path('config') / 'programming_config.json',
+    'sku_directory': Path('config') / 'skus',
     'log_directory': Path('logs'),
     'results_directory': Path('results'),
     'sensor_cal_directory': Path('calibration'),

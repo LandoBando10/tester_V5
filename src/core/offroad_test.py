@@ -294,7 +294,7 @@ class OffroadTest(BaseTest):
         """Get backlight configuration from SKU data"""
         try:
             # Load SKU configuration
-            with open("config/skus.json", "r") as f:
+            with open("config/global_parameters.json", "r") as f:
                 sku_data = json.load(f)
             
             # Find SKU configuration

@@ -100,36 +100,12 @@
       "columns": 2,
       "total_boards": 6,
       "board_positions": {
-        "1": {
-          "row": 1,
-          "col": 1,
-          "name": "Bottom Left"
-        },
-        "2": {
-          "row": 1,
-          "col": 2,
-          "name": "Bottom Right"
-        },
-        "3": {
-          "row": 2,
-          "col": 1,
-          "name": "Middle Left"
-        },
-        "4": {
-          "row": 2,
-          "col": 2,
-          "name": "Middle Right"
-        },
-        "5": {
-          "row": 3,
-          "col": 1,
-          "name": "Top Left"
-        },
-        "6": {
-          "row": 3,
-          "col": 2,
-          "name": "Top Right"
-        }
+        "1": [1, 1],
+        "2": [1, 2],
+        "3": [2, 1],
+        "4": [2, 2],
+        "5": [3, 1],
+        "6": [3, 2]
       }
     },
     "relay_mapping": {
@@ -162,10 +138,7 @@
     },
     "test_sequence": [
       {
-        "name": "mainbeam_test",
-        "description": "Test mainbeam current on all boards",
         "function": "mainbeam",
-        "test_all_boards": true,
         "limits": {
           "current_A": {
             "min": 0.55,
@@ -175,45 +148,12 @@
             "min": 11.5,
             "max": 12.5
           }
-        },
-        "duration": 0.1
+        }
       }
     ],
     "programming": {
       "enabled": true,
-      "programmer_path": "C:/Program Files (x86)/STMicroelectronics/st_toolset/stvp/STVP_CmdLine.exe",
-      "boards": {
-        "1": {
-          "hex_file": "firmware/SSC5_V0.606.hex",
-          "device": "STM8S001J3"
-        },
-        "2": {
-          "hex_file": "firmware/SSC5_V0.606.hex",
-          "device": "STM8S001J3"
-        },
-        "3": {
-          "hex_file": "firmware/SSC5_V0.606.hex",
-          "device": "STM8S001J3"
-        },
-        "4": {
-          "hex_file": "firmware/SSC5_V0.606.hex",
-          "device": "STM8S001J3"
-        },
-        "5": {
-          "hex_file": "firmware/SSC5_V0.606.hex",
-          "device": "STM8S001J3"
-        },
-        "6": {
-          "hex_file": "firmware/SSC5_V0.606.hex",
-          "device": "STM8S001J3"
-        }
-      }
-    },
-    "timing": {
-      "power_stabilization_s": 0.05,
-      "default_test_duration_s": 0.1,
-      "command_interval_ms": 5,
-      "test_cooldown_s": 0.02
+      "note": "STM8S001J3 controllers with SSC5_V0.606.hex firmware"
     }
   },
   "weight_testing": {

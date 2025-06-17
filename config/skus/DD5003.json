@@ -75,11 +75,7 @@
       "columns": 1,
       "total_boards": 1,
       "board_positions": {
-        "1": {
-          "row": 1,
-          "col": 1,
-          "name": "Single Board"
-        }
+        "1": [1, 1]
       }
     },
     "relay_mapping": {
@@ -106,10 +102,7 @@
     },
     "test_sequence": [
       {
-        "name": "mainbeam_test",
-        "description": "Test mainbeam current",
         "function": "mainbeam",
-        "test_all_boards": true,
         "limits": {
           "current_A": {
             "min": 2.6,
@@ -119,14 +112,10 @@
             "min": 11.5,
             "max": 12.5
           }
-        },
-        "duration": 0.1
+        }
       },
       {
-        "name": "backlight_test",
-        "description": "Test backlight current",
         "function": "backlight",
-        "test_all_boards": true,
         "limits": {
           "current_A": {
             "min": 0.015,
@@ -136,14 +125,10 @@
             "min": 11.5,
             "max": 12.5
           }
-        },
-        "duration": 0.1
+        }
       },
       {
-        "name": "indicator_left_test",
-        "description": "Test left indicator",
         "function": "indicator_left",
-        "test_all_boards": true,
         "limits": {
           "current_A": {
             "min": 0.01,
@@ -153,14 +138,10 @@
             "min": 11.5,
             "max": 12.5
           }
-        },
-        "duration": 0.1
+        }
       },
       {
-        "name": "indicator_right_test",
-        "description": "Test right indicator",
         "function": "indicator_right",
-        "test_all_boards": true,
         "limits": {
           "current_A": {
             "min": 0.01,
@@ -170,19 +151,12 @@
             "min": 11.5,
             "max": 12.5
           }
-        },
-        "duration": 0.1
+        }
       }
     ],
     "programming": {
       "enabled": false,
       "note": "Pre-programmed components - no ISP required"
-    },
-    "timing": {
-      "power_stabilization_s": 0.05,
-      "default_test_duration_s": 0.1,
-      "command_interval_ms": 5,
-      "test_cooldown_s": 0.02
     }
   }
 }

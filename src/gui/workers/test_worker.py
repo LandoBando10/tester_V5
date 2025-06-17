@@ -1,11 +1,11 @@
 # gui/workers/test_worker.py
 from PySide6.QtCore import QThread, Signal
 from src.core.base_test import TestResult
-from src.utils.resource_manager import ResourceMixin
+from src.utils.thread_cleanup import ThreadCleanupMixin
 import logging
 
 
-class TestWorker(QThread, ResourceMixin):
+class TestWorker(QThread, ThreadCleanupMixin):
     """Worker thread to run tests without blocking GUI"""
 
     progress_updated = Signal(str, int)  # message, percentage
@@ -15,7 +15,7 @@ class TestWorker(QThread, ResourceMixin):
 
     def __init__(self, test_instance):
         QThread.__init__(self)
-        ResourceMixin.__init__(self)
+        ThreadCleanupMixin.__init__(self)
         self.test_instance = test_instance
         self.logger = logging.getLogger(self.__class__.__name__)
         

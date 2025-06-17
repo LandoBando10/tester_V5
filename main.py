@@ -91,7 +91,7 @@ def run_professional_gui_mode(args=None):
     logger = logging.getLogger(__name__)
     
     # Check for SKU configuration file
-    config_file = Path('config/skus.json')
+    skus_directory = Path('config/skus')
     if not config_file.exists():
         error_msg = f"SKU configuration file not found: {config_file}. Please ensure it exists."
         logger.critical(error_msg)
@@ -215,7 +215,7 @@ def run_gui_mode():
     logger = logging.getLogger(__name__)
     
     # Check for SKU configuration file
-    config_file = Path('config/skus.json')
+    skus_directory = Path('config/skus')
     if not config_file.exists():
         error_msg = f"SKU configuration file not found: {config_file}. Please ensure it exists."
         logger.critical(error_msg)
@@ -407,7 +407,7 @@ def run_smt_test(sku: str, port: str, programming_enabled: bool = True):
 def run_smt_setup(port: str):
     """Run SMT setup utility"""
     try:
-        from src.utils.smt_setup_utility import SMTSetupUtility
+        from tools.smt_setup_utility import SMTSetupUtility
         
         print(f"\nRunning SMT setup utility on {port}...")
         utility = SMTSetupUtility()

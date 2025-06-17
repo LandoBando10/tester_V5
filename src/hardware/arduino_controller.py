@@ -14,7 +14,7 @@ import threading
 from typing import Dict, List, Optional, Callable, Any
 from dataclasses import dataclass
 from .serial_manager import SerialManager
-from src.utils.resource_manager import ResourceMixin
+from src.utils.thread_cleanup import ThreadCleanupMixin
 from queue import Queue, Empty
 
 
@@ -60,7 +60,7 @@ class SensorConfig:
     enabled: bool = True
 
 
-class ArduinoController(ResourceMixin):
+class ArduinoController(ThreadCleanupMixin):
     """Controller for Arduino-based sensor systems - Fixed Communication Protocol"""
 
     def __init__(self, baud_rate: int = 115200):

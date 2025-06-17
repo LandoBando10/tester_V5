@@ -4,11 +4,11 @@ import time
 import logging
 from typing import List, Optional, Union, Tuple
 import threading
-from src.utils.resource_manager import ResourceMixin, get_resource_tracker
+from src.utils.thread_cleanup import ThreadCleanupMixin
 from src.utils.crc16 import get_crc_calculator
 
 
-class SerialManager(ResourceMixin):
+class SerialManager(ThreadCleanupMixin):
     """Manages serial communication with devices supporting both text and binary framing protocols"""
 
     def __init__(self, baud_rate: int = 9600, timeout: float = 5.0, write_timeout: float = 5.0, 
@@ -34,8 +34,9 @@ class SerialManager(ResourceMixin):
         self.total_frame_count = 0
         
         if enable_framing:
-            from src.protocols.frame_protocol import FrameProtocol
-            self.frame_protocol = FrameProtocol()
+            # Framing protocol has been deprecated - simplified communication only
+            self.logger.warning("Framing protocol requested but has been deprecated")
+            self.framing_enabled = False
 
     def get_available_ports(self) -> List[str]:
         """Get list of available COM ports"""
@@ -308,114 +309,39 @@ class SerialManager(ResourceMixin):
     # Binary framing methods (Phase 3)
     
     def enable_framing(self, enabled: bool = True):
-        """Enable or disable binary framing protocol"""
-        self.framing_enabled = enabled
-        if enabled and not self.frame_protocol:
-            from src.protocols.frame_protocol import FrameProtocol
-            self.frame_protocol = FrameProtocol()
-        self.logger.info(f"Binary framing {'enabled' if enabled else 'disabled'}")
+        """Enable or disable binary framing protocol (DEPRECATED)"""
+        if enabled:
+            self.logger.warning("Binary framing protocol has been deprecated - using simplified communication")
+        self.framing_enabled = False
     
     def write_frame(self, command_type: str, payload: str) -> bool:
-        """Write data using binary framing protocol"""
-        if not self.frame_protocol:
-            self.logger.error("Frame protocol not initialized")
-            return False
-            
-        try:
-            frame_data = self.frame_protocol.encode_message(command_type, payload)
-            with self._lock:
-                if not self.connection or not self.connection.is_open:
-                    self.logger.error("No active serial connection")
-                    return False
-                
-                self.connection.write(frame_data)
-                self.logger.debug(f"Sent frame: type={command_type}, payload_len={len(payload)}")
-                return True
-                
-        except Exception as e:
-            self.logger.error(f"Failed to write frame: {e}")
-            return False
+        """Write data using binary framing protocol (DEPRECATED)"""
+        self.logger.warning("write_frame() is deprecated - use write() or write_with_crc() instead")
+        return False
     
     def read_frames(self, timeout: Optional[float] = None) -> List:
-        """Read available frames from serial connection"""
-        if not self.frame_protocol:
-            self.logger.error("Frame protocol not initialized")
-            return []
-            
-        if timeout is None:
-            timeout = self.timeout
-            
-        frames = []
-        start_time = time.time()
-        
-        try:
-            with self._lock:
-                if not self.connection or not self.connection.is_open:
-                    self.logger.error("No active serial connection")
-                    return frames
-                
-                # Read available data
-                while (time.time() - start_time) < timeout:
-                    if self.connection.in_waiting > 0:
-                        data = self.connection.read(self.connection.in_waiting)
-                        new_frames = self.frame_protocol.parse_data(data)
-                        frames.extend(new_frames)
-                        self.total_frame_count += len(new_frames)
-                        
-                        if frames:  # Return immediately if we have frames
-                            break
-                    else:
-                        time.sleep(0.001)  # Small delay to prevent busy waiting
-                        
-        except Exception as e:
-            self.logger.error(f"Failed to read frames: {e}")
-            self.frame_error_count += 1
-            
-        return frames
+        """Read available frames from serial connection (DEPRECATED)"""
+        self.logger.warning("read_frames() is deprecated - use read_line() or read_line_with_crc() instead")
+        return []
     
     def query_frame(self, command_type: str, payload: str, timeout: float = 2.0):
-        """Send frame command and wait for response"""
-        if not self.write_frame(command_type, payload):
-            return None
-            
-        frames = self.read_frames(timeout)
-        if frames:
-            # Return the first frame's payload
-            return frames[0].payload
+        """Send frame command and wait for response (DEPRECATED)"""
+        self.logger.warning("query_frame() is deprecated - use query() instead")
         return None
     
     def get_frame_statistics(self) -> dict:
-        """Get frame protocol statistics"""
-        if self.total_frame_count == 0:
-            error_rate = 0.0
-        else:
-            error_rate = (self.frame_error_count / self.total_frame_count) * 100
-            
-        stats = {
-            'framing_enabled': self.framing_enabled,
-            'total_frames': self.total_frame_count,
-            'frame_errors': self.frame_error_count,
-            'error_rate_percent': error_rate
+        """Get frame protocol statistics (DEPRECATED)"""
+        return {
+            'framing_enabled': False,
+            'total_frames': 0,
+            'frame_errors': 0,
+            'error_rate_percent': 0.0
         }
-        
-        if self.frame_protocol:
-            parser_stats = self.frame_protocol.get_parser_stats()
-            stats.update({
-                'parser_total_frames': parser_stats.total_frames,
-                'parser_valid_frames': parser_stats.valid_frames,
-                'parser_crc_errors': parser_stats.crc_errors,
-                'parser_format_errors': parser_stats.format_errors,
-                'parser_timeout_errors': parser_stats.timeout_errors
-            })
-        
-        return stats
     
     def reset_frame_statistics(self):
-        """Reset frame protocol statistics"""
+        """Reset frame protocol statistics (DEPRECATED)"""
         self.frame_error_count = 0
         self.total_frame_count = 0
-        if self.frame_protocol:
-            self.frame_protocol.reset_parser()
         self.logger.info("Frame statistics reset")
     
     def query_with_retry(self, command: str, response_timeout: float = 2.0, 

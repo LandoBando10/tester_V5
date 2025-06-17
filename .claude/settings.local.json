@@ -28,7 +28,15 @@
       "Bash(git push:*)",
       "Bash(touch:*)",
       "Bash(true)",
-      "Bash(echo)"
+      "Bash(echo)",
+      "Bash(for file in SL0224P01-RBL.json SL0233P01-ABL.json)",
+      "Bash(do python3 -m json.tool \"$file\")",
+      "Bash(echo \"$file is valid JSON\")",
+      "Bash(echo:*)",
+      "Bash(done)",
+      "Bash(for file in *.json)",
+      "Bash(do echo \"Validating $file...\")",
+      "Bash(for file in config/skus/*.json)"
     ],
     "deny": []
   }

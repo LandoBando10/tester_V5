@@ -7,11 +7,11 @@ from PySide6.QtWidgets import QMessageBox
 from PySide6.QtCore import QObject, Signal, Qt
 
 from src.core.base_test import TestResult
-from src.utils.resource_manager import ResourceMixin
+from src.utils.thread_cleanup import ThreadCleanupMixin
 import time
 
 
-class SMTHandler(QObject, ResourceMixin):
+class SMTHandler(QObject, ThreadCleanupMixin):
     """Handles SMT test execution logic"""
     
     # Signal to request user confirmation from main thread
@@ -22,7 +22,7 @@ class SMTHandler(QObject, ResourceMixin):
     
     def __init__(self, main_window):
         QObject.__init__(self)
-        ResourceMixin.__init__(self)
+        ThreadCleanupMixin.__init__(self)
         self.main_window = main_window
         self.logger = logging.getLogger(self.__class__.__name__)
         self.current_test_worker = None

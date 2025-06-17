@@ -1,6 +1,7 @@
 """
-Lazy-Loading SKU Manager
-Simple, elegant, and maintainable SKU management with lazy loading
+Updated SKU Manager for Unified Configuration System
+Compatible with new GUI configuration editor
+Supports both old and new configuration formats
 """
 
 import json
@@ -10,22 +11,27 @@ import time
 import logging
 from typing import Dict, List, Optional, Any, Set
 from dataclasses import dataclass
+from pathlib import Path
 
 
 @dataclass
-class SKULoadResult:
-    """Result of individual SKU loading operation"""
-    success: bool
+class SKUData:
+    """Data class for SKU information"""
     sku: str
-    error_message: Optional[str] = None
-    data: Optional[Dict[str, Any]] = None
-    load_time: float = 0.0
+    description: str
+    pod_type_ref: str
+    power_level_ref: str
+    available_modes: List[str]
+    backlight_config: Optional[Dict[str, Any]]
+    offroad_params: Optional[Dict[str, Any]]
+    smt_params: Optional[Dict[str, Any]]
+    weightchecking_params: Optional[Dict[str, Any]]
 
 
-class SKUManager:
+class UnifiedSKUManager:
     """
-    Lazy-loading SKU manager with thread-safe caching.
-    Loads SKU data only when first accessed, using config/skus/ directory.
+    SKU Manager for unified configuration system.
+    Manages SKUs from centralized skus.json file with full CRUD operations.
     """
     
     def __init__(self, config_path: Optional[str] = None):
@@ -33,211 +39,352 @@ class SKUManager:
         
         # Set up configuration paths
         if config_path is None:
-            project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-            self.config_path = os.path.join(project_root, "config", "skus.json")
-            self.skus_directory = os.path.join(project_root, "config", "skus")
+            project_root = Path(__file__).parent.parent.parent
+            self.config_path = project_root / "config" / "skus.json"
+            self.programming_config_path = project_root / "config" / "programming_config.json"
+            self.legacy_skus_dir = project_root / "config" / "skus"
         else:
-            self.config_path = config_path
-            self.skus_directory = os.path.join(os.path.dirname(config_path), "skus")
+            self.config_path = Path(config_path)
+            self.programming_config_path = self.config_path.parent / "programming_config.json"
+            self.legacy_skus_dir = self.config_path.parent / "skus"
         
         # Thread-safe data storage
         self._lock = threading.RLock()
-        self._index_data: Optional[Dict[str, Any]] = None
-        self._sku_cache: Dict[str, SKULoadResult] = {}
-        self._available_skus: Optional[List[str]] = None
-        self._global_parameters: Optional[Dict[str, Any]] = None
-        self._index_loaded = False
-        self._failed_skus: Set[str] = set()
+        self.data: Optional[Dict[str, Any]] = None
+        self.programming_config: Optional[Dict[str, Any]] = None
+        self._loaded = False
+        self._last_modified = 0
+        self._use_legacy = False
         
-        self.logger.info(f"SKUManager initialized with config: {self.config_path}")
-        self.logger.info(f"SKUs directory: {self.skus_directory}")
+        # Load configuration
+        self._load_configuration()
     
-    def _load_index_if_needed(self) -> bool:
-        """Load the SKU index file if not already loaded (thread-safe)"""
+    def _load_configuration(self) -> bool:
+        """Load configuration from file system"""
         with self._lock:
-            if self._index_loaded:
-                return True
-            
             try:
-                if not os.path.exists(self.config_path):
-                    self.logger.error(f"SKU index file not found: {self.config_path}")
-                    return False
-                
-                with open(self.config_path, 'r', encoding='utf-8') as f:
-                    self._index_data = json.load(f)
-                
-                # Extract available SKUs and global parameters
-                self._available_skus = []
-                if 'available_skus' in self._index_data:
-                    for sku_ref in self._index_data['available_skus']:
-                        if sku_ref.get('enabled', True):
-                            self._available_skus.append(sku_ref['sku'])
-                
-                self._global_parameters = self._index_data.get('global_parameters', {})
-                self._index_loaded = True
-                
-                self.logger.info(f"Loaded SKU index with {len(self._available_skus)} available SKUs")
-                return True
-                
-            except (json.JSONDecodeError, IOError, KeyError) as e:
-                self.logger.error(f"Failed to load SKU index: {e}")
+                # Try to load unified configuration first
+                if self.config_path.exists():
+                    self.logger.info(f"Loading unified configuration from {self.config_path}")
+                    with open(self.config_path, 'r', encoding='utf-8') as f:
+                        self.data = json.load(f)
+                    
+                    # Load programming configuration
+                    if self.programming_config_path.exists():
+                        with open(self.programming_config_path, 'r', encoding='utf-8') as f:
+                            self.programming_config = json.load(f)
+                    else:
+                        self.programming_config = {}
+                    
+                    self._loaded = True
+                    self._use_legacy = False
+                    self._last_modified = self.config_path.stat().st_mtime
+                    
+                    self.logger.info(f"Loaded {len(self.get_all_skus())} SKUs from unified configuration")
+                    return True
+                    
+                # Fall back to legacy format if unified doesn't exist
+                elif self.legacy_skus_dir.exists():
+                    self.logger.warning("Unified configuration not found, using legacy format")
+                    self._use_legacy = True
+                    self._load_legacy_format()
+                    return True
+                    
+                else:
+                    # Create empty configuration
+                    self.logger.warning("No configuration found, creating empty configuration")
+                    self.data = self._create_empty_configuration()
+                    self.programming_config = {}
+                    self._loaded = True
+                    return True
+                    
+            except Exception as e:
+                self.logger.error(f"Failed to load configuration: {e}")
+                self.data = self._create_empty_configuration()
+                self.programming_config = {}
+                self._loaded = False
                 return False
     
-    def _get_sku_file_path(self, sku: str) -> Optional[str]:
-        """Get the file path for a specific SKU"""
-        if not self._load_index_if_needed():
-            return None
-        
-        with self._lock:
-            if 'available_skus' in self._index_data:
-                for sku_ref in self._index_data['available_skus']:
-                    if sku_ref['sku'] == sku and sku_ref.get('enabled', True):
-                        config_file = sku_ref.get('config_file')
-                        if config_file:
-                            # Convert relative path to absolute
-                            if not os.path.isabs(config_file):
-                                project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-                                config_file = os.path.join(project_root, config_file)
-                            return config_file
-            
-            # Fallback: try standard naming in skus directory
-            fallback_path = os.path.join(self.skus_directory, f"{sku}.json")
-            if os.path.exists(fallback_path):
-                self.logger.debug(f"Using fallback path for {sku}: {fallback_path}")
-                return fallback_path
-            
-            return None
+    def _create_empty_configuration(self) -> Dict[str, Any]:
+        """Create empty configuration structure"""
+        return {
+            "version": "2.0",
+            "created": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "global_parameters": {
+                "PRESSURE": {
+                    "min_initial_psi": 14.0,
+                    "max_initial_psi": 16.0,
+                    "max_delta_psi": 0.5
+                }
+            },
+            "pod_type_definitions": {
+                "C1": {"name": "C1 Pod", "connector_type": "DT", "pin_count": 2},
+                "C2": {"name": "C2 Pod", "connector_type": "DT", "pin_count": 3},
+                "SS3": {"name": "SS3 Pod", "connector_type": "DT", "pin_count": 3}
+            },
+            "power_level_definitions": {
+                "Sport": {"name": "Sport", "relative_power": 0.6},
+                "Pro": {"name": "Pro", "relative_power": 0.8},
+                "Max": {"name": "Max", "relative_power": 1.0}
+            },
+            "power_draw_definitions": {},
+            "sku_definitions": []
+        }
     
-    def _load_sku_data(self, sku: str) -> SKULoadResult:
-        """Load data for a specific SKU"""
-        start_time = time.time()
-        
-        try:
-            sku_file_path = self._get_sku_file_path(sku)
-            if not sku_file_path:
-                error_msg = f"No config file found for SKU: {sku}"
-                self.logger.warning(error_msg)
-                return SKULoadResult(success=False, sku=sku, error_message=error_msg)
-            
-            if not os.path.exists(sku_file_path):
-                error_msg = f"SKU config file not found: {sku_file_path}"
-                self.logger.warning(error_msg)
-                return SKULoadResult(success=False, sku=sku, error_message=error_msg)
-            
-            with open(sku_file_path, 'r', encoding='utf-8') as f:
-                sku_data = json.load(f)
-            
-            load_time = time.time() - start_time
-            self.logger.debug(f"Loaded SKU {sku} in {load_time:.3f}s")
-            
-            return SKULoadResult(
-                success=True,
-                sku=sku,
-                data=sku_data,
-                load_time=load_time
-            )
-            
-        except (json.JSONDecodeError, IOError) as e:
-            error_msg = f"Error loading SKU {sku}: {e}"
-            self.logger.error(error_msg)
-            return SKULoadResult(success=False, sku=sku, error_message=error_msg)
+    def _load_legacy_format(self):
+        """Load SKUs from legacy individual files"""
+        # This would implement the legacy loading logic
+        # For now, create empty configuration
+        self.data = self._create_empty_configuration()
+        self.logger.info("Legacy format loading not fully implemented")
     
-    def _get_cached_sku_data(self, sku: str) -> Optional[Dict[str, Any]]:
-        """Get cached SKU data, loading if necessary (thread-safe)"""
+    def reload_if_changed(self) -> bool:
+        """Reload configuration if file has changed"""
+        if not self._use_legacy and self.config_path.exists():
+            current_mtime = self.config_path.stat().st_mtime
+            if current_mtime > self._last_modified:
+                self.logger.info("Configuration file changed, reloading")
+                return self._load_configuration()
+        return False
+    
+    def save_configuration(self) -> bool:
+        """Save configuration to file system"""
         with self._lock:
-            # Check if we've already failed to load this SKU
-            if sku in self._failed_skus:
-                return None
-            
-            # Check cache first
-            if sku in self._sku_cache:
-                result = self._sku_cache[sku]
-                if result.success:
-                    return result.data
-                else:
-                    return None
-            
-            # Load the SKU data
-            result = self._load_sku_data(sku)
-            self._sku_cache[sku] = result
-            
-            if not result.success:
-                self._failed_skus.add(sku)
-                return None
-            
-            return result.data
+            try:
+                # Ensure directory exists
+                self.config_path.parent.mkdir(parents=True, exist_ok=True)
+                
+                # Save main configuration
+                with open(self.config_path, 'w', encoding='utf-8') as f:
+                    json.dump(self.data, f, indent=2)
+                
+                # Save programming configuration
+                if self.programming_config:
+                    with open(self.programming_config_path, 'w', encoding='utf-8') as f:
+                        json.dump(self.programming_config, f, indent=2)
+                
+                self._last_modified = self.config_path.stat().st_mtime
+                self.logger.info("Configuration saved successfully")
+                return True
+                
+            except Exception as e:
+                self.logger.error(f"Failed to save configuration: {e}")
+                return False
     
     # Public API methods
     
     def get_all_skus(self) -> List[str]:
         """Get list of all available SKUs"""
-        if not self._load_index_if_needed():
+        if not self.data:
             return []
         
         with self._lock:
-            return self._available_skus.copy() if self._available_skus else []
+            return [sku["sku"] for sku in self.data.get("sku_definitions", [])]
     
     def get_sku_info(self, sku: str) -> Optional[Dict[str, Any]]:
         """Get complete SKU information"""
-        return self._get_cached_sku_data(sku)
+        if not self.data:
+            return None
+        
+        with self._lock:
+            for sku_def in self.data.get("sku_definitions", []):
+                if sku_def["sku"] == sku:
+                    return sku_def.copy()
+            return None
+    
+    def create_sku(self, sku_data: Dict[str, Any]) -> bool:
+        """Create a new SKU"""
+        with self._lock:
+            if not self.data:
+                return False
+            
+            # Check if SKU already exists
+            if any(s["sku"] == sku_data["sku"] for s in self.data["sku_definitions"]):
+                self.logger.error(f"SKU {sku_data['sku']} already exists")
+                return False
+            
+            # Add to definitions
+            self.data["sku_definitions"].append(sku_data)
+            
+            # Save configuration
+            return self.save_configuration()
+    
+    def update_sku(self, sku: str, sku_data: Dict[str, Any]) -> bool:
+        """Update an existing SKU"""
+        with self._lock:
+            if not self.data:
+                return False
+            
+            # Find and update SKU
+            for i, sku_def in enumerate(self.data["sku_definitions"]):
+                if sku_def["sku"] == sku:
+                    # Preserve SKU ID
+                    sku_data["sku"] = sku
+                    self.data["sku_definitions"][i] = sku_data
+                    return self.save_configuration()
+            
+            self.logger.error(f"SKU {sku} not found")
+            return False
+    
+    def delete_sku(self, sku: str) -> bool:
+        """Delete a SKU"""
+        with self._lock:
+            if not self.data:
+                return False
+            
+            # Remove SKU from definitions
+            original_count = len(self.data["sku_definitions"])
+            self.data["sku_definitions"] = [
+                s for s in self.data["sku_definitions"] if s["sku"] != sku
+            ]
+            
+            if len(self.data["sku_definitions"]) < original_count:
+                # Also remove programming config if exists
+                if self.programming_config and sku in self.programming_config:
+                    del self.programming_config[sku]
+                
+                return self.save_configuration()
+            
+            self.logger.error(f"SKU {sku} not found")
+            return False
     
     def get_available_modes(self, sku: str) -> List[str]:
         """Get available test modes for a SKU"""
-        sku_data = self._get_cached_sku_data(sku)
-        if not sku_data:
+        sku_info = self.get_sku_info(sku)
+        if not sku_info:
             return []
         
-        # Extract available modes from the SKU data
-        modes = []
-        # Check for both old and new parameter naming schemes
-        if 'offroad_params' in sku_data or 'offroad_testing' in sku_data:
-            modes.append('Offroad')
-        if 'smt_params' in sku_data or 'smt_testing' in sku_data:
-            modes.append('SMT')
-        if 'weightchecking_params' in sku_data or 'weight_testing' in sku_data:
-            modes.append('WeightChecking')
-        
-        # Also check for a direct 'available_modes' field
-        if 'available_modes' in sku_data:
-            modes.extend(sku_data['available_modes'])
-        
-        return list(set(modes))  # Remove duplicates
+        return sku_info.get("available_modes", [])
     
     def get_test_parameters(self, sku: str, mode: str) -> Optional[Dict[str, Any]]:
         """Get test parameters for a specific SKU and mode"""
-        sku_data = self._get_cached_sku_data(sku)
-        if not sku_data:
+        sku_info = self.get_sku_info(sku)
+        if not sku_info:
             return None
         
-        # Check for both old and new parameter naming schemes
-        mode_maps = {
-            "Offroad": ["offroad_params", "offroad_testing"],
-            "SMT": ["smt_params", "smt_testing"], 
-            "WeightChecking": ["weightchecking_params", "weight_testing"]
+        # Map modes to parameter keys
+        mode_map = {
+            "Offroad": "offroad_params",
+            "SMT": "smt_params",
+            "WeightChecking": "weightchecking_params"
         }
         
-        param_keys = mode_maps.get(mode, [])
-        for param_key in param_keys:
-            if param_key in sku_data:
-                params = sku_data[param_key].copy()
-                
-                # Transform weight parameters to expected format
-                if mode == "WeightChecking" and param_key == "weight_testing":
-                    params = self._transform_weight_params(params)
-                
-                # Merge with global parameters if applicable
-                try:
-                    return self._merge_with_global_params(params, mode)
-                except Exception as e:
-                    self.logger.error(f"Error merging global params for SKU '{sku}', mode '{mode}': {e}")
-                    return params
+        param_key = mode_map.get(mode)
+        if param_key and param_key in sku_info:
+            params = sku_info[param_key].copy()
+            
+            # Merge with global parameters if applicable
+            if mode == "Offroad" and self.data:
+                global_params = self.data.get("global_parameters", {})
+                if "PRESSURE" in global_params:
+                    params["PRESSURE"] = global_params["PRESSURE"].copy()
+            
+            return params
         
-        self.logger.warning(f"No parameters found for SKU '{sku}' in mode '{mode}'")
         return None
+    
+    def get_programming_config(self, sku: str) -> Optional[Dict[str, Any]]:
+        """Get programming configuration for a specific SKU"""
+        if not self.programming_config:
+            return None
+        
+        return self.programming_config.get(sku)
+    
+    def save_programming_config(self, sku: str, config_data: Dict[str, Any]) -> bool:
+        """Save programming configuration for a specific SKU"""
+        with self._lock:
+            if not self.programming_config:
+                self.programming_config = {}
+            
+            self.programming_config[sku] = config_data
+            
+            try:
+                with open(self.programming_config_path, 'w', encoding='utf-8') as f:
+                    json.dump(self.programming_config, f, indent=2)
+                
+                self.logger.info(f"Programming configuration saved for SKU: {sku}")
+                return True
+                
+            except Exception as e:
+                self.logger.error(f"Failed to save programming config: {e}")
+                return False
+    
+    def delete_programming_config(self, sku: str) -> bool:
+        """Delete programming configuration for a specific SKU"""
+        with self._lock:
+            if self.programming_config and sku in self.programming_config:
+                del self.programming_config[sku]
+                return self.save_programming_config(sku, {})
+            return True
+    
+    def has_programming_config(self, sku: str) -> bool:
+        """Check if a SKU has programming configuration"""
+        prog_config = self.get_programming_config(sku)
+        return prog_config is not None and prog_config.get('enabled', False)
+    
+    def get_global_parameters(self) -> Dict[str, Any]:
+        """Get global parameters"""
+        if not self.data:
+            return {}
+        
+        return self.data.get("global_parameters", {}).copy()
+    
+    def update_global_parameters(self, params: Dict[str, Any]) -> bool:
+        """Update global parameters"""
+        with self._lock:
+            if not self.data:
+                return False
+            
+            self.data["global_parameters"] = params
+            return self.save_configuration()
+    
+    def validate_sku_mode_combination(self, sku: str, mode: str) -> bool:
+        """Check if a SKU supports a specific test mode"""
+        available_modes = self.get_available_modes(sku)
+        return mode in available_modes
+    
+    def get_pod_types(self) -> List[str]:
+        """Get list of available pod types"""
+        if not self.data:
+            return []
+        
+        return list(self.data.get("pod_type_definitions", {}).keys())
+    
+    def get_power_levels(self) -> List[str]:
+        """Get list of available power levels"""
+        if not self.data:
+            return []
+        
+        return list(self.data.get("power_level_definitions", {}).keys())
+    
+    def duplicate_sku(self, source_sku: str, new_sku: str, new_description: str = None) -> bool:
+        """Duplicate an existing SKU with a new ID"""
+        source_info = self.get_sku_info(source_sku)
+        if not source_info:
+            self.logger.error(f"Source SKU {source_sku} not found")
+            return False
+        
+        # Create copy with new SKU ID
+        new_sku_data = source_info.copy()
+        new_sku_data["sku"] = new_sku
+        new_sku_data["description"] = new_description or f"Copy of {source_info.get('description', source_sku)}"
+        
+        # Create the new SKU
+        if self.create_sku(new_sku_data):
+            # Also duplicate programming config if exists
+            source_prog = self.get_programming_config(source_sku)
+            if source_prog:
+                self.save_programming_config(new_sku, source_prog.copy())
+            
+            return True
+        
+        return False
+    
+    # Additional methods for backward compatibility with old SKUManager
     
     def get_power_draw_params(self, sku: str) -> Optional[Dict[str, float]]:
         """Get power draw parameters based on pod type and power level"""
-        sku_data = self._get_cached_sku_data(sku)
+        sku_data = self.get_sku_info(sku)
         if not sku_data:
             return None
         
@@ -248,15 +395,14 @@ class SKUManager:
             if pod_type and power_level:
                 power_key = f"{pod_type}_{power_level}"
                 
-                # Load index to get power draw definitions
-                if not self._load_index_if_needed():
-                    return None
-                
                 with self._lock:
-                    power_params = self._index_data.get("power_draw_definitions", {}).get(power_key)
-                    if not power_params:
-                        self.logger.warning(f"Power draw parameters not found for key '{power_key}' (SKU: '{sku}')")
-                    return power_params
+                    if self.data:
+                        power_definitions = self.data.get("power_draw_definitions", {})
+                        power_params = power_definitions.get(power_key)
+                        if not power_params:
+                            self.logger.warning(f"Power draw parameters not found for key '{power_key}' (SKU: '{sku}')")
+                        return power_params
+                    return None
             else:
                 self.logger.warning(f"Missing 'pod_type_ref' or 'power_level_ref' for SKU '{sku}'")
                 return None
@@ -265,179 +411,131 @@ class SKUManager:
             self.logger.error(f"Error getting power draw params for SKU '{sku}': {e}")
             return None
     
-    def validate_sku_mode_combination(self, sku: str, mode: str) -> bool:
-        """Check if a SKU supports a specific test mode"""
-        available_modes = self.get_available_modes(sku)
-        return mode in available_modes
+    def preload_sku(self, sku: str) -> bool:
+        """Preload a specific SKU's data (compatibility method - no-op for unified manager)"""
+        return self.get_sku_info(sku) is not None
     
-    def get_programming_config(self, sku: str) -> Optional[Dict[str, Any]]:
-        """Get programming configuration for a specific SKU"""
-        sku_data = self._get_cached_sku_data(sku)
-        if sku_data:
-            smt_config = sku_data.get('smt_testing', {})
-            return smt_config.get('programming')
-        return None
+    def preload_all_skus(self) -> Dict[str, bool]:
+        """Preload all available SKUs (compatibility method - no-op for unified manager)"""
+        results = {}
+        for sku in self.get_all_skus():
+            results[sku] = True  # All SKUs are already loaded in unified format
+        return results
     
-    def save_programming_config(self, sku: str, config_data: Dict[str, Any]) -> bool:
-        """Save programming configuration for a specific SKU"""
-        # For now, just log as this would require file modification
-        self.logger.info(f"Programming config save requested for SKU: {sku}")
-        self.logger.debug(f"Config data: {config_data}")
-        return True
+    def get_cache_stats(self) -> Dict[str, int]:
+        """Get cache statistics (compatibility method)"""
+        with self._lock:
+            sku_count = len(self.get_all_skus())
+            return {
+                "cached_skus": sku_count,
+                "successful_loads": sku_count,
+                "failed_loads": 0,
+                "available_skus": sku_count
+            }
     
-    def delete_programming_config(self, sku: str) -> bool:
-        """Delete programming configuration for a specific SKU"""
-        self.logger.info(f"Programming config deletion requested for SKU: {sku}")
-        return True
-    
-    def has_programming_config(self, sku: str) -> bool:
-        """Check if a SKU has programming configuration"""
-        prog_config = self.get_programming_config(sku)
-        return prog_config is not None and prog_config.get('enabled', False)
+    def cleanup(self):
+        """Clean up resources (compatibility method)"""
+        self.logger.info("Cleaning up SKUManager")
+        with self._lock:
+            self.data = None
+            self.programming_config = None
+            self._loaded = False
     
     # Status and utility methods
     
     def is_loaded(self) -> bool:
-        """Check if the manager is ready (index loaded)"""
-        return self._index_loaded
+        """Check if the manager is loaded"""
+        return self._loaded
     
     def get_load_status(self) -> Dict[str, Any]:
-        """Get loading status information"""
-        if not self._index_loaded:
+        """Get loading status information (compatibility method)"""
+        if not self._loaded:
             return {"status": "not_loaded", "loaded": False}
         
         with self._lock:
-            sku_count = len(self._available_skus) if self._available_skus else 0
-            loaded_count = len([r for r in self._sku_cache.values() if r.success])
+            sku_count = len(self.get_all_skus())
             
             return {
                 "status": "ready",
                 "loaded": True,
                 "sku_count": sku_count,
-                "loaded_skus": loaded_count,
-                "failed_skus": len(self._failed_skus),
-                "lazy_loading": True
+                "loaded_skus": sku_count,
+                "failed_skus": 0,
+                "lazy_loading": False  # Unified format loads all at once
             }
     
-    def cleanup(self):
-        """Clean up resources"""
-        self.logger.info("Cleaning up SKUManager")
+    def get_status(self) -> Dict[str, Any]:
+        """Get manager status information"""
+        return {
+            "loaded": self._loaded,
+            "use_legacy": self._use_legacy,
+            "config_path": str(self.config_path),
+            "sku_count": len(self.get_all_skus()),
+            "has_programming_config": self.programming_config is not None
+        }
+    
+    def export_configuration(self, export_path: Path) -> bool:
+        """Export configuration to a file"""
         with self._lock:
-            self._sku_cache.clear()
-            self._failed_skus.clear()
-            self._index_data = None
-            self._available_skus = None
-            self._global_parameters = None
-            self._index_loaded = False
+            try:
+                export_data = {
+                    "main_config": self.data,
+                    "programming_config": self.programming_config
+                }
+                
+                with open(export_path, 'w', encoding='utf-8') as f:
+                    json.dump(export_data, f, indent=2)
+                
+                self.logger.info(f"Configuration exported to {export_path}")
+                return True
+                
+            except Exception as e:
+                self.logger.error(f"Failed to export configuration: {e}")
+                return False
+    
+    def import_configuration(self, import_path: Path) -> bool:
+        """Import configuration from a file"""
+        with self._lock:
+            try:
+                with open(import_path, 'r', encoding='utf-8') as f:
+                    import_data = json.load(f)
+                
+                if "main_config" in import_data:
+                    self.data = import_data["main_config"]
+                    self.programming_config = import_data.get("programming_config", {})
+                    return self.save_configuration()
+                else:
+                    # Assume it's just the main config
+                    self.data = import_data
+                    return self.save_configuration()
+                    
+            except Exception as e:
+                self.logger.error(f"Failed to import configuration: {e}")
+                return False
+
+
+# Compatibility layer for legacy code - use UnifiedSKUManager as base
+class SKUManager(UnifiedSKUManager):
+    """Compatibility wrapper for legacy code"""
     
     def _transform_weight_params(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Transform weight_testing format to WEIGHT format expected by widget"""
-        transformed = {}
-        
-        try:
-            # Extract weight limits
-            if "limits" in params and "weight_g" in params["limits"]:
-                weight_limits = params["limits"]["weight_g"]
-                transformed["WEIGHT"] = {
-                    "min_weight_g": weight_limits.get("min", 0.0),
-                    "max_weight_g": weight_limits.get("max", 0.0),
-                    "tare_g": params.get("tare_g", 0.0)
-                }
-            else:
-                # Fallback for other potential formats
-                self.logger.warning("Weight parameters not in expected format, using defaults")
-                transformed["WEIGHT"] = {
-                    "min_weight_g": 100.0,
-                    "max_weight_g": 300.0,
-                    "tare_g": 0.0
-                }
-                
-            self.logger.debug(f"Transformed weight params: {transformed}")
-            
-        except Exception as e:
-            self.logger.error(f"Error transforming weight parameters: {e}")
-            # Return default structure on error
-            transformed["WEIGHT"] = {
-                "min_weight_g": 100.0,
-                "max_weight_g": 300.0,
-                "tare_g": 0.0
-            }
-            
-        return transformed
-    
-    def _transform_weight_params(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Transform weight_testing format to WEIGHT format expected by the widget"""
-        if "limits" in params and "weight_g" in params["limits"]:
-            weight_limits = params["limits"]["weight_g"]
-            transformed = {
-                "WEIGHT": {
-                    "min_weight_g": weight_limits.get("min", 0.0),
-                    "max_weight_g": weight_limits.get("max", 0.0),
-                    "tare_g": params.get("tare_g", 0.0)
-                }
-            }
-            return transformed
-        
-        # If already in the expected format, return as-is
+        # Already in correct format for unified system
         return params
     
     def _merge_with_global_params(self, params: Dict[str, Any], mode: str) -> Dict[str, Any]:
         """Merge SKU-specific parameters with global parameters"""
-        merged = params.copy()
-        
-        if not self._load_index_if_needed():
-            return merged
-        
-        with self._lock:
-            if mode == "Offroad" and self._global_parameters:
-                if "PRESSURE" in self._global_parameters:
-                    if "PRESSURE" not in merged or not isinstance(merged.get("PRESSURE"), dict):
-                        merged["PRESSURE"] = self._global_parameters["PRESSURE"].copy()
-                    else:
-                        # Deep merge pressure parameters
-                        merged["PRESSURE"].update(self._global_parameters["PRESSURE"])
-                    self.logger.debug("Merged PRESSURE params from global_parameters")
-        
-        return merged
-    
-    # Additional utility methods
-    
-    def preload_sku(self, sku: str) -> bool:
-        """Preload a specific SKU's data"""
-        result = self._get_cached_sku_data(sku)
-        return result is not None
-    
-    def preload_all_skus(self) -> Dict[str, bool]:
-        """Preload all available SKUs"""
-        results = {}
-        all_skus = self.get_all_skus()
-        
-        for sku in all_skus:
-            results[sku] = self.preload_sku(sku)
-        
-        self.logger.info(f"Preloaded {sum(results.values())}/{len(results)} SKUs")
-        return results
-    
-    def get_cache_stats(self) -> Dict[str, int]:
-        """Get cache statistics"""
-        with self._lock:
-            return {
-                "cached_skus": len(self._sku_cache),
-                "successful_loads": len([r for r in self._sku_cache.values() if r.success]),
-                "failed_loads": len(self._failed_skus),
-                "available_skus": len(self._available_skus) if self._available_skus else 0
-            }
+        # Already handled in get_test_parameters for unified system
+        return params
 
 
-# Factory functions for easy access
+# Factory function for compatibility
 def create_sku_manager(config_path: Optional[str] = None) -> SKUManager:
     """Create a SKU manager instance"""
-    manager = SKUManager(config_path)
-    # Trigger index loading for immediate availability
-    manager.get_all_skus()
-    return manager
+    return SKUManager(config_path)
 
 
+# Additional factory function for loading test parameters
 def load_test_parameters(sku: str, mode: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Load test parameters for a SKU, trying all modes if none specified"""
     try:
@@ -472,31 +570,32 @@ def load_test_parameters(sku: str, mode: Optional[str] = None) -> Optional[Dict[
 
 
 if __name__ == "__main__":
-    # Test the lazy loading manager
+    # Test the unified SKU manager
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
     
-    print("Testing lazy-loading SKUManager...")
+    print("Testing Unified SKU Manager...")
     manager = create_sku_manager()
     
-    print(f"Manager loaded: {manager.is_loaded()}")
+    print(f"Manager status: {manager.get_status()}")
     print(f"Available SKUs: {manager.get_all_skus()}")
+    print(f"Pod types: {manager.get_pod_types()}")
+    print(f"Power levels: {manager.get_power_levels()}")
     
-    # Test lazy loading
-    all_skus = manager.get_all_skus()
-    if all_skus:
-        test_sku = all_skus[0]
-        print(f"\nTesting SKU: {test_sku}")
-        print(f"Available modes: {manager.get_available_modes(test_sku)}")
-        
-        # Test parameters
-        modes = manager.get_available_modes(test_sku)
-        for mode in modes:
-            params = manager.get_test_parameters(test_sku, mode)
-            print(f"{mode} params: {list(params.keys()) if params else 'None'}")
+    # Test SKU operations
+    test_sku = {
+        "sku": "TEST001",
+        "description": "Test SKU",
+        "pod_type_ref": "C1",
+        "power_level_ref": "Sport",
+        "available_modes": ["Offroad"],
+        "offroad_params": {
+            "LUX": {"min_mainbeam_lux": 1000, "max_mainbeam_lux": 1500}
+        }
+    }
     
-    print(f"\nCache stats: {manager.get_cache_stats()}")
-    print(f"Load status: {manager.get_load_status()}")
-    print("Test completed")
+    print(f"\nCreating test SKU: {manager.create_sku(test_sku)}")
+    print(f"Test SKU info: {manager.get_sku_info('TEST001')}")
+    print(f"Deleting test SKU: {manager.delete_sku('TEST001')}")

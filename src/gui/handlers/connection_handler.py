@@ -3,15 +3,15 @@ import logging
 from typing import Dict, Any
 from PySide6.QtCore import QObject
 
-from src.utils.resource_manager import ResourceMixin
+from src.utils.thread_cleanup import ThreadCleanupMixin
 
 
-class ConnectionHandler(QObject, ResourceMixin):
+class ConnectionHandler(QObject, ThreadCleanupMixin):
     """Handles connection status management and updates"""
     
     def __init__(self, main_window):
         QObject.__init__(self)
-        ResourceMixin.__init__(self)
+        ThreadCleanupMixin.__init__(self)
         self.main_window = main_window
         self.logger = logging.getLogger(self.__class__.__name__)
     

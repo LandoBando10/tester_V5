@@ -12,7 +12,7 @@ from PySide6.QtCore import Signal, Qt, QTimer
 from PySide6.QtGui import QFont
 
 from src.hardware.scale_controller import ScaleController
-from src.utils.resource_manager import ResourceMixin
+from src.utils.thread_cleanup import ThreadCleanupMixin
 
 
 class AutoTestState(Enum):
@@ -115,7 +115,7 @@ class WeightRange(NamedTuple):
     tare: float = 0.0
 
 
-class WeightTestWidget(QWidget, ResourceMixin):
+class WeightTestWidget(QWidget, ThreadCleanupMixin):
     """Optimized weight testing widget with improved performance and maintainability."""
 
     # Signals
@@ -124,7 +124,7 @@ class WeightTestWidget(QWidget, ResourceMixin):
 
     def __init__(self, parent=None):
         QWidget.__init__(self, parent)
-        ResourceMixin.__init__(self)
+        ThreadCleanupMixin.__init__(self)
         
         self.config = WeightTestConfig()
         self.logger = logging.getLogger(self.__class__.__name__)

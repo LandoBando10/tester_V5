@@ -29,10 +29,10 @@ The system follows a clean, modular architecture with clear separation of concer
 - `WeightTest`: Precision weight validation using scale integration
 
 **Hardware Abstraction Layer**: Unified controller pattern in `src/hardware/`:
-- `ArduinoController`: Sensor readings and test execution with callback support
-- `SMTArduinoController`: Extended functionality for bed-of-nails fixture control
-- `ScaleController`: Weight measurement with stability detection
-- `SerialManager`: Thread-safe serial communication foundation
+- `arduino_controller.py`: Sensor readings and test execution with callback support
+- `smt_arduino_controller.py`: Simplified bed-of-nails fixture control (current architecture)
+- `scale_controller.py`: Weight measurement with stability detection
+- `serial_manager.py`: Thread-safe serial communication foundation
 
 **Asynchronous Configuration Management**: Modern data handling in `src/data/`:
 - `AsyncSKUManager`: Background loading with Qt signal integration
@@ -70,20 +70,24 @@ The system follows a clean, modular architecture with clear separation of concer
 ### 3.2 SMT (Surface Mount Technology) Mode
 **Purpose**: PCB testing and programming within bed-of-nails fixtures
 
+**Current Simplified Architecture**:
+The SMT system has been streamlined to focus on core functionality with a clean, maintainable design:
+
 **Workflow**:
 1. SKU selection with automatic programming configuration validation
 2. Test selection (Programming and/or Power validation)
-3. Multi-controller hardware setup (SMT Arduino + external programmers)
+3. Simple hardware setup (SMT Arduino controller)
 4. Automated test execution:
-   - Board-by-board programming with progress tracking
-   - Power circuit validation with current measurements
-5. Detailed results display with board-specific status reporting
+   - Individual relay testing with current measurements
+   - Programming support via external tools
+5. Real-time results display with board-specific status
 
-**Advanced Features**:
-- Multi-board programming support (STM8, PIC microcontrollers)
-- Intelligent fixture control via dedicated SMT Arduino
-- Power supply management (programming and test voltages)
-- Comprehensive programming result tracking
+**Simplified Features**:
+- Text-based Arduino communication protocol
+- Individual relay testing (eliminates buffer overflow risks)
+- Clean 5-component architecture for maintainability
+- Command throttling for reliable serial communication
+- Thread-safe GUI updates via Qt signals
 
 ### 3.3 Weight Checking Mode
 **Purpose**: Precision weight validation against specifications
@@ -290,18 +294,61 @@ src/
 - **Asynchronous Operations**: Non-blocking UI with background processing
 - **Consistent Patterns**: Unified interfaces across hardware controllers
 
-## 8. Future Roadmap
+## 8. Architecture Evolution: Phase 1 → Phase 2 Simplification
 
-### 8.1 Statistical Process Control (SPC)
+### 8.1 Migration Overview
+The SMT system underwent a significant architectural simplification to improve maintainability and reliability:
+
+**Phase 1 (Complex)**: Over-engineered approach with:
+- Binary framing protocol with STX/ETX markers
+- CRC-16 validation for message integrity  
+- Complex threading and command queues
+- Resource management overhead
+- Health monitoring and statistics
+- Command throttling mechanisms
+
+**Phase 2 (Simplified)**: Streamlined architecture focusing on:
+- Simple text-based communication protocol
+- Individual command execution (eliminates buffer overflow)
+- Clean 5-component separation of concerns
+- Minimal but effective command throttling
+- Thread-safe Qt signal-based GUI updates
+
+### 8.2 Technical Debt Cleanup
+The transition involved removing deprecated components while preserving the well-designed core architecture:
+
+**Removed Components**:
+- `src/protocols/binary_protocol.py` - Complex binary messaging
+- `src/protocols/framed_binary_protocol.py` - Frame encoding/decoding
+- `src/protocols/protocol_manager.py` - Protocol abstraction layer
+- Various test frameworks and verification scripts
+- Backup controller implementations
+
+**Preserved Architecture**:
+- `src/core/smt_controller.py` - Business logic controller
+- `src/core/smt_test.py` - Test orchestration and sequence management
+- `src/gui/handlers/smt_handler.py` - GUI event handling
+- `src/gui/workers/smt_worker.py` - Threading wrapper
+- `src/hardware/smt_arduino_controller.py` - Hardware communication
+
+### 8.3 Benefits of Simplification
+- **Reduced Complexity**: Easier to understand and maintain
+- **Better Reliability**: Fewer points of failure in communication
+- **Faster Development**: Simpler codebase allows quicker feature additions
+- **Clear Architecture**: Well-defined component responsibilities
+
+## 9. Future Roadmap
+
+### 9.1 Statistical Process Control (SPC)
 *Planned implementation for continuous process monitoring and quality control*
 
-### 8.2 Enhanced Results Management
+### 9.2 Enhanced Results Management
 *Development of comprehensive results logging and analysis capabilities*
 
-### 8.3 Configuration Migration Tools
+### 9.3 Configuration Migration Tools
 *Utilities for seamless transition between configuration formats*
 
-## 9. End Goal
+## 10. End Goal
 
 The Tester V5 platform provides a modern, maintainable, and scalable foundation for production testing that:
 
