@@ -51,7 +51,10 @@ class SMTHandler(QObject, ThreadCleanupMixin):
                 
                 # Clear buffers before test
                 self.logger.info("Clearing serial buffers before test")
-                arduino.serial.flush_buffers()
+                if hasattr(arduino, '_flush_buffers'):
+                    arduino._flush_buffers()
+                else:
+                    self.logger.warning("Arduino controller does not have _flush_buffers method")
                 
                 # Verify Arduino is responsive
                 if hasattr(arduino, 'verify_arduino_responsive'):
@@ -305,8 +308,14 @@ class SMTHandler(QObject, ThreadCleanupMixin):
             
             # PHASE 1: Always turn off relays after test (using individual commands)
             if hasattr(self.main_window, 'arduino_controller') and self.main_window.arduino_controller:
-                for relay in range(1, 9):  # Turn off relays 1-8
-                    self.main_window.arduino_controller.send_command(f"RELAY:{relay}:OFF")
+                arduino = self.main_window.arduino_controller
+                # Check if this is SMTArduinoController which uses all_relays_off
+                if hasattr(arduino, 'all_relays_off'):
+                    arduino.all_relays_off()
+                else:
+                    # Standard ArduinoController - send individual commands
+                    for relay in range(1, 9):  # Turn off relays 1-8
+                        arduino.send_command(f"RELAY:{relay}:OFF")
             
             # If test failed, add extra recovery time
             if not result.passed:

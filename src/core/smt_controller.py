@@ -32,8 +32,8 @@ class SMTController:
             # Clear any pending messages first
             self.arduino.serial.flush_buffers()
             
-            # Check connection
-            response = self.arduino.send_command("ID")
+            # Check connection - SMT Arduino uses "I" not "ID"
+            response = self.arduino.send_command("I")
             if not response:
                 logger.error("No response from Arduino")
                 return False
@@ -43,10 +43,10 @@ class SMTController:
             for attempt in range(max_attempts):
                 if "BUTTON:" in response:
                     logger.debug(f"Ignoring button message during init: {response}")
-                    response = self.arduino.send_command("ID")
+                    response = self.arduino.send_command("I")
                     if not response:
                         continue
-                elif "SMT_TESTER" in response or "DIODE_DYNAMICS" in response:
+                elif "SMT_SIMPLE_TESTER" in response or "SMT_TESTER" in response or "DIODE_DYNAMICS" in response:
                     break
             else:
                 logger.error(f"Arduino not running compatible firmware after {max_attempts} attempts. Last response: {response}")
@@ -85,5 +85,7 @@ class SMTController:
         return mapping.get('board') if mapping else None
     
     def all_lights_off(self):
-        """Turn off all relays using batch command"""
-        self.arduino.send_command("RELAY:ALL:OFF", timeout=0.05)
+        """Turn off all relays using SMT Arduino command"""
+        # SMT Arduino uses "X" command to turn off all relays
+        response = self.arduino.send_command("X", timeout=0.5)
+        return response == "OK:ALL_OFF"

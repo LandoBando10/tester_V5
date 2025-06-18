@@ -27,6 +27,7 @@ const int LED_PIN = LED_BUILTIN;
 
 // INA260 sensor
 Adafruit_INA260 ina260 = Adafruit_INA260();
+bool INA_OK = false;  // Global flag to track if sensor is available
 
 // Button state tracking
 bool lastButtonState = HIGH;
@@ -43,8 +44,8 @@ void setup() {
   Serial.begin(115200);
   
   // Wait for USB serial port to connect (needed for native USB boards)
-  while (!Serial && millis() < 3000) ;
-  delay(100); // Extra delay to ensure stable connection
+  unsigned long t0 = millis();
+  while (!Serial && (millis() - t0 < 5000)) { }
   
   // Initialize relay pins
   for (int i = 0; i < 8; i++) {
@@ -59,17 +60,17 @@ void setup() {
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, LOW);
   
-  // Initialize INA260
-  if (!ina260.begin()) {
-    Serial.println("ERROR:INA260_INIT_FAILED");
-    while (1) delay(10);
+  // Initialize INA260 (optional - don't block if missing)
+  INA_OK = ina260.begin();
+  if (!INA_OK) {
+    Serial.println("WARN:INA260_MISSING");
+  } else {
+    // Set INA260 to fastest conversion time for better performance
+    ina260.setMode(INA260_MODE_CONTINUOUS);
+    ina260.setCurrentConversionTime(INA260_TIME_140_us);
+    ina260.setVoltageConversionTime(INA260_TIME_140_us);
+    ina260.setAveragingCount(INA260_COUNT_1);
   }
-  
-  // Set INA260 to fastest conversion time for better performance
-  ina260.setMode(INA260_MODE_CONTINUOUS);
-  ina260.setCurrentConversionTime(INA260_TIME_140_us);
-  ina260.setVoltageConversionTime(INA260_TIME_140_us);
-  ina260.setAveragingCount(INA260_COUNT_1);
   
   Serial.println("SMT_SIMPLE_TESTER_READY");
 }
@@ -138,8 +139,8 @@ void measureRelay(int relayIndex) {
   float totalCurrent = 0;
   
   for (int i = 0; i < MEASUREMENT_SAMPLES; i++) {
-    totalVoltage += ina260.readBusVoltage();
-    totalCurrent += ina260.readCurrent();
+    totalVoltage += INA_OK ? ina260.readBusVoltage() : 0.0;
+    totalCurrent += INA_OK ? ina260.readCurrent() : 0.0;
     
     if (i < MEASUREMENT_SAMPLES - 1) {
       delay(SAMPLE_INTERVAL_MS);

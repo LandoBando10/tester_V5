@@ -1,6 +1,12 @@
 """
 SMT Arduino Controller - Simplified for Phase 2 Implementation
 
+*** Fixed for Arduino R4 Minima Compatibility (June 2025) ***
+- DTR/RTS must be set AFTER opening port for R4
+- Added permission error handling with fallback connection
+- Extended USB stabilization delays for R4
+- Improved buffer flush error handling
+
 Simplified version that removes:
 - Threading and queues
 - CRC validation
@@ -20,6 +26,7 @@ Keeps only:
 import time
 import logging
 import serial
+import threading
 from typing import Dict, List, Optional, Callable
 
 class SMTArduinoController:
@@ -35,6 +42,11 @@ class SMTArduinoController:
         # Button callback
         self.button_callback: Optional[Callable[[str], None]] = None
         
+        # Reading thread
+        self.is_reading = False
+        self._reading_thread = None
+        self._stop_reading = threading.Event()
+        
         # Simple retry and timeout settings
         self.command_timeout = 2.0
         self.max_retries = 3
@@ -42,6 +54,9 @@ class SMTArduinoController:
 
     def connect(self, port: str) -> bool:
         """Connect to Arduino on specified port"""
+        # First, try to release the port if it's stuck
+        self._attempt_port_release(port)
+        
         try:
             # First check if port exists and get its info
             import serial.tools.list_ports
@@ -61,18 +76,47 @@ class SMTArduinoController:
             else:
                 self.logger.warning(f"Port {port} not found in system ports list")
             
-            # Configure serial connection with DTR handling
+            # Configure serial connection (R4 Minima compatible)
             self.connection = serial.Serial()
             self.connection.port = port
             self.connection.baudrate = self.baud_rate
             self.connection.timeout = self.command_timeout
             self.connection.write_timeout = 1.0
-            self.connection.dtr = False  # Prevent auto-reset on some Arduino boards
-            self.connection.rts = False  # Also set RTS to be safe
             
-            # Open the connection
-            self.connection.open()
-            self.port = port
+            # For Arduino R4 Minima: Must open BEFORE setting DTR/RTS
+            try:
+                self.connection.open()
+                self.port = port
+                self.logger.info("Port opened successfully")
+                
+                # NOW set DTR/RTS after opening (R4 Minima requirement)
+                try:
+                    self.connection.dtr = True  # Arduino needs DTR HIGH to know we're connected!
+                    self.connection.rts = False
+                    self.logger.debug("DTR set to True, RTS to False after opening")
+                except Exception as dtr_error:
+                    self.logger.debug(f"Could not set DTR/RTS (may not be supported): {dtr_error}")
+                    # This is okay - some devices don't support DTR/RTS control
+                    
+            except serial.SerialException as e:
+                if "PermissionError" in str(e) or "Access is denied" in str(e):
+                    self.logger.warning("Permission error - trying alternative connection method for R4...")
+                    
+                    # Try direct connection without DTR/RTS control
+                    try:
+                        self.connection = serial.Serial(
+                            port=port,
+                            baudrate=self.baud_rate,
+                            timeout=self.command_timeout,
+                            write_timeout=1.0
+                        )
+                        self.port = port
+                        self.logger.info("Alternative connection method successful")
+                    except Exception as alt_error:
+                        self.logger.error(f"Alternative connection also failed: {alt_error}")
+                        raise
+                else:
+                    raise
             
             # Log actual serial settings
             self.logger.info(f"Serial port settings:")
@@ -84,8 +128,9 @@ class SMTArduinoController:
             self.logger.info(f"  DTR: {self.connection.dtr}")
             self.logger.info(f"  RTS: {self.connection.rts}")
             
-            # Try without DTR reset first to see if Arduino is already running
-            self.logger.info("Attempting connection without DTR reset...")
+            # Arduino R4 Minima needs time to stabilize USB connection
+            self.logger.info("Waiting for Arduino R4 USB stabilization...")
+            time.sleep(1.0)  # R4 needs longer delay
             
             # Clear any existing data
             self._flush_buffers()
@@ -107,14 +152,16 @@ class SMTArduinoController:
             
             # Don't clear buffers yet - we want to catch any error messages
             
-            # Read and log any startup messages with longer timeout
+            # Read and log any startup messages with shorter timeout
             self.logger.info("Listening for Arduino startup messages...")
-            startup_deadline = time.time() + 3.0  # Wait up to 3 seconds
+            startup_deadline = time.time() + 0.5  # Reduced from 3 seconds to 0.5
             startup_messages = []
             error_detected = False
+            no_data_time = 0
             
             while time.time() < startup_deadline:
                 if self.connection.in_waiting > 0:
+                    no_data_time = 0  # Reset no data counter
                     try:
                         # Read any available data
                         data = self.connection.readline()
@@ -136,6 +183,11 @@ class SMTArduinoController:
                         self.logger.error(f"Error reading startup message: {e}")
                 else:
                     time.sleep(0.05)
+                    no_data_time += 0.05
+                    # If no data for 200ms, assume no startup messages
+                    if no_data_time > 0.2:
+                        self.logger.debug("No startup messages detected, continuing...")
+                        break
             
             if error_detected:
                 self.logger.error("Arduino firmware detected hardware error (INA260 sensor not found)")
@@ -173,6 +225,9 @@ class SMTArduinoController:
 
     def disconnect(self):
         """Disconnect from Arduino"""
+        # Stop reading thread first
+        self.stop_reading()
+        
         if self.connection and self.connection.is_open:
             try:
                 # Turn off all relays before disconnecting
@@ -185,15 +240,41 @@ class SMTArduinoController:
         self.connection = None
         self.port = None
 
+    def _attempt_port_release(self, port: str):
+        """Try to release a potentially stuck port"""
+        try:
+            # Quick open/close to release any stuck handles
+            for _ in range(3):
+                try:
+                    temp_ser = serial.Serial()
+                    temp_ser.port = port
+                    temp_ser.baudrate = 9600
+                    temp_ser.timeout = 0.01
+                    temp_ser.open()
+                    temp_ser.close()
+                    time.sleep(0.05)
+                except:
+                    pass
+            
+            # Give Windows time to release the port
+            time.sleep(0.2)
+            
+        except Exception as e:
+            self.logger.debug(f"Port release attempt: {e}")
+
     def is_connected(self) -> bool:
         """Check if Arduino is connected"""
         return self.connection is not None and self.connection.is_open
 
     def _flush_buffers(self):
-        """Clear serial buffers"""
-        if self.connection:
-            self.connection.reset_input_buffer()
-            self.connection.reset_output_buffer()
+        """Clear serial buffers (with R4 Minima compatibility)"""
+        if self.connection and self.connection.is_open:
+            try:
+                self.connection.reset_input_buffer()
+                self.connection.reset_output_buffer()
+            except Exception as e:
+                # R4 Minima might not support buffer operations in all states
+                self.logger.debug(f"Could not flush buffers (R4 limitation): {e}")
 
     def _test_communication(self) -> bool:
         """Test basic communication with Arduino"""
@@ -208,6 +289,78 @@ class SMTArduinoController:
             time.sleep(0.5)
         self.logger.error("All communication test attempts failed")
         return False
+
+    def test_communication(self) -> bool:
+        """Public method to test communication with Arduino"""
+        return self._test_communication()
+
+    def get_firmware_type(self) -> str:
+        """Get the firmware type of connected Arduino"""
+        try:
+            response = self._send_command("I")
+            if response:
+                response_upper = response.upper()
+                if "SMT_SIMPLE_TESTER" in response_upper or "SMT_TESTER" in response_upper or "SMT" in response_upper:
+                    return "SMT"
+                elif "OFFROAD" in response_upper:
+                    return "OFFROAD"
+            return "UNKNOWN"
+        except Exception as e:
+            self.logger.error(f"Error getting firmware type: {e}")
+            return "UNKNOWN"
+
+    def configure_sensors(self, sensor_configs) -> bool:
+        """Configure sensors - SMT Arduino doesn't need sensor configuration"""
+        # SMT Arduino has fixed INA260 sensor, no configuration needed
+        self.logger.info("SMT Arduino uses fixed INA260 sensor configuration")
+        return True
+
+    def start_reading(self):
+        """Start the background reading thread for button events"""
+        if self.is_reading:
+            self.logger.warning("Reading thread already running")
+            return
+            
+        self._stop_reading.clear()
+        self.is_reading = True
+        self._reading_thread = threading.Thread(target=self._reading_loop)
+        self._reading_thread.daemon = True
+        self._reading_thread.start()
+        self.logger.info("Started reading thread for button events")
+
+    def stop_reading(self):
+        """Stop the background reading thread"""
+        if not self.is_reading:
+            return
+            
+        self.logger.info("Stopping reading thread...")
+        self._stop_reading.set()
+        self.is_reading = False
+        
+        if self._reading_thread and self._reading_thread.is_alive():
+            self._reading_thread.join(timeout=2.0)
+            
+        self.logger.info("Reading thread stopped")
+
+    def _reading_loop(self):
+        """Background thread to read button events"""
+        self.logger.info("Reading loop started")
+        
+        while not self._stop_reading.is_set():
+            try:
+                if self.connection and self.connection.is_open and self.connection.in_waiting > 0:
+                    data = self.connection.readline()
+                    if data:
+                        message = data.decode('utf-8', errors='ignore').strip()
+                        if message.startswith("BUTTON:") and self.button_callback:
+                            self.logger.info(f"Button event: {message}")
+                            self.button_callback(message)
+            except Exception as e:
+                self.logger.error(f"Error in reading loop: {e}")
+                
+            time.sleep(0.01)  # Small delay to prevent CPU spinning
+        
+        self.logger.info("Reading loop ended")
 
     def _send_command(self, command: str, timeout: float = None) -> Optional[str]:
         """Send command to Arduino with retry logic"""
@@ -358,6 +511,23 @@ class SMTArduinoController:
     def set_button_callback(self, callback: Optional[Callable[[str], None]]):
         """Set callback for button events"""
         self.button_callback = callback
+    
+    # Compatibility methods for standard ArduinoController interface
+    @property
+    def serial(self):
+        """Compatibility property for code expecting 'serial' attribute"""
+        class SerialWrapper:
+            def __init__(self, controller):
+                self.controller = controller
+            
+            def flush_buffers(self):
+                self.controller._flush_buffers()
+        
+        return SerialWrapper(self)
+    
+    def send_command(self, command: str, timeout: float = None) -> Optional[str]:
+        """Public wrapper for _send_command to match ArduinoController interface"""
+        return self._send_command(command, timeout)
 
     def check_button_events(self):
         """Check for button events (should be called periodically)"""

@@ -52,15 +52,25 @@ class SerialManager(ThreadCleanupMixin):
                 if self.connection and self.connection.is_open:
                     self.disconnect()
 
-                self.connection = serial.Serial(
-                    port=port,
-                    baudrate=self.baud_rate,
-                    timeout=self.timeout,
-                    write_timeout=self.write_timeout,
-                    bytesize=serial.EIGHTBITS,
-                    parity=serial.PARITY_NONE,
-                    stopbits=serial.STOPBITS_ONE
-                )
+                # Try standard connection first
+                try:
+                    self.connection = serial.Serial(
+                        port=port,
+                        baudrate=self.baud_rate,
+                        timeout=self.timeout,
+                        write_timeout=self.write_timeout,
+                        bytesize=serial.EIGHTBITS,
+                        parity=serial.PARITY_NONE,
+                        stopbits=serial.STOPBITS_ONE
+                    )
+                except serial.SerialException as e:
+                    if "PermissionError" in str(e) or "Access is denied" in str(e):
+                        self.logger.warning("Permission error - may be Arduino R4, retrying...")
+                        time.sleep(1.0)  # Wait for port to be released
+                        # Try again with minimal settings
+                        self.connection = serial.Serial(port, self.baud_rate, timeout=self.timeout)
+                    else:
+                        raise
 
                 # Reduce or remove sleep after connection
                 # time.sleep(0.05)  # Remove or reduce to 0.01
