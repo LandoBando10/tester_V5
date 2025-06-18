@@ -90,10 +90,10 @@ def run_professional_gui_mode(args=None):
     """Run the GUI application with professional startup (splash screen and mode selection)"""
     logger = logging.getLogger(__name__)
     
-    # Check for SKU configuration file
+    # Check for SKU configuration directory
     skus_directory = Path('config/skus')
-    if not config_file.exists():
-        error_msg = f"SKU configuration file not found: {config_file}. Please ensure it exists."
+    if not skus_directory.exists():
+        error_msg = f"SKU configuration directory not found: {skus_directory}. Please ensure it exists."
         logger.critical(error_msg)
         try:
             from PySide6.QtWidgets import QApplication, QMessageBox
@@ -214,10 +214,10 @@ def run_gui_mode():
     """Run the GUI application in standard mode (direct to MainWindow)"""
     logger = logging.getLogger(__name__)
     
-    # Check for SKU configuration file
+    # Check for SKU configuration directory
     skus_directory = Path('config/skus')
-    if not config_file.exists():
-        error_msg = f"SKU configuration file not found: {config_file}. Please ensure it exists."
+    if not skus_directory.exists():
+        error_msg = f"SKU configuration directory not found: {skus_directory}. Please ensure it exists."
         logger.critical(error_msg)
         try:
             from PySide6.QtWidgets import QApplication, QMessageBox

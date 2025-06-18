@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QGroupBox,
 from PySide6.QtCore import Qt
 from src.hardware.serial_manager import SerialManager
 import logging
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -151,31 +152,158 @@ class ConnectionDialog(QDialog):
         logger.debug("ConnectionDialog UI setup complete.")
 
     def refresh_ports(self):
-        """Refresh available serial ports"""
+        """Refresh available serial ports and identify device types"""
         try:
-            logger.info("Refreshing serial ports.")
+            logger.info("Refreshing serial ports and identifying devices...")
             temp_serial = SerialManager()
             ports = temp_serial.get_available_ports()
 
-            # Update both combo boxes
+            # Get current selections (extract port names without device type)
             current_arduino = self.arduino_port_combo.currentText()
             current_scale = self.scale_port_combo.currentText()
+            
+            # Extract just the port name if it has device type
+            if ' (' in current_arduino:
+                current_arduino = current_arduino.split(' (')[0]
+            if ' (' in current_scale:
+                current_scale = current_scale.split(' (')[0]
 
+            # Identify device types for each port
+            port_info = self._identify_devices(ports)
+
+            # Create display strings with device types
+            arduino_items = []
+            scale_items = []
+            
+            for port in ports:
+                device_type = port_info.get(port, "Unknown")
+                display_name = f"{port} ({device_type})"
+                
+                # Add to appropriate lists based on device type
+                if device_type in ["SMT Arduino", "Offroad Arduino"]:
+                    arduino_items.append(display_name)
+                    scale_items.append(display_name)  # Also show in scale list as fallback
+                elif device_type == "Scale":
+                    scale_items.append(display_name)
+                    arduino_items.append(display_name)  # Also show in Arduino list as fallback
+                else:
+                    # Unknown devices go in both lists
+                    arduino_items.append(display_name)
+                    scale_items.append(display_name)
+
+            # Update combo boxes
             self.arduino_port_combo.clear()
-            self.arduino_port_combo.addItems(ports)
+            self.arduino_port_combo.addItems(arduino_items)
 
             self.scale_port_combo.clear()
-            self.scale_port_combo.addItems(ports)
+            self.scale_port_combo.addItems(scale_items)
 
             # Restore selections if still available
-            if current_arduino in ports:
-                self.arduino_port_combo.setCurrentText(current_arduino)
-            if current_scale in ports:
-                self.scale_port_combo.setCurrentText(current_scale)
-            logger.info(f"Ports refreshed. Found: {ports}")
+            for i in range(self.arduino_port_combo.count()):
+                if self.arduino_port_combo.itemText(i).startswith(current_arduino + " ("):
+                    self.arduino_port_combo.setCurrentIndex(i)
+                    break
+                    
+            for i in range(self.scale_port_combo.count()):
+                if self.scale_port_combo.itemText(i).startswith(current_scale + " ("):
+                    self.scale_port_combo.setCurrentIndex(i)
+                    break
+                    
+            logger.info(f"Ports refreshed. Found: {port_info}")
         except Exception as e:
             logger.error(f"Could not refresh ports: {e}", exc_info=True)
             QMessageBox.warning(self, "Error", f"Could not refresh ports: {e}")
+
+    def _identify_devices(self, ports: list) -> dict:
+        """Identify device type for each port"""
+        port_info = {}
+        
+        for port in ports:
+            try:
+                # Skip ports that are already connected
+                if (self.arduino_connected and self.arduino_port == port) or \
+                   (self.scale_connected and self.scale_port == port):
+                    # Mark as already connected
+                    if self.arduino_connected and self.arduino_port == port:
+                        port_info[port] = "Connected Arduino"
+                    else:
+                        port_info[port] = "Connected Scale"
+                    continue
+                
+                # Try to identify the device
+                device_type = self._probe_port(port)
+                port_info[port] = device_type
+                
+            except Exception as e:
+                logger.debug(f"Error identifying device on {port}: {e}")
+                port_info[port] = "Unknown"
+        
+        return port_info
+    
+    def _probe_port(self, port: str) -> str:
+        """Probe a single port to identify device type"""
+        device_type = "Unknown"
+        
+        try:
+            # Create a temporary serial connection
+            temp_serial = SerialManager(baud_rate=115200, timeout=0.5)
+            
+            # Try Arduino connection first (115200 baud)
+            if temp_serial.connect(port):
+                try:
+                    # Clear buffers
+                    temp_serial.flush_buffers()
+                    time.sleep(0.05)
+                    
+                    # Send ID command
+                    response = temp_serial.query("I", response_timeout=1.0)
+                    if response:
+                        response_upper = response.upper()
+                        if "SMT" in response_upper or "SMT_TESTER" in response_upper:
+                            device_type = "SMT Arduino"
+                        elif "OFFROAD" in response_upper:
+                            device_type = "Offroad Arduino"
+                        elif "DIODE_DYNAMICS" in response_upper:
+                            # Generic firmware - try to get more info
+                            status = temp_serial.query("STATUS", response_timeout=0.5)
+                            if status and "SMT" in status.upper():
+                                device_type = "SMT Arduino"
+                            else:
+                                device_type = "Offroad Arduino"
+                    
+                except Exception as e:
+                    logger.debug(f"Arduino probe failed on {port}: {e}")
+                
+                finally:
+                    temp_serial.disconnect()
+            
+            # If not identified as Arduino, try Scale (9600 baud)
+            if device_type == "Unknown":
+                temp_serial = SerialManager(baud_rate=9600, timeout=0.3)
+                if temp_serial.connect(port):
+                    try:
+                        # Wait a bit for scale data
+                        time.sleep(0.1)
+                        
+                        # Try to read a line
+                        for _ in range(3):
+                            line = temp_serial.read_line(timeout=0.1)
+                            if line:
+                                # Check if it looks like scale data
+                                if 'g' in line or 'GS' in line or any(c.isdigit() for c in line):
+                                    device_type = "Scale"
+                                    break
+                    
+                    except Exception as e:
+                        logger.debug(f"Scale probe failed on {port}: {e}")
+                    
+                    finally:
+                        temp_serial.disconnect()
+        
+        except Exception as e:
+            logger.debug(f"Error probing port {port}: {e}")
+        
+        return device_type
 
     def toggle_arduino_connection(self):
         """Toggle Arduino connection"""
@@ -197,11 +325,17 @@ class ConnectionDialog(QDialog):
 
     def connect_arduino(self):
         """Connect to Arduino"""
-        port = self.arduino_port_combo.currentText()
-        if not port:
+        port_text = self.arduino_port_combo.currentText()
+        if not port_text:
             logger.warning("Arduino connection attempt failed: No port selected.")
             QMessageBox.warning(self, "Warning", "Please select a port for Arduino.")
             return
+        
+        # Extract the actual port name (remove device type if present)
+        if ' (' in port_text:
+            port = port_text.split(' (')[0]
+        else:
+            port = port_text
 
         logger.info(f"Attempting to connect to Arduino on port: {port}")
         try:
@@ -353,11 +487,17 @@ class ConnectionDialog(QDialog):
 
     def connect_scale(self):
         """Connect to Scale"""
-        port = self.scale_port_combo.currentText()
-        if not port:
+        port_text = self.scale_port_combo.currentText()
+        if not port_text:
             logger.warning("Scale connection attempt failed: No port selected.")
             QMessageBox.warning(self, "Warning", "Please select a port for the Scale.")
             return
+        
+        # Extract the actual port name (remove device type if present)
+        if ' (' in port_text:
+            port = port_text.split(' (')[0]
+        else:
+            port = port_text
 
         logger.info(f"Attempting to connect to Scale on port: {port}")
         try:

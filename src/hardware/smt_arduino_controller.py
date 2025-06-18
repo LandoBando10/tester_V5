@@ -27,6 +27,7 @@ class SMTArduinoController:
 
     def __init__(self, baud_rate: int = 115200):
         self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger.setLevel(logging.DEBUG)  # Ensure debug logging is enabled
         self.baud_rate = baud_rate
         self.connection: Optional[serial.Serial] = None
         self.port: Optional[str] = None
@@ -42,17 +43,121 @@ class SMTArduinoController:
     def connect(self, port: str) -> bool:
         """Connect to Arduino on specified port"""
         try:
-            self.connection = serial.Serial(
-                port=port,
-                baudrate=self.baud_rate,
-                timeout=1.0,
-                write_timeout=1.0
-            )
+            # First check if port exists and get its info
+            import serial.tools.list_ports
+            ports = serial.tools.list_ports.comports()
+            port_info = None
+            for p in ports:
+                if p.device == port:
+                    port_info = p
+                    break
+            
+            if port_info:
+                self.logger.info(f"Port {port} info:")
+                self.logger.info(f"  Description: {port_info.description}")
+                self.logger.info(f"  Manufacturer: {port_info.manufacturer}")
+                self.logger.info(f"  Product: {port_info.product}")
+                self.logger.info(f"  VID:PID: {port_info.vid}:{port_info.pid}")
+            else:
+                self.logger.warning(f"Port {port} not found in system ports list")
+            
+            # Configure serial connection with DTR handling
+            self.connection = serial.Serial()
+            self.connection.port = port
+            self.connection.baudrate = self.baud_rate
+            self.connection.timeout = self.command_timeout
+            self.connection.write_timeout = 1.0
+            self.connection.dtr = False  # Prevent auto-reset on some Arduino boards
+            self.connection.rts = False  # Also set RTS to be safe
+            
+            # Open the connection
+            self.connection.open()
             self.port = port
             
-            # Clear buffers and test communication
+            # Log actual serial settings
+            self.logger.info(f"Serial port settings:")
+            self.logger.info(f"  Baudrate: {self.connection.baudrate}")
+            self.logger.info(f"  Bytesize: {self.connection.bytesize}")
+            self.logger.info(f"  Parity: {self.connection.parity}")
+            self.logger.info(f"  Stopbits: {self.connection.stopbits}")
+            self.logger.info(f"  Timeout: {self.connection.timeout}")
+            self.logger.info(f"  DTR: {self.connection.dtr}")
+            self.logger.info(f"  RTS: {self.connection.rts}")
+            
+            # Try without DTR reset first to see if Arduino is already running
+            self.logger.info("Attempting connection without DTR reset...")
+            
+            # Clear any existing data
             self._flush_buffers()
-            time.sleep(0.1)
+            
+            # Check if Arduino is already sending data
+            time.sleep(0.5)
+            if self.connection.in_waiting > 0:
+                self.logger.info(f"Arduino already active, {self.connection.in_waiting} bytes waiting")
+                try:
+                    existing_data = self.connection.read(self.connection.in_waiting)
+                    self.logger.info(f"Existing data: {existing_data}")
+                except:
+                    pass
+            
+            # Skip DTR reset - it seems to cause issues
+            # Just give Arduino a moment to respond
+            self.logger.info(f"Waiting for Arduino to respond on {port}...")
+            time.sleep(0.5)
+            
+            # Don't clear buffers yet - we want to catch any error messages
+            
+            # Read and log any startup messages with longer timeout
+            self.logger.info("Listening for Arduino startup messages...")
+            startup_deadline = time.time() + 3.0  # Wait up to 3 seconds
+            startup_messages = []
+            error_detected = False
+            
+            while time.time() < startup_deadline:
+                if self.connection.in_waiting > 0:
+                    try:
+                        # Read any available data
+                        data = self.connection.readline()
+                        if data:
+                            decoded = data.decode('utf-8', errors='ignore').strip()
+                            if decoded:
+                                startup_messages.append(decoded)
+                                self.logger.info(f"Arduino message: '{decoded}'")
+                                
+                                # Check for specific messages
+                                if "ERROR:INA260_INIT_FAILED" in decoded:
+                                    self.logger.error("INA260 sensor initialization failed! Arduino is stuck.")
+                                    error_detected = True
+                                    break
+                                elif "SMT_SIMPLE_TESTER_READY" in decoded:
+                                    self.logger.info("Arduino reported ready successfully")
+                                    break
+                    except Exception as e:
+                        self.logger.error(f"Error reading startup message: {e}")
+                else:
+                    time.sleep(0.05)
+            
+            if error_detected:
+                self.logger.error("Arduino firmware detected hardware error (INA260 sensor not found)")
+                self.logger.error("Please check: 1) INA260 sensor is connected, 2) I2C connections are correct")
+                self.disconnect()
+                return False
+            
+            if not startup_messages:
+                self.logger.warning("No startup messages received from Arduino")
+            
+            # Now clear buffers for fresh start
+            self._flush_buffers()
+            
+            # Check if this might be wrong firmware or device
+            self.logger.info("Checking device responsiveness...")
+            if not self._check_device_type():
+                self.logger.warning("Device check failed - may not be Arduino or wrong firmware")
+            
+            # First try raw communication test
+            if not self.test_raw_communication():
+                self.logger.error("Raw communication test failed - Arduino may not be responding")
+                # Continue anyway to get more diagnostic info
             
             if self._test_communication():
                 self.logger.info(f"Connected to SMT Arduino on {port}")
@@ -92,11 +197,16 @@ class SMTArduinoController:
 
     def _test_communication(self) -> bool:
         """Test basic communication with Arduino"""
+        self.logger.info("Testing communication with Arduino...")
         for attempt in range(3):
+            self.logger.info(f"Communication test attempt {attempt + 1}/3")
             response = self._send_command("I")
-            if response and "SMT_SIMPLE_TESTER" in response:
+            if response and response.startswith("ID:SMT_SIMPLE_TESTER"):
+                self.logger.info(f"Communication test successful, received: '{response}'")
                 return True
+            self.logger.warning(f"Communication test attempt {attempt + 1} failed")
             time.sleep(0.5)
+        self.logger.error("All communication test attempts failed")
         return False
 
     def _send_command(self, command: str, timeout: float = None) -> Optional[str]:
@@ -113,28 +223,47 @@ class SMTArduinoController:
                 self.connection.reset_input_buffer()
                 
                 # Send command
-                self.connection.write(f"{command}\n".encode())
+                cmd_bytes = f"{command}\n".encode()
+                self.logger.debug(f"Sending command: '{command}' as bytes: {cmd_bytes}")
+                bytes_written = self.connection.write(cmd_bytes)
                 self.connection.flush()
+                self.logger.debug(f"Wrote {bytes_written} bytes")
                 
                 # Read response with timeout
-                start_time = time.time()
-                response = ""
+                # Save original timeout and set new one
+                original_timeout = self.connection.timeout
+                self.connection.timeout = timeout
                 
-                while time.time() - start_time < timeout:
-                    if self.connection.in_waiting > 0:
-                        char = self.connection.read(1).decode('utf-8', errors='ignore')
-                        if char == '\n':
-                            break
-                        response += char
-                    else:
+                try:
+                    # Check if data is available before reading
+                    wait_start = time.time()
+                    while self.connection.in_waiting == 0 and (time.time() - wait_start) < timeout:
                         time.sleep(0.01)
+                    
+                    if self.connection.in_waiting > 0:
+                        self.logger.debug(f"Data available: {self.connection.in_waiting} bytes")
+                        # Use readline() for proper line ending handling
+                        raw_bytes = self.connection.readline()
+                        self.logger.debug(f"Raw bytes received: {raw_bytes}")
+                        response = raw_bytes.decode('utf-8', errors='ignore').strip()
+                    else:
+                        self.logger.debug("No data received within timeout")
+                        response = ""
+                finally:
+                    # Restore original timeout
+                    self.connection.timeout = original_timeout
+                
+                self.logger.debug(f"Decoded response: '{response}'")
                 
                 if response:
                     response = response.strip()
                     if self._validate_response(command, response):
+                        self.logger.debug(f"Valid response for {command}: {response}")
                         return response
                     else:
                         self.logger.warning(f"Invalid response for {command}: {response}")
+                else:
+                    self.logger.warning(f"No response received for command: {command}")
                 
             except Exception as e:
                 self.logger.error(f"Command error (attempt {attempt + 1}): {e}")
@@ -156,7 +285,7 @@ class SMTArduinoController:
             
         # Command-specific validation
         if command == "I":
-            return "SMT_SIMPLE_TESTER" in response
+            return response.startswith("ID:SMT_SIMPLE_TESTER")
         elif command == "X":
             return response == "OK:ALL_OFF"
         elif command == "B":
@@ -174,7 +303,9 @@ class SMTArduinoController:
             return None
             
         command = f"R{relay_num}"
-        response = self._send_command(command, timeout=0.2)
+        # Increased timeout to account for measurement time + response
+        # Arduino takes ~120ms for measurement (15ms stabilization + 6 samples * 17ms)
+        response = self._send_command(command, timeout=0.5)
         
         if not response:
             return None
@@ -243,6 +374,94 @@ class SMTArduinoController:
     def get_board_info(self) -> Optional[str]:
         """Get board identification"""
         return self._send_command("I")
+    
+    def _check_device_type(self) -> bool:
+        """Check if device responds like an Arduino"""
+        try:
+            # Skip DTR test - it causes issues with some Arduino boards
+            self.logger.info("Skipping DTR test...")
+            
+            # Test 2: Send invalid command and check for any response
+            self.logger.info("Testing error response...")
+            self.connection.write(b"INVALID_COMMAND\n")
+            self.connection.flush()
+            time.sleep(0.3)
+            
+            if self.connection.in_waiting > 0:
+                data = self.connection.read(self.connection.in_waiting)
+                self.logger.info(f"Response to invalid command: {data}")
+                return True
+            
+            return False
+            
+        except Exception as e:
+            self.logger.error(f"Device type check error: {e}")
+            return False
+    
+    def test_raw_communication(self) -> bool:
+        """Test raw serial communication without command structure"""
+        if not self.is_connected():
+            self.logger.error("Cannot test - not connected")
+            return False
+        
+        try:
+            self.logger.info("Testing raw serial communication...")
+            
+            # Test different command formats
+            test_commands = [
+                (b"I\n", "LF only"),
+                (b"I\r\n", "CR+LF"),
+                (b"I\r", "CR only"),
+                (b"ID\n", "ID command"),
+                (b"?\n", "Query"),
+                (b"\n", "Empty line"),
+                (b"STATUS\n", "STATUS command")
+            ]
+            
+            for cmd, description in test_commands:
+                self.logger.info(f"Testing {description}: {cmd}")
+                self.connection.reset_input_buffer()
+                
+                # Send command
+                bytes_written = self.connection.write(cmd)
+                self.connection.flush()
+                self.logger.debug(f"Sent {bytes_written} bytes")
+                
+                # Wait for response
+                time.sleep(0.3)
+                
+                if self.connection.in_waiting > 0:
+                    self.logger.info(f"Response received! {self.connection.in_waiting} bytes available")
+                    raw_data = self.connection.read(self.connection.in_waiting)
+                    self.logger.info(f"Raw data: {raw_data}")
+                    
+                    try:
+                        decoded = raw_data.decode('utf-8', errors='ignore')
+                        self.logger.info(f"Decoded: '{decoded}'")
+                        # If we got any response, that's a good sign
+                        return True
+                    except Exception as e:
+                        self.logger.error(f"Decode error: {e}")
+                        # Even if decode fails, we got data
+                        return True
+                else:
+                    self.logger.debug(f"No response to {description}")
+            
+            # Final check - look for any spontaneous data
+            self.logger.info("Checking for spontaneous data...")
+            time.sleep(1.0)
+            if self.connection.in_waiting > 0:
+                self.logger.info(f"Spontaneous data found: {self.connection.in_waiting} bytes")
+                data = self.connection.read(self.connection.in_waiting)
+                self.logger.info(f"Data: {data}")
+                return True
+            
+            self.logger.warning("No response to any test command")
+            return False
+                
+        except Exception as e:
+            self.logger.error(f"Raw communication test error: {e}")
+            return False
 
 
 # Example usage

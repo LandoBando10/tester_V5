@@ -1,6 +1,6 @@
 /*
  * SMT Simple Tester - Simplified Arduino firmware for SMT board testing
- * Version: 1.0.0
+ * Version: 1.0.1
  * 
  * Commands:
  * - R1-R8: Measure specific relay (returns voltage and current)
@@ -14,6 +14,11 @@
 
 #include <Wire.h>
 #include <Adafruit_INA260.h>
+
+// Relay logic configuration
+// For active-LOW relay modules (most common):
+const bool RELAY_ON = LOW;   // Change to HIGH if using active-HIGH relays
+const bool RELAY_OFF = HIGH;  // Change to LOW if using active-HIGH relays
 
 // Pin definitions
 const int RELAY_PINS[] = {2, 3, 4, 5, 6, 7, 8, 9}; // Relay control pins
@@ -37,10 +42,14 @@ const int SAMPLE_INTERVAL_MS = 17;
 void setup() {
   Serial.begin(115200);
   
+  // Wait for USB serial port to connect (needed for native USB boards)
+  while (!Serial && millis() < 3000) ;
+  delay(100); // Extra delay to ensure stable connection
+  
   // Initialize relay pins
   for (int i = 0; i < 8; i++) {
     pinMode(RELAY_PINS[i], OUTPUT);
-    digitalWrite(RELAY_PINS[i], LOW);
+    digitalWrite(RELAY_PINS[i], RELAY_OFF);
   }
   
   // Initialize button pin
@@ -57,7 +66,7 @@ void setup() {
   }
   
   // Set INA260 to fastest conversion time for better performance
-  ina260.setMode(INA260_MODE_SHUNT_BUS_CONT);
+  ina260.setMode(INA260_MODE_CONTINUOUS);
   ina260.setCurrentConversionTime(INA260_TIME_140_us);
   ina260.setVoltageConversionTime(INA260_TIME_140_us);
   ina260.setAveragingCount(INA260_COUNT_1);
@@ -119,7 +128,7 @@ void processCommand(String command) {
 
 void measureRelay(int relayIndex) {
   // Turn on the specific relay
-  digitalWrite(RELAY_PINS[relayIndex], HIGH);
+  digitalWrite(RELAY_PINS[relayIndex], RELAY_ON);
   
   // Wait for relay to stabilize
   delay(RELAY_STABILIZATION_MS);
@@ -138,7 +147,7 @@ void measureRelay(int relayIndex) {
   }
   
   // Turn off the relay
-  digitalWrite(RELAY_PINS[relayIndex], LOW);
+  digitalWrite(RELAY_PINS[relayIndex], RELAY_OFF);
   
   // Calculate averages
   float avgVoltage = totalVoltage / MEASUREMENT_SAMPLES;
@@ -155,7 +164,7 @@ void measureRelay(int relayIndex) {
 
 void allRelaysOff() {
   for (int i = 0; i < 8; i++) {
-    digitalWrite(RELAY_PINS[i], LOW);
+    digitalWrite(RELAY_PINS[i], RELAY_OFF);
   }
 }
 
