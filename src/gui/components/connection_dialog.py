@@ -356,99 +356,92 @@ class ConnectionDialog(QDialog):
             arduino = self.parent().arduino_controller
             
             if arduino.connect(port):
-                # Test communication
-                if arduino.test_communication():
-                    # Get firmware type
-                    firmware_type = arduino.get_firmware_type()
-                    current_mode = self.parent().current_mode
-                    
-                    # Store firmware type for later validation
-                    arduino._firmware_type = firmware_type
-                    
-                    # Validate firmware matches mode
-                    firmware_valid = False
-                    if firmware_type == "UNKNOWN":
-                        # Couldn't determine firmware type
-                        reply = QMessageBox.question(self, "Unknown Firmware", 
-                                                   f"Could not determine Arduino firmware type. "
-                                                   f"Are you sure this Arduino has {current_mode} firmware?",
-                                                   QMessageBox.Yes | QMessageBox.No)
-                        firmware_valid = (reply == QMessageBox.Yes)
-                    elif firmware_type == current_mode.upper():
-                        firmware_valid = True
-                    else:
-                        # Wrong firmware for current mode
-                        QMessageBox.warning(self, "Wrong Arduino Firmware", 
-                                          f"This Arduino has {firmware_type} firmware, "
-                                          f"but you are in {current_mode} mode.\n\n"
-                                          f"Please connect an Arduino with {current_mode} firmware.")
-                        arduino.disconnect()
-                        self.parent().arduino_controller = None
-                        return
-                    
-                    if not firmware_valid:
-                        arduino.disconnect()
-                        self.parent().arduino_controller = None
-                        return
-                    
-                    # Configure sensors based on current mode
-                    from src.hardware.arduino_controller import SensorConfigurations
-                    
-                    if current_mode == "SMT":
-                        sensor_configs = SensorConfigurations.smt_panel_sensors()
-                    else:  # Offroad
-                        sensor_configs = SensorConfigurations.offroad_pod_sensors()
-                    
-                    if not arduino.configure_sensors(sensor_configs):
-                        logger.error(f"Failed to configure sensors for {current_mode}")
-                        QMessageBox.warning(self, "Sensor Configuration Failed", 
-                                          f"Arduino connected but sensor configuration failed for {current_mode} mode.")
-                        return
-                    
-                    arduino._sensors_configured = True
-                    logger.info(f"Sensors configured for {current_mode} mode")
-                    
-                    # Enable CRC-16 validation if supported (BEFORE starting reading loop)
-                    crc_enabled = False
-                    try:
-                        # Check if this is SMT Arduino controller with CRC support
-                        if hasattr(arduino, 'enable_crc_validation'):
-                            logger.info("Attempting to enable CRC-16 validation...")
-                            crc_enabled = arduino.enable_crc_validation(True)
-                            if crc_enabled:
-                                logger.info("CRC-16 validation enabled successfully")
-                            else:
-                                logger.info("CRC-16 not supported by firmware - continuing without it")
-                    except Exception as crc_error:
-                        logger.warning(f"Could not enable CRC: {crc_error}")
-                    
-                    # Set up button callback for SMT mode (AFTER CRC setup)
-                    if current_mode == "SMT" and hasattr(self.parent(), 'smt_handler'):
-                        logger.info("Setting up physical button callback for SMT mode")
-                        arduino.set_button_callback(self.parent().smt_handler.handle_button_event)
-                        
-                        # Start the reading loop to process button events (AFTER CRC is configured)
-                        if not arduino.is_reading:
-                            logger.info("Starting Arduino reading loop for button events")
-                            arduino.start_reading()
-                    
-                    # Don't disconnect - keep it connected!
-                    self.arduino_connected = True
-                    self.arduino_port = port
-                    self.arduino_crc_enabled = crc_enabled  # Store CRC status
-                    
-                    # Update status label to show CRC status
-                    crc_status = " [CRC ON]" if crc_enabled else ""
-                    self.arduino_status_label.setText(f"Status: Connected ({port}) - {firmware_type}{crc_status}")
-                    self.arduino_status_label.setStyleSheet("color: green; font-weight: bold;")
-                    self.arduino_connect_btn.setText("Disconnect")
-                    logger.info(f"Successfully connected to {firmware_type} Arduino on {port} with CRC={'enabled' if crc_enabled else 'disabled'}.")
+                # Connection successful - communication already verified by connect()
+                # Get firmware type
+                firmware_type = arduino.get_firmware_type()
+                current_mode = self.parent().current_mode
+                
+                # Store firmware type for later validation
+                arduino._firmware_type = firmware_type
+                
+                # Validate firmware matches mode
+                firmware_valid = False
+                if firmware_type == "UNKNOWN":
+                    # Couldn't determine firmware type
+                    reply = QMessageBox.question(self, "Unknown Firmware", 
+                                               f"Could not determine Arduino firmware type. "
+                                               f"Are you sure this Arduino has {current_mode} firmware?",
+                                               QMessageBox.Yes | QMessageBox.No)
+                    firmware_valid = (reply == QMessageBox.Yes)
+                elif firmware_type == current_mode.upper():
+                    firmware_valid = True
                 else:
+                    # Wrong firmware for current mode
+                    QMessageBox.warning(self, "Wrong Arduino Firmware", 
+                                      f"This Arduino has {firmware_type} firmware, "
+                                      f"but you are in {current_mode} mode.\n\n"
+                                      f"Please connect an Arduino with {current_mode} firmware.")
                     arduino.disconnect()
                     self.parent().arduino_controller = None
-                    logger.warning(f"Arduino connected on {port} but communication test failed.")
-                    QMessageBox.warning(self, "Connection Failed", 
-                                        "Arduino connected but communication test failed. Check firmware and connections.")
+                    return
+                
+                if not firmware_valid:
+                    arduino.disconnect()
+                    self.parent().arduino_controller = None
+                    return
+                
+                # Configure sensors based on current mode
+                from src.hardware.arduino_controller import SensorConfigurations
+                
+                if current_mode == "SMT":
+                    sensor_configs = SensorConfigurations.smt_panel_sensors()
+                else:  # Offroad
+                    sensor_configs = SensorConfigurations.offroad_pod_sensors()
+                
+                if not arduino.configure_sensors(sensor_configs):
+                    logger.error(f"Failed to configure sensors for {current_mode}")
+                    QMessageBox.warning(self, "Sensor Configuration Failed", 
+                                      f"Arduino connected but sensor configuration failed for {current_mode} mode.")
+                    return
+                
+                arduino._sensors_configured = True
+                logger.info(f"Sensors configured for {current_mode} mode")
+                
+                # Enable CRC-16 validation if supported (BEFORE starting reading loop)
+                crc_enabled = False
+                try:
+                    # Check if this is SMT Arduino controller with CRC support
+                    if hasattr(arduino, 'enable_crc_validation'):
+                        logger.info("Attempting to enable CRC-16 validation...")
+                        crc_enabled = arduino.enable_crc_validation(True)
+                        if crc_enabled:
+                            logger.info("CRC-16 validation enabled successfully")
+                        else:
+                            logger.info("CRC-16 not supported by firmware - continuing without it")
+                except Exception as crc_error:
+                    logger.warning(f"Could not enable CRC: {crc_error}")
+                
+                # Set up button callback for SMT mode (AFTER CRC setup)
+                if current_mode == "SMT" and hasattr(self.parent(), 'smt_handler'):
+                    logger.info("Setting up physical button callback for SMT mode")
+                    arduino.set_button_callback(self.parent().smt_handler.handle_button_event)
+                    
+                    # Start the reading loop to process button events (AFTER CRC is configured)
+                    if not arduino.is_reading:
+                        logger.info("Starting Arduino reading loop for button events")
+                        arduino.start_reading()
+                
+                # Connection successful!
+                self.arduino_connected = True
+                self.arduino_port = port
+                self.arduino_crc_enabled = crc_enabled  # Store CRC status
+                
+                # Update status label to show CRC status
+                crc_status = " [CRC ON]" if crc_enabled else ""
+                self.arduino_status_label.setText(f"Status: Connected ({port}) - {firmware_type}{crc_status}")
+                self.arduino_status_label.setStyleSheet("color: green; font-weight: bold;")
+                self.arduino_connect_btn.setText("Disconnect")
+                logger.info(f"Successfully connected to {firmware_type} Arduino on {port} with CRC={'enabled' if crc_enabled else 'disabled'}.")
             else:
                 logger.warning(f"Could not connect to Arduino on {port}.")
                 QMessageBox.warning(self, "Connection Failed", 
@@ -506,22 +499,16 @@ class ConnectionDialog(QDialog):
             scale = ScaleController(baud_rate=9600)
             
             if scale.connect(port):
-                # Test communication
-                if scale.test_communication():
-                    # Keep the connection alive and store it for reuse
-                    self.parent().scale_controller = scale
-                    
-                    self.scale_connected = True
-                    self.scale_port = port
-                    self.scale_status_label.setText(f"Status: Connected ({port})")
-                    self.scale_status_label.setStyleSheet("color: green; font-weight: bold;")
-                    self.scale_connect_btn.setText("Disconnect")
-                    logger.info(f"Successfully connected to Scale on {port}.")
-                else:
-                    scale.disconnect()
-                    logger.warning(f"Scale connected on {port} but communication test failed.")
-                    QMessageBox.warning(self, "Connection Failed", 
-                                        "Scale connected but communication test failed. Check scale settings.")
+                # Connection successful - communication already verified
+                # Keep the connection alive and store it for reuse
+                self.parent().scale_controller = scale
+                
+                self.scale_connected = True
+                self.scale_port = port
+                self.scale_status_label.setText(f"Status: Connected ({port})")
+                self.scale_status_label.setStyleSheet("color: green; font-weight: bold;")
+                self.scale_connect_btn.setText("Disconnect")
+                logger.info(f"Successfully connected to Scale on {port}.")
             else:
                 logger.warning(f"Could not connect to Scale on {port}.")
                 QMessageBox.warning(self, "Connection Failed", 

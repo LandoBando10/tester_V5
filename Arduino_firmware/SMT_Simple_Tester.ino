@@ -1,17 +1,18 @@
 /*
- * SMT Simple Tester - Simplified Arduino firmware for SMT board testing
- * Version: 1.1.0
+ * SMT Simple Tester - Batch-only Arduino firmware for SMT board testing
+ * Version: 2.0.0
  * 
  * Commands:
- * - R1-R8: Measure specific relay (returns voltage and current)
  * - T: Test entire panel (returns all relay measurements)
  * - TS: Test panel with streaming updates
  * - X: Turn all relays off
  * - I: Get board ID/info
  * - B: Get button status
  * 
+ * REMOVED: Individual relay commands (R1-R8) for simplification
+ * 
  * Response format: Simple text without CRC or framing
- * Target timing: <100ms per relay measurement
+ * All measurements sent in Volts and Amps (not millivolts/milliamps)
  */
 
 #include <Wire.h>
@@ -75,7 +76,7 @@ void setup() {
     ina260.setAveragingCount(INA260_COUNT_1);
   }
   
-  Serial.println("SMT_SIMPLE_TESTER_READY");
+  Serial.println("SMT_BATCH_TESTER_READY");
 }
 
 void loop() {
@@ -95,17 +96,8 @@ void loop() {
 void processCommand(String command) {
   digitalWrite(LED_PIN, HIGH); // Indicate activity
   
-  if (command.startsWith("R") && command.length() == 2) {
-    // Relay measurement command (R1-R8)
-    int relayNum = command.charAt(1) - '1';
-    if (relayNum >= 0 && relayNum < 8) {
-      measureRelay(relayNum);
-    } else {
-      Serial.println("ERROR:INVALID_RELAY");
-    }
-  }
-  else if (command == "T") {
-    // Test entire panel
+  if (command == "T") {
+    // Test entire panel - batch mode
     testPanel();
   }
   else if (command == "TS") {
@@ -119,11 +111,10 @@ void processCommand(String command) {
   }
   else if (command == "I") {
     // Get board info
-    Serial.println("ID:SMT_SIMPLE_TESTER_V1.1");
+    Serial.println("ID:SMT_BATCH_TESTER_V2.0");
   }
   else if (command == "B") {
     // Get button status
-    bool currentState = digitalRead(BUTTON_PIN) == LOW;
     if (buttonPressed) {
       Serial.println("BUTTON:PRESSED");
       buttonPressed = false; // Clear the flag
@@ -136,42 +127,6 @@ void processCommand(String command) {
   }
   
   digitalWrite(LED_PIN, LOW);
-}
-
-void measureRelay(int relayIndex) {
-  // Turn on the specific relay
-  digitalWrite(RELAY_PINS[relayIndex], RELAY_ON);
-  
-  // Wait for relay to stabilize
-  delay(RELAY_STABILIZATION_MS);
-  
-  // Take multiple samples for accuracy
-  float totalVoltage = 0;
-  float totalCurrent = 0;
-  
-  for (int i = 0; i < MEASUREMENT_SAMPLES; i++) {
-    totalVoltage += INA_OK ? ina260.readBusVoltage() : 0.0;
-    totalCurrent += INA_OK ? ina260.readCurrent() : 0.0;
-    
-    if (i < MEASUREMENT_SAMPLES - 1) {
-      delay(SAMPLE_INTERVAL_MS);
-    }
-  }
-  
-  // Turn off the relay
-  digitalWrite(RELAY_PINS[relayIndex], RELAY_OFF);
-  
-  // Calculate averages
-  float avgVoltage = totalVoltage / MEASUREMENT_SAMPLES;
-  float avgCurrent = totalCurrent / MEASUREMENT_SAMPLES;
-  
-  // Send response in simple format: R[num]:voltage,current
-  Serial.print("R");
-  Serial.print(relayIndex + 1);
-  Serial.print(":");
-  Serial.print(avgVoltage, 3);
-  Serial.print(",");
-  Serial.println(avgCurrent, 3);
 }
 
 // Measure relay and return values (for internal use)

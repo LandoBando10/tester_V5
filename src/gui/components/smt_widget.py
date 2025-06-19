@@ -599,11 +599,9 @@ class SMTWidget(QWidget):
             if self.programming_enabled:
                 self.programming_table.setRowCount(1)
                 no_prog_item = QTableWidgetItem("No programming performed")
-                no_prog_item.setSpan(0, 4)
                 self.programming_table.setItem(0, 0, no_prog_item)
-                self.programming_table.setItem(0, 1, QTableWidgetItem(""))
-                self.programming_table.setItem(0, 2, QTableWidgetItem(""))
-                self.programming_table.setItem(0, 3, QTableWidgetItem(""))
+                # Use setSpan on the table widget, not the item
+                self.programming_table.setSpan(0, 0, 1, 4)
 
 
 # ---------------------------------------------------------------------------

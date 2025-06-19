@@ -244,43 +244,9 @@ class SMTTest(BaseTest):
                         programming_success = False
                         continue
 
-                    # Select board in bed-of-nails fixture
-                    if not self.arduino.select_board(board_name):
-                        error_msg = f"Failed to select board {board_name} in fixture"
-                        self.logger.error(error_msg)
-                        self.programming_results.append({
-                            "board": board_name,
-                            "success": False,
-                            "message": error_msg
-                        })
-                        programming_success = False
-                        continue
-
-                    # Enable programmer interface
-                    programmer_type = prog_config.get("type", "STM8")
-                    if not self.arduino.enable_programmer(programmer_type):
-                        error_msg = f"Failed to enable {programmer_type} programmer for {board_name}"
-                        self.logger.error(error_msg)
-                        self.programming_results.append({
-                            "board": board_name,
-                            "success": False,
-                            "message": error_msg
-                        })
-                        programming_success = False
-                        continue
-
-                    # Set programming power
-                    power_type = "PROG_5V" if programmer_type == "STM8" else "PROG_3V3"
-                    if not self.arduino.set_power(power_type):
-                        error_msg = f"Failed to set programming power for {board_name}"
-                        self.logger.error(error_msg)
-                        self.programming_results.append({
-                            "board": board_name,
-                            "success": False,
-                            "message": error_msg
-                        })
-                        programming_success = False
-                        continue
+                    # Note: Batch-only Arduino doesn't support programming control
+                    # Programming must be done with external hardware
+                    self.logger.info(f"Programming {board_name} - Arduino board selection not available in batch mode")
 
                     # Get device type for this board, None triggers default in programmer
                     device = device_map.get(board_name, None)
@@ -301,10 +267,8 @@ class SMTTest(BaseTest):
                         programming_success = False
                         self.logger.error(f"Failed to program {board_name}: {prog_message}")
 
-            # Clean up after programming
-            self.arduino.set_power("OFF")
-            self.arduino.disable_programmer()
-            self.arduino.deselect_all_boards()
+            # Note: Batch-only Arduino doesn't have programming control methods
+            self.logger.info("Programming cleanup - Arduino programming control not available in batch mode")
 
             # Record programming results
             if total_boards > 0:
@@ -327,55 +291,46 @@ class SMTTest(BaseTest):
     # --- new helper ----------------------------------------------------
     def _measure_group(self, relays: str, timeout: float = 15.0) -> Dict[str, Dict]:
         """
-        Measure a group of relays and map results back to board numbers
-        Uses new panel test command for all 8 relays at once
+        Measure a group of relays using batch panel test
+        Always uses the fast panel test command for all measurements
         """
         board_results = {}
         relay_list = [int(r.strip()) for r in relays.split(',') if r.strip()]
         
-        # Check if we're measuring all 8 relays - use fast panel test
-        if len(relay_list) == 8 and sorted(relay_list) == list(range(1, 9)):
-            self.logger.info("Using fast panel test command for all 8 relays")
-            
-            # Use new panel test method
-            measurement_results = self.arduino.test_panel()
-            
-            if not measurement_results:
-                self.logger.error("Panel test failed - no measurements received")
-                self.result.failures.append("Failed to get panel measurements from Arduino")
-                return board_results
-        else:
-            # Use original individual relay measurement for partial tests
-            self.logger.info(f"Measuring relays individually: {relay_list}")
-            measurement_results = self.arduino.measure_relays(relay_list)
+        # Always use panel test - it's the only way now
+        self.logger.info("Using batch panel test command")
+        
+        # Use panel test method (measures all 8 relays)
+        measurement_results = self.arduino.test_panel()
         
         if not measurement_results:
-            self.logger.error("No measurements received")
-            self.result.failures.append("Failed to communicate with Arduino during measurement")
+            self.logger.error("Panel test failed - no measurements received")
+            self.result.failures.append("Failed to get panel measurements from Arduino")
             return board_results
         
-        # Map results to boards
-        for relay_num, measurement in measurement_results.items():
-            if measurement is None:
-                self.logger.warning(f"No measurement for relay {relay_num}")
-                continue
+        # Map results to boards (only for requested relays)
+        for relay_num in relay_list:
+            if relay_num in measurement_results and measurement_results[relay_num]:
+                measurement = measurement_results[relay_num]
                 
-            # Get board number from relay mapping
-            board_num = self.smt_controller.get_board_from_relay(relay_num)
-            if not board_num:
-                self.logger.warning(f"No board mapping found for relay {relay_num}")
-                continue
-            
-            board_results[f"Board {board_num}"] = {
-                "relay": relay_num,
-                "voltage": measurement.get("voltage", 0),
-                "current": measurement.get("current", 0),
-                "power": measurement.get("power", 0)
-            }
+                # Get board number from relay mapping
+                board_num = self.smt_controller.get_board_from_relay(relay_num)
+                if not board_num:
+                    self.logger.warning(f"No board mapping found for relay {relay_num}")
+                    continue
+                
+                board_results[f"Board {board_num}"] = {
+                    "relay": relay_num,
+                    "voltage": measurement.get("voltage", 0),
+                    "current": measurement.get("current", 0),
+                    "power": measurement.get("power", 0)
+                }
+            else:
+                self.logger.warning(f"No measurement for relay {relay_num}")
         
         self.logger.info(f"Parsed board results: {list(board_results.keys())}")
         
-        # Validate we got measurements
+        # Validate we got measurements for requested relays
         expected_count = len(relay_list)
         actual_count = len(board_results)
         
@@ -384,8 +339,9 @@ class SMTTest(BaseTest):
             self.result.failures.append(f"No measurements received from Arduino for relays {relay_list}")
         elif actual_count < expected_count:
             self.logger.warning(f"Only received {actual_count}/{expected_count} measurements")
-            missing_relays = [r for r in relay_list if r not in measurement_results or measurement_results[r] is None]
-            self.logger.warning(f"Missing measurements for relays: {missing_relays}")
+            missing_relays = [r for r in relay_list if f"Board {self.smt_controller.get_board_from_relay(r)}" not in board_results]
+            if missing_relays:
+                self.logger.warning(f"Missing measurements for relays: {missing_relays}")
         
         return board_results
 

@@ -37,5 +37,11 @@ def clean_pycache(root_dir='.'):
 
 if __name__ == "__main__":
     print("Cleaning Python cache files...")
+    print("This ensures the new batch-only code is used\n")
     clean_pycache()
     print("\nDone! Please restart your application.")
+    print("\nIMPORTANT UPDATES:")
+    print("1. Arduino firmware updated to v2.0 (batch-only)")
+    print("2. Connection dialog simplified (no redundant tests)")
+    print("3. SMT controller uses only batch communication")
+    print("\nMake sure to upload the new Arduino firmware!")

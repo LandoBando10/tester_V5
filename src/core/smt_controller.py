@@ -2,8 +2,14 @@
 SMT Controller - Simplified relay mapping version
 """
 import logging
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Union
 
+# Support both controller types
+try:
+    from src.hardware.smt_arduino_controller import SMTArduinoController
+except ImportError:
+    SMTArduinoController = None
+    
 from src.hardware.arduino_controller import ArduinoController
 
 logger = logging.getLogger(__name__)
@@ -12,7 +18,7 @@ logger = logging.getLogger(__name__)
 class SMTController:
     """Controls SMT panel testing using direct relay mapping from SKU config"""
     
-    def __init__(self, arduino: ArduinoController):
+    def __init__(self, arduino: Union[ArduinoController, 'SMTArduinoController']):
         self.arduino = arduino
         self.relay_mapping: Dict[str, Dict[str, Any]] = {}
         self.panel_layout: Dict[str, Any] = {}
@@ -58,7 +64,7 @@ class SMTController:
                     response = self.arduino.send_command("I")
                     if not response:
                         continue
-                elif "SMT_SIMPLE_TESTER" in response or "SMT_TESTER" in response or "DIODE_DYNAMICS" in response:
+                elif "SMT_SIMPLE_TESTER" in response or "SMT_TESTER" in response or "SMT_BATCH_TESTER" in response or "DIODE_DYNAMICS" in response:
                     logger.debug(f"Arduino firmware validated: {response}")
                     break
             else:
