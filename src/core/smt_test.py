@@ -328,16 +328,26 @@ class SMTTest(BaseTest):
     def _measure_group(self, relays: str, timeout: float = 15.0) -> Dict[str, Dict]:
         """
         Measure a group of relays and map results back to board numbers
-        Uses new individual command approach (Phase 1.1)
+        Uses new panel test command for all 8 relays at once
         """
         board_results = {}
         relay_list = [int(r.strip()) for r in relays.split(',') if r.strip()]
         
-        # Use simplified measure_relays method
-        self.logger.info(f"Measuring relays: {relay_list}")
-        
-        # Get measurements
-        measurement_results = self.arduino.measure_relays(relay_list)
+        # Check if we're measuring all 8 relays - use fast panel test
+        if len(relay_list) == 8 and sorted(relay_list) == list(range(1, 9)):
+            self.logger.info("Using fast panel test command for all 8 relays")
+            
+            # Use new panel test method
+            measurement_results = self.arduino.test_panel()
+            
+            if not measurement_results:
+                self.logger.error("Panel test failed - no measurements received")
+                self.result.failures.append("Failed to get panel measurements from Arduino")
+                return board_results
+        else:
+            # Use original individual relay measurement for partial tests
+            self.logger.info(f"Measuring relays individually: {relay_list}")
+            measurement_results = self.arduino.measure_relays(relay_list)
         
         if not measurement_results:
             self.logger.error("No measurements received")

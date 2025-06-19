@@ -1,9 +1,11 @@
 /*
  * SMT Simple Tester - Simplified Arduino firmware for SMT board testing
- * Version: 1.0.1
+ * Version: 1.1.0
  * 
  * Commands:
  * - R1-R8: Measure specific relay (returns voltage and current)
+ * - T: Test entire panel (returns all relay measurements)
+ * - TS: Test panel with streaming updates
  * - X: Turn all relays off
  * - I: Get board ID/info
  * - B: Get button status
@@ -39,6 +41,7 @@ const unsigned long DEBOUNCE_DELAY = 50;
 const int RELAY_STABILIZATION_MS = 15;
 const int MEASUREMENT_SAMPLES = 6;
 const int SAMPLE_INTERVAL_MS = 17;
+const int INTER_RELAY_DELAY_MS = 10;  // Delay between relay measurements
 
 void setup() {
   Serial.begin(115200);
@@ -101,6 +104,14 @@ void processCommand(String command) {
       Serial.println("ERROR:INVALID_RELAY");
     }
   }
+  else if (command == "T") {
+    // Test entire panel
+    testPanel();
+  }
+  else if (command == "TS") {
+    // Test panel with streaming updates
+    testPanelStream();
+  }
   else if (command == "X") {
     // Turn all relays off
     allRelaysOff();
@@ -108,7 +119,7 @@ void processCommand(String command) {
   }
   else if (command == "I") {
     // Get board info
-    Serial.println("ID:SMT_SIMPLE_TESTER_V1.0");
+    Serial.println("ID:SMT_SIMPLE_TESTER_V1.1");
   }
   else if (command == "B") {
     // Get button status
@@ -161,6 +172,75 @@ void measureRelay(int relayIndex) {
   Serial.print(avgVoltage, 3);
   Serial.print(",");
   Serial.println(avgCurrent, 3);
+}
+
+// Measure relay and return values (for internal use)
+void measureRelayValues(int relayIndex, float &voltage, float &current) {
+  // Turn on the specific relay
+  digitalWrite(RELAY_PINS[relayIndex], RELAY_ON);
+  
+  // Wait for relay to stabilize
+  delay(RELAY_STABILIZATION_MS);
+  
+  // Take multiple samples for accuracy
+  float totalVoltage = 0;
+  float totalCurrent = 0;
+  
+  for (int i = 0; i < MEASUREMENT_SAMPLES; i++) {
+    totalVoltage += INA_OK ? ina260.readBusVoltage() : 0.0;
+    totalCurrent += INA_OK ? ina260.readCurrent() : 0.0;
+    
+    if (i < MEASUREMENT_SAMPLES - 1) {
+      delay(SAMPLE_INTERVAL_MS);
+    }
+  }
+  
+  // Turn off the relay
+  digitalWrite(RELAY_PINS[relayIndex], RELAY_OFF);
+  
+  // Calculate averages (convert mV to V and mA to A)
+  voltage = totalVoltage / MEASUREMENT_SAMPLES / 1000.0;
+  current = totalCurrent / MEASUREMENT_SAMPLES / 1000.0;
+}
+
+// Test entire panel and return all results at once
+void testPanel() {
+  String result = "PANEL:";
+  
+  for (int i = 0; i < 8; i++) {
+    float voltage, current;
+    measureRelayValues(i, voltage, current);
+    
+    // Append to result string
+    if (i > 0) result += ";";
+    result += String(voltage, 3) + "," + String(current, 3);
+    
+    // Small delay between relays
+    if (i < 7) delay(INTER_RELAY_DELAY_MS);
+  }
+  
+  Serial.println(result);
+}
+
+// Test panel with streaming updates
+void testPanelStream() {
+  for (int i = 0; i < 8; i++) {
+    float voltage, current;
+    measureRelayValues(i, voltage, current);
+    
+    // Send individual relay result
+    Serial.print("RELAY:");
+    Serial.print(i + 1);
+    Serial.print(",");
+    Serial.print(voltage, 3);
+    Serial.print(",");
+    Serial.println(current, 3);
+    
+    // Small delay between relays
+    if (i < 7) delay(INTER_RELAY_DELAY_MS);
+  }
+  
+  Serial.println("PANEL_COMPLETE");
 }
 
 void allRelaysOff() {

@@ -32,6 +32,18 @@ class SMTController:
             # Clear any pending messages first
             self.arduino.serial.flush_buffers()
             
+            # Send an 'X' command first to ensure Arduino is responsive
+            logger.info("Sending 'X' command to ensure Arduino is responsive")
+            x_response = self.arduino.send_command("X", timeout=1.0)
+            if x_response:
+                logger.info(f"Arduino responsive, got: {x_response}")
+            else:
+                logger.warning("No response to 'X' command, but continuing...")
+            
+            # Small delay before identification
+            import time
+            time.sleep(0.1)
+            
             # Check connection - SMT Arduino uses "I" not "ID"
             response = self.arduino.send_command("I")
             if not response:
@@ -47,6 +59,7 @@ class SMTController:
                     if not response:
                         continue
                 elif "SMT_SIMPLE_TESTER" in response or "SMT_TESTER" in response or "DIODE_DYNAMICS" in response:
+                    logger.debug(f"Arduino firmware validated: {response}")
                     break
             else:
                 logger.error(f"Arduino not running compatible firmware after {max_attempts} attempts. Last response: {response}")

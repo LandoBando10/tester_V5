@@ -82,6 +82,13 @@ class SMTArduinoController:
             self.connection.baudrate = self.baud_rate
             self.connection.timeout = self.command_timeout
             self.connection.write_timeout = 1.0
+            # Add explicit settings that might help with data corruption
+            self.connection.bytesize = serial.EIGHTBITS
+            self.connection.parity = serial.PARITY_NONE
+            self.connection.stopbits = serial.STOPBITS_ONE
+            self.connection.xonxoff = False
+            self.connection.rtscts = False
+            self.connection.dsrdtr = False
             
             # For Arduino R4 Minima: Must open BEFORE setting DTR/RTS
             try:
@@ -341,6 +348,23 @@ class SMTArduinoController:
             self._reading_thread.join(timeout=2.0)
             
         self.logger.info("Reading thread stopped")
+    
+    def pause_reading_for_test(self):
+        """Temporarily pause reading thread for test execution"""
+        if self.is_reading:
+            self.logger.debug("Pausing reading thread for test")
+            self.stop_reading()
+            # Clear any buffered data
+            if self.connection and self.connection.is_open:
+                if self.connection.in_waiting > 0:
+                    discarded = self.connection.read(self.connection.in_waiting)
+                    self.logger.debug(f"Cleared {len(discarded)} bytes from buffer")
+    
+    def resume_reading_after_test(self):
+        """Resume reading thread after test completion"""
+        if not self.is_reading and self.connection and self.connection.is_open:
+            self.logger.debug("Resuming reading thread after test")
+            self.start_reading()
 
     def _reading_loop(self):
         """Background thread to read button events"""
@@ -375,6 +399,15 @@ class SMTArduinoController:
                 # Clear input buffer before sending
                 self.connection.reset_input_buffer()
                 
+                # For first attempt, ensure clean state
+                if attempt == 0:
+                    self.logger.debug(f"First attempt for '{command}' - ensuring clean state")
+                    # Flush any stale data
+                    if self.connection.in_waiting > 0:
+                        discarded = self.connection.read(self.connection.in_waiting)
+                        self.logger.debug(f"Discarded {len(discarded)} bytes: {discarded}")
+                    time.sleep(0.05)  # Small delay for Arduino to stabilize
+                
                 # Send command
                 cmd_bytes = f"{command}\n".encode()
                 self.logger.debug(f"Sending command: '{command}' as bytes: {cmd_bytes}")
@@ -394,11 +427,45 @@ class SMTArduinoController:
                         time.sleep(0.01)
                     
                     if self.connection.in_waiting > 0:
-                        self.logger.debug(f"Data available: {self.connection.in_waiting} bytes")
-                        # Use readline() for proper line ending handling
-                        raw_bytes = self.connection.readline()
-                        self.logger.debug(f"Raw bytes received: {raw_bytes}")
-                        response = raw_bytes.decode('utf-8', errors='ignore').strip()
+                        bytes_available = self.connection.in_waiting
+                        self.logger.debug(f"Data available: {bytes_available} bytes")
+                        
+                        # Read immediately to prevent data loss
+                        try:
+                            # Use read with the known byte count
+                            raw_bytes = self.connection.read(bytes_available)
+                            self.logger.debug(f"Read {len(raw_bytes)} bytes: {raw_bytes}")
+                            
+                            # If we didn't get all bytes, try to read more
+                            if len(raw_bytes) < bytes_available:
+                                time.sleep(0.01)
+                                if self.connection.in_waiting > 0:
+                                    more_bytes = self.connection.read(self.connection.in_waiting)
+                                    raw_bytes += more_bytes
+                                    self.logger.debug(f"Read {len(more_bytes)} more bytes, total: {len(raw_bytes)}")
+                        except Exception as e:
+                            self.logger.error(f"Error reading serial data: {e}")
+                            raw_bytes = b''
+                        
+                        # Process the data looking for complete lines
+                        if raw_bytes:
+                            # Convert to string and look for line endings
+                            data_str = raw_bytes.decode('utf-8', errors='ignore')
+                            lines = data_str.split('\n')
+                            
+                            # Find the first complete line (non-empty with proper format)
+                            for line in lines:
+                                line = line.strip('\r\n')
+                                if line and ':' in line:
+                                    response = line
+                                    self.logger.debug(f"Found complete response: '{response}'")
+                                    break
+                            else:
+                                # No complete line found, use whatever we have
+                                response = data_str.strip()
+                                self.logger.debug(f"No complete line, using: '{response}'")
+                        else:
+                            response = ""
                     else:
                         self.logger.debug("No data received within timeout")
                         response = ""
@@ -440,11 +507,24 @@ class SMTArduinoController:
         if command == "I":
             return response.startswith("ID:SMT_SIMPLE_TESTER")
         elif command == "X":
-            return response == "OK:ALL_OFF"
+            # Accept partial response if it contains the key part
+            return "ALL_OFF" in response
         elif command == "B":
             return response.startswith("BUTTON:")
+        elif command == "T":
+            # Panel test response
+            return response.startswith("PANEL:") and ";" in response
+        elif command == "TS":
+            # Streaming test response - first response should be RELAY:
+            return response.startswith("RELAY:") or response == "PANEL_COMPLETE"
         elif command.startswith("R") and len(command) == 2:
             # Relay measurement: R1:12.500,0.450
+            # Also handle partial responses like "8:14,3.0" instead of "R8:14,3.0"
+            if response.startswith(f"{command}:"):
+                return ":" in response and "," in response
+            elif response.startswith(f"{command[1]}:") and ":" in response:
+                # Handle "8:14,3.0" format - still valid
+                return True
             return ":" in response and "," in response
         
         return True
@@ -469,12 +549,56 @@ class SMTArduinoController:
             
         try:
             # Parse response: R1:12.500,0.450
-            if ":" in response and "," in response:
-                _, data = response.split(":", 1)
-                voltage_str, current_str = data.split(",", 1)
+            # Also handle partial responses like "8:14,3.0"
+            if ":" in response:
+                if response.startswith(f"R{relay_num}:"):
+                    _, data = response.split(":", 1)
+                elif response.startswith(f"{relay_num}:"):
+                    # Handle "8:14,3.0" format
+                    data = response.split(":", 1)[1]
+                else:
+                    _, data = response.split(":", 1)
                 
-                voltage = float(voltage_str)
-                current = float(current_str)
+                # Check if we have both values
+                if "," in data:
+                    parts = data.split(",", 1)
+                    voltage_str = parts[0].strip()
+                    current_str = parts[1].strip() if len(parts) > 1 else ""
+                    
+                    # Handle empty current value
+                    if not current_str:
+                        self.logger.warning(f"Missing current value for relay {relay_num}: {response}")
+                        # Return with 0 current for now
+                        voltage = float(voltage_str) if voltage_str else 0.0
+                        return {
+                            'voltage': voltage,
+                            'current': 0.0,
+                            'power': 0.0
+                        }
+                else:
+                    # Sometimes we only get voltage
+                    self.logger.warning(f"Incomplete response for relay {relay_num}: {response}")
+                    return None
+                
+                voltage_mv = float(voltage_str) if voltage_str else 0.0
+                current_ma = float(current_str) if current_str else 0.0
+                
+                # Convert from millivolts to volts (Arduino sends mV)
+                voltage = voltage_mv / 1000.0
+                
+                # Convert from milliamps to amps (Arduino sends mA)
+                current = current_ma / 1000.0
+                
+                self.logger.debug(f"Relay {relay_num}: {voltage_mv}mV -> {voltage:.3f}V, {current_ma}mA -> {current:.3f}A")
+                
+                # Sanity check values - Arduino might be sending garbage
+                if voltage > 100 or voltage < -100:
+                    self.logger.error(f"Invalid voltage reading {voltage}V for relay {relay_num}")
+                    return None
+                if current > 10 or current < -10:
+                    self.logger.error(f"Invalid current reading {current}A for relay {relay_num}")
+                    return None
+                
                 power = voltage * current
                 
                 return {
@@ -495,6 +619,128 @@ class SMTArduinoController:
             results[relay] = self.measure_relay(relay)
             
         return results
+    
+    def test_panel(self) -> Dict[int, Optional[Dict[str, float]]]:
+        """Test entire panel with single command - fast mode"""
+        response = self._send_command("T", timeout=2.0)
+        
+        if not response or not response.startswith("PANEL:"):
+            self.logger.error(f"Invalid panel test response: {response}")
+            return {}
+        
+        try:
+            # Parse response: PANEL:12.847,3.260;12.850,3.248;...
+            results = {}
+            data = response[6:]  # Remove "PANEL:"
+            
+            relay_data_list = data.split(";")
+            for i, relay_data in enumerate(relay_data_list):
+                relay_num = i + 1
+                if "," in relay_data:
+                    voltage_str, current_str = relay_data.split(",", 1)
+                    try:
+                        voltage = float(voltage_str)
+                        current = float(current_str)
+                        
+                        # Sanity check values (already in V and A from Arduino v1.1)
+                        if voltage > 100 or voltage < -100:
+                            self.logger.error(f"Invalid voltage {voltage}V for relay {relay_num}")
+                            results[relay_num] = None
+                        elif current > 10 or current < -10:
+                            self.logger.error(f"Invalid current {current}A for relay {relay_num}")
+                            results[relay_num] = None
+                        else:
+                            results[relay_num] = {
+                                'voltage': voltage,
+                                'current': current,
+                                'power': voltage * current
+                            }
+                    except ValueError as e:
+                        self.logger.error(f"Failed to parse relay {relay_num} data: {relay_data}")
+                        results[relay_num] = None
+                else:
+                    self.logger.error(f"Invalid format for relay {relay_num}: {relay_data}")
+                    results[relay_num] = None
+            
+            self.logger.info(f"Panel test complete: {len([r for r in results.values() if r])} of {len(results)} relays measured successfully")
+            return results
+            
+        except Exception as e:
+            self.logger.error(f"Failed to parse panel test response: {e}")
+            return {}
+    
+    def test_panel_stream(self, progress_callback=None) -> Dict[int, Optional[Dict[str, float]]]:
+        """
+        Test panel with streaming updates for progress feedback
+        
+        Args:
+            progress_callback: Optional callback function(relay_num, measurement_dict)
+        """
+        # Pause reading thread to avoid conflicts
+        was_reading = self.is_reading
+        if was_reading:
+            self.pause_reading_for_test()
+        
+        try:
+            # Send the streaming test command
+            self.connection.reset_input_buffer()
+            cmd_bytes = "TS\n".encode()
+            self.connection.write(cmd_bytes)
+            self.connection.flush()
+            
+            results = {}
+            
+            # Read streaming responses
+            deadline = time.time() + 5.0  # Allow 5 seconds for all 8 relays
+            complete = False
+            
+            while time.time() < deadline and not complete:
+                if self.connection and self.connection.is_open and self.connection.in_waiting > 0:
+                    line = self.connection.readline()
+                    if line:
+                        response = line.decode('utf-8', errors='ignore').strip()
+                        
+                        if response.startswith("RELAY:"):
+                            # Parse RELAY:1,12.847,3.260
+                            try:
+                                data = response[6:]  # Remove "RELAY:"
+                                parts = data.split(",")
+                                if len(parts) >= 3:
+                                    relay_num = int(parts[0])
+                                    voltage = float(parts[1])
+                                    current = float(parts[2])
+                                    
+                                    measurement = {
+                                        'voltage': voltage,
+                                        'current': current,
+                                        'power': voltage * current
+                                    }
+                                    
+                                    results[relay_num] = measurement
+                                    
+                                    # Call progress callback if provided
+                                    if progress_callback:
+                                        try:
+                                            progress_callback(relay_num, measurement)
+                                        except Exception as e:
+                                            self.logger.error(f"Progress callback error: {e}")
+                                            
+                            except Exception as e:
+                                self.logger.error(f"Failed to parse relay response '{response}': {e}")
+                                
+                        elif response == "PANEL_COMPLETE":
+                            self.logger.info("Panel stream test complete")
+                            complete = True
+                            break
+                            
+                time.sleep(0.01)
+            
+            return results
+            
+        finally:
+            # Resume reading thread if it was active
+            if was_reading:
+                self.resume_reading_after_test()
 
     def all_relays_off(self) -> bool:
         """Turn off all relays"""
