@@ -131,7 +131,7 @@ class SMTTest(BaseTest):
             timing = self.parameters.get("timing", {})
             self.test_phases.append({
                 "name": "Power Stabilization",
-                "duration": timing.get("power_stabilization_s", 0.5),
+                "duration": timing.get("power_stabilization_s", 0.05),
                 "action": "stabilize_power"
             })
             

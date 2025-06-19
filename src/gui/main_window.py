@@ -61,6 +61,11 @@ class MainWindow(QMainWindow):
         # Setup SKU manager connections after UI is ready
         self.setup_sku_manager()  # Setup SKU manager connections
         
+        # Setup Arduino pre-verification timer (runs every 10 seconds)
+        self.arduino_preverify_timer = QTimer()
+        self.arduino_preverify_timer.timeout.connect(self._background_arduino_verification)
+        self.arduino_preverify_timer.start(10000)  # 10 seconds
+        
         # Defer config loading slightly to allow UI to show first
         QTimer.singleShot(100, self.start_config_loading)
         
@@ -599,6 +604,10 @@ class MainWindow(QMainWindow):
                 self._weight_handler.cleanup()
             self.connection_handler.cleanup()
 
+            # Stop background timer
+            if hasattr(self, 'arduino_preverify_timer'):
+                self.arduino_preverify_timer.stop()
+            
             # Cleanup test area
             self.test_area.cleanup()
             
@@ -628,6 +637,26 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.logger.error(f"Error during shutdown: {e}")
             event.accept()
+    
+    def _background_arduino_verification(self):
+        """Background task to keep Arduino connection verified"""
+        try:
+            # Only verify if in SMT mode and not currently testing
+            if self.current_mode != "SMT":
+                return
+                
+            # Check if test is running
+            if hasattr(self, '_smt_handler') and self._smt_handler and self._smt_handler.is_test_running():
+                return
+            
+            # Perform quick verification
+            if hasattr(self, '_smt_handler') and self._smt_handler:
+                verified = self._smt_handler.pre_verify_arduino()
+                if not verified:
+                    self.logger.debug("Background Arduino verification failed")
+                    
+        except Exception as e:
+            self.logger.debug(f"Error in background Arduino verification: {e}")
     
     def update_crc_status(self, enabled: bool):
         """Update CRC status display in status bar"""

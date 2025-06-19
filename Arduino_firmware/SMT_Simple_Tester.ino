@@ -35,6 +35,7 @@ bool INA_OK = false;  // Global flag to track if sensor is available
 // Button state tracking
 bool lastButtonState = HIGH;
 bool buttonPressed = false;
+bool buttonEventSent = false;  // Track if we've sent the current button state
 unsigned long lastButtonTime = 0;
 const unsigned long DEBOUNCE_DELAY = 50;
 
@@ -114,10 +115,10 @@ void processCommand(String command) {
     Serial.println("ID:SMT_BATCH_TESTER_V2.0");
   }
   else if (command == "B") {
-    // Get button status
-    if (buttonPressed) {
+    // Get current button status
+    bool currentState = digitalRead(BUTTON_PIN);
+    if (currentState == LOW) {
       Serial.println("BUTTON:PRESSED");
-      buttonPressed = false; // Clear the flag
     } else {
       Serial.println("BUTTON:RELEASED");
     }
@@ -207,12 +208,20 @@ void allRelaysOff() {
 void checkButton() {
   bool currentState = digitalRead(BUTTON_PIN);
   
-  // Check for button press (HIGH to LOW transition with debounce)
+  // Check for button state change with debounce
   if (currentState != lastButtonState) {
     if (millis() - lastButtonTime > DEBOUNCE_DELAY) {
       if (currentState == LOW && lastButtonState == HIGH) {
         // Button was pressed
         buttonPressed = true;
+        // Send button pressed event immediately
+        Serial.println("BUTTON:PRESSED");
+        buttonEventSent = true;
+      } else if (currentState == HIGH && lastButtonState == LOW) {
+        // Button was released
+        // Send button released event immediately
+        Serial.println("BUTTON:RELEASED");
+        buttonEventSent = false;
       }
       lastButtonTime = millis();
     }

@@ -27,6 +27,8 @@ class SMTHandler(QObject, ThreadCleanupMixin):
         self.logger = logging.getLogger(self.__class__.__name__)
         self.current_test_worker = None
         self._button_press_handled = False
+        self._physical_button_state = "RELEASED"  # Track physical button state
+        self._initial_state_received = False  # Track if we've received initial state
         
         # Connect button signal to handler - ensures it runs on main thread
         self.button_pressed_signal.connect(self._handle_button_press_on_main_thread, Qt.QueuedConnection)
@@ -39,13 +41,21 @@ class SMTHandler(QObject, ThreadCleanupMixin):
         
         self.logger.debug("SMTHandler initialized")
     
-    def start_test(self, sku: str, enabled_tests: List[str], connection_status: Dict[str, Any]):
+    def start_test(self, sku: str, enabled_tests: List[str], connection_status: Dict[str, Any], source: str = "GUI"):
         """Start the SMT test with PHASE 1 recovery logic"""
-        self.logger.info(f"Starting SMT test for SKU: {sku}, Enabled Tests: {enabled_tests}")
+        self.logger.info(f"Starting SMT test for SKU: {sku}, Enabled Tests: {enabled_tests}, Source: {source}")
         
         try:
             
-            # PHASE 1: Verify Arduino responsiveness
+            # PHASE 1: Quick Arduino pre-verification (moved from heavy verification)
+            if not self.pre_verify_arduino():
+                self.logger.error("Arduino pre-verification failed")
+                self._button_press_handled = False
+                QMessageBox.critical(self.main_window, "Error", 
+                                   "Arduino not responding. Please reconnect.")
+                return
+            
+            # Clear buffers and prepare for test
             if hasattr(self.main_window, 'arduino_controller') and self.main_window.arduino_controller:
                 arduino = self.main_window.arduino_controller
                 
@@ -61,19 +71,6 @@ class SMTHandler(QObject, ThreadCleanupMixin):
                 else:
                     self.logger.warning("Arduino controller does not have _flush_buffers method")
                 
-                # Verify Arduino is responsive
-                if hasattr(arduino, 'verify_arduino_responsive'):
-                    if not arduino.verify_arduino_responsive():
-                        self.logger.error("Arduino not responding - attempting recovery")
-                        if hasattr(arduino, 'recover_communication'):
-                            if not arduino.recover_communication():
-                                self.logger.error("Failed to recover Arduino communication")
-                                self._button_press_handled = False
-                                QMessageBox.critical(self.main_window, "Error", 
-                                                   "Arduino not responding. Please reconnect.")
-                                return
-                
-                # CRC validation should already be enabled during connection
                 # Log current CRC status for verification
                 if hasattr(arduino, 'is_crc_enabled'):
                     crc_status = arduino.is_crc_enabled()
@@ -304,6 +301,48 @@ class SMTHandler(QObject, ThreadCleanupMixin):
         except Exception as e:
             self.logger.error(f"Error during cleanup: {e}", exc_info=True)
     
+    def pre_verify_arduino(self) -> bool:
+        """Pre-verify Arduino connection without side effects"""
+        try:
+            if not hasattr(self.main_window, 'arduino_controller') or not self.main_window.arduino_controller:
+                return False
+                
+            arduino = self.main_window.arduino_controller
+            
+            # Check basic connection
+            if not hasattr(arduino, 'is_connected') or not arduino.is_connected():
+                return False
+            
+            # For SMT Arduino, do a quick communication test
+            if hasattr(arduino, '_send_command'):
+                try:
+                    # Temporarily disable button callback to prevent test triggers
+                    original_callback = None
+                    if hasattr(arduino, 'button_callback'):
+                        original_callback = arduino.button_callback
+                        arduino.set_button_callback(None)
+                    
+                    # Quick ID check with short timeout
+                    response = arduino._send_command("I", timeout=0.5)
+                    
+                    # Restore callback
+                    if original_callback:
+                        arduino.set_button_callback(original_callback)
+                    
+                    return response and ("SMT" in response or "BATCH" in response)
+                    
+                except Exception:
+                    # Restore callback on error
+                    if original_callback:
+                        arduino.set_button_callback(original_callback)
+                    return False
+            
+            return True
+            
+        except Exception as e:
+            self.logger.debug(f"Pre-verification failed: {e}")
+            return False
+    
     def _handle_test_completion(self, result: TestResult):
         """Handle test completion with PHASE 1 timing updates"""
         self.logger.info(f"SMT test completed. Result: {'PASS' if result.passed else 'FAIL'}")
@@ -333,9 +372,6 @@ class SMTHandler(QObject, ThreadCleanupMixin):
             # Clean up worker
             if self.current_test_worker:
                 self.current_test_worker = None
-            
-            # Reset button handling flag
-            self._button_press_handled = False
                 
             # Update UI
             self.main_window.test_completed(result)
@@ -372,19 +408,28 @@ class SMTHandler(QObject, ThreadCleanupMixin):
     
     def handle_button_event(self, button_state: str):
         """Handle physical button press from Arduino"""
-        if button_state == "PRESSED":
-            # Check if we should handle this press
-            if not self._button_press_handled and not self.is_test_running():
-                self._button_press_handled = True
+        # Store previous state to detect transitions
+        previous_state = self._physical_button_state
+        self._physical_button_state = button_state
+        
+        # If this is the first state update, just record it without triggering
+        if not self._initial_state_received:
+            self._initial_state_received = True
+            self.logger.info(f"Initial button state recorded: {button_state}")
+            return
+        
+        if button_state == "PRESSED" and previous_state == "RELEASED":
+            # Button was just pressed (transition from released to pressed)
+            if not self.is_test_running():
                 self.logger.info("Physical button pressed - triggering test start")
                 
                 # Emit signal to handle the button press on the main thread
                 # Use Qt.QueuedConnection to ensure it runs on main thread
                 self.button_pressed_signal.emit()
-            elif self.is_test_running():
+            else:
                 self.logger.info("Test already running, ignoring button press")
         elif button_state == "RELEASED":
-            # Button released - ready for next press after test completes
+            # Button released - ready for next press
             self.logger.debug("Physical button released")
     
     def _handle_button_press_on_main_thread(self):
@@ -402,7 +447,7 @@ class SMTHandler(QObject, ThreadCleanupMixin):
             connection_status = self.main_window.connection_dialog.get_connection_status()
             
             # Start the test - now safe to show dialogs
-            self.start_test(sku, enabled_tests, connection_status)
+            self.start_test(sku, enabled_tests, connection_status, source="PHYSICAL_BUTTON")
         except Exception as e:
             self.logger.error(f"Error handling button press: {e}", exc_info=True)
             self._button_press_handled = False

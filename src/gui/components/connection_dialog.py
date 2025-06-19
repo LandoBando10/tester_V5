@@ -430,6 +430,16 @@ class ConnectionDialog(QDialog):
                     if not arduino.is_reading:
                         logger.info("Starting Arduino reading loop for button events")
                         arduino.start_reading()
+                    
+                    # Check initial button state in case it's already pressed
+                    try:
+                        initial_state = arduino.get_button_status()
+                        if initial_state:
+                            logger.info(f"Initial button state: {initial_state}")
+                            # Notify handler of initial state
+                            self.parent().smt_handler.handle_button_event(initial_state)
+                    except Exception as e:
+                        logger.warning(f"Could not get initial button state: {e}")
                 
                 # Connection successful!
                 self.arduino_connected = True
