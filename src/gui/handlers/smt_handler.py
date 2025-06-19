@@ -46,6 +46,12 @@ class SMTHandler(QObject, ThreadCleanupMixin):
         self.logger.info(f"Starting SMT test for SKU: {sku}, Enabled Tests: {enabled_tests}, Source: {source}")
         
         try:
+            # PHASE 1: Check minimum time between tests
+            time_since_last_test = time.time() - self._last_test_end_time
+            if time_since_last_test < 1.0:  # Minimum 1 second between tests
+                wait_time = 1.0 - time_since_last_test
+                self.logger.info(f"Waiting {wait_time:.1f}s for cooldown between tests")
+                time.sleep(wait_time)
             
             # PHASE 1: Quick Arduino pre-verification (moved from heavy verification)
             if not self.pre_verify_arduino():
@@ -316,6 +322,13 @@ class SMTHandler(QObject, ThreadCleanupMixin):
             # For SMT Arduino, do a quick communication test
             if hasattr(arduino, '_send_command'):
                 try:
+                    # Temporarily pause the reading thread to prevent interference
+                    was_reading = arduino.is_reading
+                    if was_reading:
+                        arduino.stop_reading()
+                        # Give time for thread to stop
+                        time.sleep(0.1)
+                    
                     # Temporarily disable button callback to prevent test triggers
                     original_callback = None
                     if hasattr(arduino, 'button_callback'):
@@ -329,12 +342,19 @@ class SMTHandler(QObject, ThreadCleanupMixin):
                     if original_callback:
                         arduino.set_button_callback(original_callback)
                     
+                    # Restart reading thread if it was running
+                    if was_reading:
+                        arduino.start_reading()
+                    
                     return response and ("SMT" in response or "BATCH" in response)
                     
                 except Exception:
                     # Restore callback on error
                     if original_callback:
                         arduino.set_button_callback(original_callback)
+                    # Restart reading thread if it was running
+                    if was_reading:
+                        arduino.start_reading()
                     return False
             
             return True
@@ -360,6 +380,8 @@ class SMTHandler(QObject, ThreadCleanupMixin):
                 # Resume reading thread after test completion
                 if hasattr(arduino, 'resume_reading_after_test'):
                     arduino.resume_reading_after_test()
+                    # Give the reading thread time to stabilize
+                    time.sleep(0.2)
                 else:
                     # Standard ArduinoController - send individual commands
                     for relay in range(1, 9):  # Turn off relays 1-8

@@ -173,7 +173,18 @@ class SMTArduinoController:
         if timeout is None:
             timeout = self.command_timeout
             
+        # For critical commands, temporarily pause reading thread
+        pause_reading = command in ["I", "X", "T", "TS", "B"]
+        was_reading = False
+        
         try:
+            # Pause reading thread for critical commands to prevent interference
+            if pause_reading and self.is_reading:
+                was_reading = True
+                self.stop_reading()
+                # Small delay to ensure thread has stopped
+                time.sleep(0.05)
+            
             # Clear input buffer
             self.connection.reset_input_buffer()
             
@@ -198,6 +209,10 @@ class SMTArduinoController:
         except Exception as e:
             self.logger.error(f"Command error: {e}")
             return None
+        finally:
+            # Resume reading thread if it was paused
+            if was_reading and pause_reading:
+                self.start_reading()
 
     def test_panel(self) -> Dict[int, Optional[Dict[str, float]]]:
         """Test entire panel with single command"""
@@ -254,6 +269,8 @@ class SMTArduinoController:
         was_reading = self.is_reading
         if was_reading:
             self.stop_reading()
+            # Give time for thread to fully stop
+            time.sleep(0.1)
         
         try:
             # Send command
