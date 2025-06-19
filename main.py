@@ -107,9 +107,10 @@ def run_professional_gui_mode(args=None):
 
     try:
         from PySide6.QtWidgets import QApplication
-        from PySide6.QtCore import QTimer
+        from PySide6.QtCore import QTimer, QPropertyAnimation, Qt
         from src.gui.startup import SplashScreen, ModeSelectionDialog
         from src.gui.main_window import MainWindow
+        from transition_manager import transition_manager
 
         logger.info("Initializing QApplication for professional mode...")
         app = QApplication(sys.argv)
@@ -127,44 +128,62 @@ def run_professional_gui_mode(args=None):
             preloaded_main_window = window
             logger.info("MainWindow preloaded and ready")
         
-        def on_splash_finished():
-            """Handle splash screen completion"""
+        def on_splash_ready_for_transition():
+            """Handle splash screen ready for seamless transition"""
             nonlocal selected_mode, main_window, preloaded_main_window
             
-            # Add a small delay to ensure splash is fully closed
-            def show_mode_dialog():
-                # Get splash position for seamless transition
-                splash_pos = splash.pos() if splash and hasattr(splash, 'pos') else None
-                mode_dialog = ModeSelectionDialog(position=splash_pos)
-                
-                def on_mode_selected(mode):
-                    nonlocal selected_mode, main_window, preloaded_main_window
-                    selected_mode = mode
-                    logger.info(f"User selected mode: {mode}")
-                    
-                    # Use preloaded window if available, otherwise create new one
-                    if preloaded_main_window:
-                        main_window = preloaded_main_window
-                        logger.info("Using preloaded MainWindow - instant startup!")
-                    else:
-                        logger.info("Creating new MainWindow...")
-                        main_window = MainWindow()
-                    
-                    # Set mode and show window
-                    main_window.set_mode(selected_mode)
-                    main_window.show()
-                
-                # Connect mode selection
-                mode_dialog.mode_selected.connect(on_mode_selected)
-                
-                # If dialog is rejected (closed), exit application
-                if mode_dialog.exec() != ModeSelectionDialog.Accepted:
-                    logger.info("Mode selection cancelled, exiting application")
-                    app.quit()
-                    return False
+            # Create mode dialog but don't show it yet
+            splash_pos = splash.pos() if splash and hasattr(splash, 'pos') else None
+            mode_dialog = ModeSelectionDialog(position=splash_pos)
+            mode_dialog._transition_managed = True  # Mark as managed by transition manager
             
-            # Small delay to ensure splash is fully gone
-            QTimer.singleShot(300, show_mode_dialog)
+            def on_mode_selected(mode):
+                nonlocal selected_mode, main_window, preloaded_main_window
+                selected_mode = mode
+                logger.info(f"User selected mode: {mode}")
+                
+                # Use preloaded window if available, otherwise create new one
+                if preloaded_main_window:
+                    main_window = preloaded_main_window
+                    logger.info("Using preloaded MainWindow - instant startup!")
+                else:
+                    logger.info("Creating new MainWindow...")
+                    main_window = MainWindow()
+                
+                # IMPORTANT: Hide the window first to prevent it showing during initialization
+                main_window.hide()
+                main_window.setWindowOpacity(0.0)
+                
+                # Set mode
+                main_window.set_mode(selected_mode)
+                
+                # Prepare main window state
+                main_window.setWindowState(Qt.WindowMaximized)
+                
+                # Cross-fade from mode dialog to main window for seamless transition
+                transition_manager.cross_fade(
+                    mode_dialog,
+                    main_window,
+                    duration=400,
+                    on_complete=lambda: logger.info("Mode dialog to main window transition complete")
+                )
+            
+            # Connect mode selection
+            mode_dialog.mode_selected.connect(on_mode_selected)
+            
+            # Perform seamless cross-fade from splash to mode dialog
+            transition_manager.cross_fade(
+                splash, 
+                mode_dialog, 
+                duration=400,
+                on_complete=lambda: logger.info("Splash to mode dialog transition complete")
+            )
+            
+            # Handle dialog rejection
+            mode_dialog.rejected.connect(lambda: (
+                logger.info("Mode selection cancelled, exiting application"),
+                app.quit()
+            ))
         
         # Check for startup video (unless disabled)
         project_root = Path(__file__).parent
@@ -180,9 +199,9 @@ def run_professional_gui_mode(args=None):
         
         # Create and show splash screen (longer duration for 3-second video)
         splash = SplashScreen(str(video_path) if video_path else None, duration_ms=3500)
-        splash.finished.connect(on_splash_finished)
+        splash.ready_for_transition.connect(on_splash_ready_for_transition)
         splash.preloaded_window.connect(on_preloaded_window)
-        splash.show_fullscreen()
+        splash.show_centered()
         
         # Run application
         logger.info("Starting professional GUI application event loop...")

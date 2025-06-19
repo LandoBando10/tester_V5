@@ -30,7 +30,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Diode Dynamics Tester V5")
         self.setMinimumSize(1200, 800)
-        self.showMaximized()
+        # Don't show window here - let transition manager handle it
 
         # Core managers
         self.sku_manager = create_sku_manager()
@@ -38,14 +38,14 @@ class MainWindow(QMainWindow):
         self.config_loading_dialog = None
         self.config_load_completed = False
 
-        # Initialize handlers
-        self.offroad_handler = OffroadHandler(self)
-        self.smt_handler = SMTHandler(self)
-        self.weight_handler = WeightHandler(self)
-        self.connection_handler = ConnectionHandler(self)
+        # Initialize handlers lazily
+        self._offroad_handler = None
+        self._smt_handler = None
+        self._weight_handler = None
+        self.connection_handler = ConnectionHandler(self)  # Keep this one immediate
 
-        # UI Components
-        self.connection_dialog = ConnectionDialog(self)
+        # UI Components (lazy load heavy ones)
+        self._connection_dialog = None
         self.test_worker: Optional[TestWorker] = None
         self.arduino_controller = None  # Persistent Arduino instance
 
@@ -61,12 +61,40 @@ class MainWindow(QMainWindow):
         # Setup SKU manager connections after UI is ready
         self.setup_sku_manager()  # Setup SKU manager connections
         
-        # Start async loading after everything is set up
-        self.start_config_loading()  # Start async loading
+        # Defer config loading slightly to allow UI to show first
+        QTimer.singleShot(100, self.start_config_loading)
         
         # If config is already loaded, refresh the UI
         if self.config_load_completed and self.sku_manager.is_loaded():
             self.refresh_data()
+
+    @property
+    def offroad_handler(self):
+        """Lazy load offroad handler"""
+        if self._offroad_handler is None:
+            self._offroad_handler = OffroadHandler(self)
+        return self._offroad_handler
+    
+    @property
+    def smt_handler(self):
+        """Lazy load SMT handler"""
+        if self._smt_handler is None:
+            self._smt_handler = SMTHandler(self)
+        return self._smt_handler
+    
+    @property
+    def weight_handler(self):
+        """Lazy load weight handler"""
+        if self._weight_handler is None:
+            self._weight_handler = WeightHandler(self)
+        return self._weight_handler
+    
+    @property
+    def connection_dialog(self):
+        """Lazy load connection dialog"""
+        if self._connection_dialog is None:
+            self._connection_dialog = ConnectionDialog(self)
+        return self._connection_dialog
 
     def setup_logging(self):
         """Setup logging configuration"""
@@ -562,10 +590,13 @@ class MainWindow(QMainWindow):
                 self.test_worker.terminate()
                 self.test_worker.wait(3000)
 
-            # Cleanup handlers
-            self.offroad_handler.cleanup()
-            self.smt_handler.cleanup()
-            self.weight_handler.cleanup()
+            # Cleanup handlers (only if they were created)
+            if self._offroad_handler is not None:
+                self._offroad_handler.cleanup()
+            if self._smt_handler is not None:
+                self._smt_handler.cleanup()
+            if self._weight_handler is not None:
+                self._weight_handler.cleanup()
             self.connection_handler.cleanup()
 
             # Cleanup test area

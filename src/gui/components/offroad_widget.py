@@ -12,15 +12,24 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Signal, Qt, QThread
 from PySide6.QtGui import QColor
 
-# Try to import pyqtgraph with fallback
-try:
-    os.environ['PYQTGRAPH_QT_LIB'] = 'PySide6'
-    import pyqtgraph as pg
-    PYQTGRAPH_AVAILABLE = True
-except ImportError:
-    PYQTGRAPH_AVAILABLE = False
-    print("Warning: pyqtgraph not available. Live pressure graphs will be disabled.")
-    print("Install with: pip install pyqtgraph")
+# Defer pyqtgraph import until needed
+PYQTGRAPH_AVAILABLE = None
+pg = None
+
+def _ensure_pyqtgraph():
+    """Lazy load pyqtgraph when needed"""
+    global PYQTGRAPH_AVAILABLE, pg
+    if PYQTGRAPH_AVAILABLE is None:
+        try:
+            os.environ['PYQTGRAPH_QT_LIB'] = 'PySide6'
+            import pyqtgraph
+            pg = pyqtgraph
+            PYQTGRAPH_AVAILABLE = True
+        except ImportError:
+            PYQTGRAPH_AVAILABLE = False
+            print("Warning: pyqtgraph not available. Live pressure graphs will be disabled.")
+            print("Install with: pip install pyqtgraph")
+    return PYQTGRAPH_AVAILABLE
 
 from src.core.base_test import TestResult
 
@@ -197,7 +206,7 @@ class PressureGraphWidget(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(5, 5, 5, 5)
         
-        if PYQTGRAPH_AVAILABLE:
+        if _ensure_pyqtgraph():
             # Create pyqtgraph plot widget
             self.plot_widget = pg.PlotWidget()
             self.plot_widget.setBackground('#2b2b2b')
@@ -280,7 +289,7 @@ class PressureGraphWidget(QWidget):
         self.time_data.append(elapsed_time)
         self.pressure_data.append(pressure)
         
-        if PYQTGRAPH_AVAILABLE:
+        if _ensure_pyqtgraph():
             # Update plot
             self.pressure_curve.setData(list(self.time_data), list(self.pressure_data))
         else:
@@ -307,7 +316,7 @@ class PressureGraphWidget(QWidget):
         self.pressure_data.clear()
         self.start_time = None
         
-        if PYQTGRAPH_AVAILABLE:
+        if _ensure_pyqtgraph():
             self.pressure_curve.setData([], [])
         else:
             self.pressure_display.setText("Waiting for pressure data...")
@@ -359,7 +368,7 @@ class TestVisualsArea(QWidget):
         if not self.pressure_graph:
             self.pressure_graph = PressureGraphWidget()
             
-        if not PYQTGRAPH_AVAILABLE:
+        if not _ensure_pyqtgraph():
             # Add a note about the fallback mode
             note_label = QLabel("Note: Install pyqtgraph for enhanced live graphing")
             note_label.setStyleSheet("color: #888888; font-size: 10px; font-style: italic;")

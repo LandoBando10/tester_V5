@@ -8,6 +8,7 @@ from PySide6.QtCore import Qt, QTimer, Signal, QThread, QUrl, QPropertyAnimation
 from PySide6.QtGui import QPixmap, QPainter, QBrush, QColor, QGuiApplication
 from PySide6.QtMultimedia import QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
+from transition_manager import transition_manager
 
 
 class PreloaderThread(QThread):
@@ -44,6 +45,7 @@ class SplashScreen(QWidget):
     
     finished = Signal()
     preloaded_window = Signal(object)  # Emits preloaded MainWindow
+    ready_for_transition = Signal()  # Emits when ready to transition
     
     # Match mode selector dialog size
     SPLASH_WIDTH = 1000
@@ -56,6 +58,8 @@ class SplashScreen(QWidget):
         self.preloaded_main_window = None
         self.preloader_thread = None
         self.is_closing = False  # Prevent multiple close attempts
+        self.video_ended = False  # Track if video has ended
+        self.static_content_widget = None  # For seamless transition
         self.setup_ui()
         self.start_preloading()
         
@@ -105,9 +109,9 @@ class SplashScreen(QWidget):
             self.media_player = QMediaPlayer()
             self.video_widget = QVideoWidget()
             
-            # Configure video widget
+            # Configure video widget with matching background
             self.video_widget.setAspectRatioMode(Qt.KeepAspectRatio)
-            self.video_widget.setStyleSheet("background-color: #000000;")
+            self.video_widget.setStyleSheet("background-color: #1a1a1a;")  # Match splash background
             container_layout.addWidget(self.video_widget)
             
             layout.addWidget(video_container)
@@ -130,8 +134,8 @@ class SplashScreen(QWidget):
             self.media_player.setSource(QUrl.fromLocalFile(self.video_path))
             self.media_player.play()
             
-            # Also set a timer to close after duration_ms in case video doesn't report end
-            QTimer.singleShot(self.duration_ms, self.close_splash)
+            # Also set a timer to prepare transition after duration_ms in case video doesn't report end
+            QTimer.singleShot(self.duration_ms, self.prepare_transition)
             
         except Exception as e:
             print(f"Error setting up video player: {e}")
@@ -187,9 +191,12 @@ class SplashScreen(QWidget):
         """)
         layout.addWidget(subtitle)
         
+        # Store reference to static content for transitions
+        self.static_content_widget = layout.parentWidget()
+        
         # Start timer for fallback duration (shorter for faster startup)
         fallback_duration = min(self.duration_ms, 2000)  # Max 2 seconds for fallback
-        QTimer.singleShot(fallback_duration, self.close_splash)
+        QTimer.singleShot(fallback_duration, self.prepare_transition)
         
     def on_media_status_changed(self, status):
         """Handle media status changes"""
@@ -200,8 +207,9 @@ class SplashScreen(QWidget):
                 self.video_timeout.stop()
             print("Video loaded successfully")
         elif status == QMediaPlayer.EndOfMedia:
-            print("Video ended, closing splash...")
-            self.close_splash()
+            print("Video ended, preparing transition...")
+            self.video_ended = True
+            self.prepare_transition()
             
     def on_media_error(self, error):
         """Handle media errors by falling back"""
@@ -284,6 +292,21 @@ class SplashScreen(QWidget):
     def get_preloaded_window(self):
         """Get the preloaded MainWindow instance"""
         return self.preloaded_main_window
+    
+    def prepare_transition(self):
+        """Prepare for seamless transition to next window"""
+        if self.is_closing:
+            return
+            
+        self.is_closing = True
+        
+        # If video is playing, create a snapshot of the last frame
+        if hasattr(self, 'video_widget') and self.video_ended:
+            # Capture the last frame of the video
+            self.last_frame = transition_manager.capture_frame(self.video_widget)
+        
+        # Signal that we're ready for transition
+        self.ready_for_transition.emit()
     
     def close_splash(self):
         """Close splash screen with fade out for seamless transition"""

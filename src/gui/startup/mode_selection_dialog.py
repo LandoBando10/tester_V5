@@ -214,14 +214,17 @@ class ModeSelectionDialog(QDialog):
             y = (parent_rect.height() - self.height()) // 2
             self.move(x, y)
         
-        # Fade in animation
-        self.setWindowOpacity(0.0)
-        self.animation = QPropertyAnimation(self, b"windowOpacity")
-        self.animation.setDuration(300)
-        self.animation.setStartValue(0.0)
-        self.animation.setEndValue(1.0)
-        self.animation.setEasingCurve(QEasingCurve.OutCubic)
-        self.animation.start()
+        # Don't do fade-in here if we're using transition manager
+        # The transition manager will handle the opacity animation
+        if not hasattr(self, '_transition_managed'):
+            # Fade in animation
+            self.setWindowOpacity(0.0)
+            self.animation = QPropertyAnimation(self, b"windowOpacity")
+            self.animation.setDuration(300)
+            self.animation.setStartValue(0.0)
+            self.animation.setEndValue(1.0)
+            self.animation.setEasingCurve(QEasingCurve.OutCubic)
+            self.animation.start()
         
         # Force window to be active and on top
         self.raise_()
