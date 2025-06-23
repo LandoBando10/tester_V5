@@ -1,18 +1,130 @@
 # gui/components/connection_dialog.py
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List, Tuple
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QGroupBox, 
                                QGridLayout, QLabel, QComboBox, QPushButton, 
-                               QDialogButtonBox, QMessageBox)
-from PySide6.QtCore import Qt
+                               QDialogButtonBox, QMessageBox, QProgressDialog)
+from PySide6.QtCore import Qt, QThread, Signal, QTimer
 from src.hardware.serial_manager import SerialManager
 import logging
 import time
+import concurrent.futures
+import json
+from pathlib import Path
+from dataclasses import dataclass, asdict
 
 logger = logging.getLogger(__name__)
 
-class ConnectionDialog(QDialog):
-    """Dialog for managing hardware connections"""
+@dataclass
+class DeviceInfo:
+    """Store device information for caching"""
+    port: str
+    device_type: str
+    timestamp: float
+    
+class PortScannerThread(QThread):
+    """Background thread for scanning ports"""
+    progress = Signal(int, str)  # progress value, status message
+    finished = Signal(dict)      # port_info dictionary
+    
+    def __init__(self, ports: List[str]):
+        super().__init__()
+        self.ports = ports
+        self._stop_requested = False
+        
+    def run(self):
+        """Run port scanning in background"""
+        port_info = {}
+        total_ports = len(self.ports)
+        
+        # Use thread pool for parallel port probing
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, total_ports)) as executor:
+            # Submit all port probes
+            future_to_port = {
+                executor.submit(self._probe_port_fast, port): port 
+                for port in self.ports
+            }
+            
+            # Collect results as they complete
+            completed = 0
+            for future in concurrent.futures.as_completed(future_to_port):
+                if self._stop_requested:
+                    executor.shutdown(wait=False)
+                    break
+                    
+                port = future_to_port[future]
+                try:
+                    device_type = future.result()
+                    port_info[port] = device_type
+                    completed += 1
+                    self.progress.emit(
+                        int(completed / total_ports * 100), 
+                        f"Identified {port}: {device_type}"
+                    )
+                except Exception as e:
+                    logger.error(f"Error probing {port}: {e}")
+                    port_info[port] = "Unknown"
+                    
+        self.finished.emit(port_info)
+    
+    def stop(self):
+        """Request the thread to stop"""
+        self._stop_requested = True
+        
+    def _probe_port_fast(self, port: str) -> str:
+        """Fast port probing with reduced timeouts"""
+        device_type = "Unknown"
+        
+        try:
+            # Try Arduino first (most common)
+            temp_serial = SerialManager(baud_rate=115200, timeout=0.1)
+            
+            if temp_serial.connect(port):
+                try:
+                    temp_serial.flush_buffers()
+                    
+                    # Send ID command with short timeout
+                    response = temp_serial.query("I", response_timeout=0.3)
+                    if response:
+                        response_upper = response.upper()
+                        if "SMT" in response_upper or "SMT_SIMPLE_TESTER" in response_upper:
+                            device_type = "SMT Arduino"
+                        elif "OFFROAD" in response_upper:
+                            device_type = "Offroad Arduino"
+                        elif "DIODE" in response_upper or "ARDUINO" in response_upper:
+                            device_type = "Arduino"
+                    
+                except Exception:
+                    pass
+                finally:
+                    temp_serial.disconnect()
+            
+            # If not Arduino, quickly check for scale
+            if device_type == "Unknown":
+                temp_serial = SerialManager(baud_rate=9600, timeout=0.05)
+                if temp_serial.connect(port):
+                    try:
+                        time.sleep(0.05)
+                        if temp_serial.connection.in_waiting > 0:
+                            line = temp_serial.read_line(timeout=0.05)
+                            if line and ('g' in line or 'GS' in line or any(c.isdigit() for c in line)):
+                                device_type = "Scale"
+                    except Exception:
+                        pass
+                    finally:
+                        temp_serial.disconnect()
+        
+        except Exception as e:
+            logger.debug(f"Fast probe error on {port}: {e}")
+        
+        return device_type
 
+class ConnectionDialog(QDialog):
+    """Dialog for managing hardware connections with optimized port detection"""
+    
+    # Cache configuration
+    CACHE_FILE = Path("config") / ".device_cache.json"
+    CACHE_TIMEOUT = 300  # 5 minutes
+    
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Hardware Connections")
@@ -25,10 +137,19 @@ class ConnectionDialog(QDialog):
         self.scale_connected = False
         self.arduino_port = None
         self.scale_port = None
-        self.arduino_crc_enabled = False  # Track CRC status
+        self.arduino_crc_enabled = False
+        
+        # Port scanner thread
+        self.scanner_thread = None
+        
+        # Device cache (instance variable for thread safety)
+        self._device_cache = {}
+        self._load_device_cache()
 
         self.setup_ui()
-        self.refresh_ports()
+        
+        # Auto-refresh on dialog open
+        QTimer.singleShot(100, self.quick_refresh_ports)
 
     def setup_ui(self):
         """Setup the connection dialog UI"""
@@ -139,172 +260,240 @@ class ConnectionDialog(QDialog):
         
         layout.addWidget(info_group)
 
-        # Refresh button
-        refresh_btn = QPushButton("Refresh Ports")
-        refresh_btn.clicked.connect(self.refresh_ports)
-        layout.addWidget(refresh_btn)
+        # Button layout with quick and full refresh
+        button_layout = QHBoxLayout()
+        
+        self.quick_refresh_btn = QPushButton("Quick Refresh")
+        self.quick_refresh_btn.clicked.connect(self.quick_refresh_ports)
+        button_layout.addWidget(self.quick_refresh_btn)
+        
+        self.full_refresh_btn = QPushButton("Full Refresh")
+        self.full_refresh_btn.clicked.connect(self.full_refresh_ports)
+        button_layout.addWidget(self.full_refresh_btn)
+        
+        layout.addLayout(button_layout)
 
         # Dialog buttons
         button_box = QDialogButtonBox(QDialogButtonBox.Close)
-        button_box.rejected.connect(self.accept) # Changed from self.close to self.accept for standard dialog behavior
+        button_box.rejected.connect(self.accept)
         layout.addWidget(button_box)
 
         logger.debug("ConnectionDialog UI setup complete.")
 
-    def refresh_ports(self):
-        """Refresh available serial ports and identify device types"""
+    def quick_refresh_ports(self):
+        """Quick refresh using cached device types"""
         try:
-            logger.info("Refreshing serial ports and identifying devices...")
+            logger.info("Quick refresh using cached device types...")
             temp_serial = SerialManager()
             ports = temp_serial.get_available_ports()
-
-            # Get current selections (extract port names without device type)
-            current_arduino = self.arduino_port_combo.currentText()
-            current_scale = self.scale_port_combo.currentText()
             
-            # Extract just the port name if it has device type
-            if ' (' in current_arduino:
-                current_arduino = current_arduino.split(' (')[0]
-            if ' (' in current_scale:
-                current_scale = current_scale.split(' (')[0]
-
-            # Identify device types for each port
-            port_info = self._identify_devices(ports)
-
-            # Create display strings with device types
-            arduino_items = []
-            scale_items = []
+            # Build port info from cache and connected devices
+            port_info = {}
+            current_time = time.time()
+            unknown_count = 0
             
             for port in ports:
-                device_type = port_info.get(port, "Unknown")
-                display_name = f"{port} ({device_type})"
-                
-                # Add to appropriate lists based on device type
-                if device_type in ["SMT Arduino", "Offroad Arduino"]:
-                    arduino_items.append(display_name)
-                    scale_items.append(display_name)  # Also show in scale list as fallback
-                elif device_type == "Scale":
-                    scale_items.append(display_name)
-                    arduino_items.append(display_name)  # Also show in Arduino list as fallback
+                # Check if already connected
+                if self.arduino_connected and self.arduino_port == port:
+                    port_info[port] = "Connected Arduino"
+                elif self.scale_connected and self.scale_port == port:
+                    port_info[port] = "Connected Scale"
+                # Check cache
+                elif port in self._device_cache:
+                    cached = self._device_cache[port]
+                    if current_time - cached.timestamp < self.CACHE_TIMEOUT:
+                        port_info[port] = cached.device_type
+                    else:
+                        port_info[port] = "Unknown"
+                        unknown_count += 1
                 else:
-                    # Unknown devices go in both lists
-                    arduino_items.append(display_name)
-                    scale_items.append(display_name)
-
-            # Update combo boxes
-            self.arduino_port_combo.clear()
-            self.arduino_port_combo.addItems(arduino_items)
-
-            self.scale_port_combo.clear()
-            self.scale_port_combo.addItems(scale_items)
-
-            # Restore selections if still available
-            for i in range(self.arduino_port_combo.count()):
-                if self.arduino_port_combo.itemText(i).startswith(current_arduino + " ("):
-                    self.arduino_port_combo.setCurrentIndex(i)
-                    break
-                    
-            for i in range(self.scale_port_combo.count()):
-                if self.scale_port_combo.itemText(i).startswith(current_scale + " ("):
-                    self.scale_port_combo.setCurrentIndex(i)
-                    break
-                    
-            logger.info(f"Ports refreshed. Found: {port_info}")
+                    port_info[port] = "Unknown"
+                    unknown_count += 1
+            
+            # If all non-connected ports are unknown, do a full refresh instead
+            non_connected_ports = [p for p in ports 
+                                  if not (self.arduino_connected and self.arduino_port == p) 
+                                  and not (self.scale_connected and self.scale_port == p)]
+            
+            if non_connected_ports and unknown_count >= len(non_connected_ports):
+                logger.info("No cached device info available, switching to full refresh")
+                self.full_refresh_ports()
+                return
+                
+            self._update_port_combos(port_info)
+            logger.info(f"Quick refresh completed. Found: {port_info}")
+            
         except Exception as e:
-            logger.error(f"Could not refresh ports: {e}", exc_info=True)
+            logger.error(f"Quick refresh error: {e}")
             QMessageBox.warning(self, "Error", f"Could not refresh ports: {e}")
 
-    def _identify_devices(self, ports: list) -> dict:
-        """Identify device type for each port"""
-        port_info = {}
-        
-        for port in ports:
-            try:
-                # Skip ports that are already connected
-                if (self.arduino_connected and self.arduino_port == port) or \
-                   (self.scale_connected and self.scale_port == port):
-                    # Mark as already connected
-                    if self.arduino_connected and self.arduino_port == port:
-                        port_info[port] = "Connected Arduino"
-                    else:
-                        port_info[port] = "Connected Scale"
-                    continue
-                
-                # Try to identify the device
-                device_type = self._probe_port(port)
-                port_info[port] = device_type
-                
-            except Exception as e:
-                logger.debug(f"Error identifying device on {port}: {e}")
-                port_info[port] = "Unknown"
-        
-        return port_info
-    
-    def _probe_port(self, port: str) -> str:
-        """Probe a single port to identify device type"""
-        device_type = "Unknown"
-        
+    def full_refresh_ports(self):
+        """Full refresh with background scanning"""
         try:
-            # Create a temporary serial connection
-            temp_serial = SerialManager(baud_rate=115200, timeout=0.5)
+            logger.info("Starting full port refresh with device identification...")
             
-            # Try Arduino connection first (115200 baud)
-            if temp_serial.connect(port):
-                try:
-                    # Clear buffers
-                    temp_serial.flush_buffers()
-                    time.sleep(0.05)
-                    
-                    # Send ID command
-                    response = temp_serial.query("I", response_timeout=1.0)
-                    if response:
-                        response_upper = response.upper()
-                        if "SMT" in response_upper or "SMT_TESTER" in response_upper:
-                            device_type = "SMT Arduino"
-                        elif "OFFROAD" in response_upper:
-                            device_type = "Offroad Arduino"
-                        elif "DIODE_DYNAMICS" in response_upper:
-                            # Generic firmware - try to get more info
-                            status = temp_serial.query("STATUS", response_timeout=0.5)
-                            if status and "SMT" in status.upper():
-                                device_type = "SMT Arduino"
-                            else:
-                                device_type = "Offroad Arduino"
-                    
-                except Exception as e:
-                    logger.debug(f"Arduino probe failed on {port}: {e}")
-                
-                finally:
-                    temp_serial.disconnect()
+            # Get list of ports
+            temp_serial = SerialManager()
+            ports = temp_serial.get_available_ports()
             
-            # If not identified as Arduino, try Scale (9600 baud)
-            if device_type == "Unknown":
-                temp_serial = SerialManager(baud_rate=9600, timeout=0.3)
-                if temp_serial.connect(port):
-                    try:
-                        # Wait a bit for scale data
-                        time.sleep(0.1)
-                        
-                        # Try to read a line
-                        for _ in range(3):
-                            line = temp_serial.read_line(timeout=0.1)
-                            if line:
-                                # Check if it looks like scale data
-                                if 'g' in line or 'GS' in line or any(c.isdigit() for c in line):
-                                    device_type = "Scale"
-                                    break
-                    
-                    except Exception as e:
-                        logger.debug(f"Scale probe failed on {port}: {e}")
-                    
-                    finally:
-                        temp_serial.disconnect()
-        
+            if not ports:
+                QMessageBox.information(self, "No Ports", "No serial ports found.")
+                return
+            
+            # Filter out already connected ports
+            ports_to_scan = []
+            port_info = {}
+            
+            for port in ports:
+                if self.arduino_connected and self.arduino_port == port:
+                    port_info[port] = "Connected Arduino"
+                elif self.scale_connected and self.scale_port == port:
+                    port_info[port] = "Connected Scale"
+                else:
+                    ports_to_scan.append(port)
+            
+            if not ports_to_scan:
+                # All ports are connected, just update UI
+                self._update_port_combos(port_info)
+                return
+            
+            # Create progress dialog
+            progress = QProgressDialog("Scanning serial ports...", "Cancel", 0, 100, self)
+            progress.setWindowModality(Qt.WindowModal)
+            progress.setMinimumDuration(0)
+            progress.show()
+            
+            # Create and start scanner thread
+            self.scanner_thread = PortScannerThread(ports_to_scan)
+            
+            # Connect signals
+            self.scanner_thread.progress.connect(
+                lambda value, msg: (progress.setValue(value), progress.setLabelText(msg))
+            )
+            self.scanner_thread.finished.connect(
+                lambda scanned_info: self._on_scan_finished(port_info | scanned_info, progress)
+            )
+            progress.canceled.connect(self.scanner_thread.stop)
+            
+            # Start scanning
+            self.scanner_thread.start()
+            
         except Exception as e:
-            logger.debug(f"Error probing port {port}: {e}")
-        
-        return device_type
+            logger.error(f"Full refresh error: {e}")
+            QMessageBox.warning(self, "Error", f"Could not refresh ports: {e}")
 
+    def _on_scan_finished(self, port_info: dict, progress_dialog):
+        """Handle scan completion"""
+        progress_dialog.close()
+        
+        # Update cache with new results
+        current_time = time.time()
+        for port, device_type in port_info.items():
+            if device_type not in ["Connected Arduino", "Connected Scale", "Unknown"]:
+                self._device_cache[port] = DeviceInfo(port, device_type, current_time)
+        
+        # Save cache
+        self._save_device_cache()
+        
+        # Update UI
+        self._update_port_combos(port_info)
+        logger.info(f"Full refresh completed. Found: {port_info}")
+
+    def _update_port_combos(self, port_info: dict):
+        """Update combo boxes with port information"""
+        # Get current selections
+        current_arduino = self.arduino_port_combo.currentText()
+        current_scale = self.scale_port_combo.currentText()
+        
+        # Extract just the port name if it has device type
+        if ' (' in current_arduino:
+            current_arduino = current_arduino.split(' (')[0]
+        if ' (' in current_scale:
+            current_scale = current_scale.split(' (')[0]
+
+        # Create display strings with device types
+        arduino_items = []
+        scale_items = []
+        
+        # Sort ports for consistent ordering
+        sorted_ports = sorted(port_info.keys())
+        
+        # Group ports by device type
+        arduino_ports = []
+        scale_ports = []
+        unknown_ports = []
+        
+        for port in sorted_ports:
+            device_type = port_info.get(port, "Unknown")
+            display_name = f"{port} ({device_type})"
+            
+            if "Arduino" in device_type:
+                arduino_ports.append(display_name)
+            elif device_type == "Scale":
+                scale_ports.append(display_name)
+            else:
+                unknown_ports.append(display_name)
+        
+        # Build combo lists with appropriate devices first
+        arduino_items = arduino_ports + scale_ports + unknown_ports
+        scale_items = scale_ports + arduino_ports + unknown_ports
+
+        # Update combo boxes
+        self.arduino_port_combo.clear()
+        self.arduino_port_combo.addItems(arduino_items)
+
+        self.scale_port_combo.clear()
+        self.scale_port_combo.addItems(scale_items)
+
+        # Restore selections if still available
+        for i in range(self.arduino_port_combo.count()):
+            if self.arduino_port_combo.itemText(i).startswith(current_arduino + " ("):
+                self.arduino_port_combo.setCurrentIndex(i)
+                break
+                
+        for i in range(self.scale_port_combo.count()):
+            if self.scale_port_combo.itemText(i).startswith(current_scale + " ("):
+                self.scale_port_combo.setCurrentIndex(i)
+                break
+
+    def _load_device_cache(self):
+        """Load device cache from file"""
+        try:
+            if self.CACHE_FILE.exists():
+                with open(self.CACHE_FILE, 'r') as f:
+                    cache_data = json.load(f)
+                    for port, info in cache_data.items():
+                        self._device_cache[port] = DeviceInfo(**info)
+                logger.debug(f"Loaded device cache with {len(self._device_cache)} entries")
+        except Exception as e:
+            logger.debug(f"Could not load device cache: {e}")
+
+    def _save_device_cache(self):
+        """Save device cache to file"""
+        try:
+            self.CACHE_FILE.parent.mkdir(exist_ok=True)
+            
+            # Convert to serializable format
+            cache_data = {
+                port: asdict(info) 
+                for port, info in self._device_cache.items()
+            }
+            
+            with open(self.CACHE_FILE, 'w') as f:
+                json.dump(cache_data, f, indent=2)
+            logger.debug(f"Saved device cache with {len(cache_data)} entries")
+        except Exception as e:
+            logger.debug(f"Could not save device cache: {e}")
+
+    def closeEvent(self, event):
+        """Handle dialog close event"""
+        # Stop scanner thread if running
+        if self.scanner_thread and self.scanner_thread.isRunning():
+            self.scanner_thread.stop()
+            self.scanner_thread.wait()
+        super().closeEvent(event)
+
+    # Keep all existing connection methods unchanged...
     def toggle_arduino_connection(self):
         """Toggle Arduino connection"""
         if self.arduino_connected:

@@ -218,7 +218,13 @@ class SMTArduinoController:
         """Test entire panel with single command"""
         response = self._send_command("T", timeout=2.0)
         
-        if not response or not response.startswith("PANEL:"):
+        if not response:
+            self.logger.error("No response from panel test - possible power loss or Arduino hang")
+            # Send an 'X' command to reset Arduino state
+            self._send_command("X", timeout=0.5)
+            return {}
+        
+        if not response.startswith("PANEL:"):
             self.logger.error(f"Invalid panel test response: {response}")
             return {}
         
