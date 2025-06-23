@@ -110,7 +110,7 @@ def run_professional_gui_mode(args=None):
         from PySide6.QtCore import QTimer, QPropertyAnimation, Qt
         from src.gui.startup import SplashScreen, ModeSelectionDialog
         from src.gui.main_window import MainWindow
-        from transition_manager import transition_manager
+        from src.gui.startup.transition_manager import transition_manager
 
         logger.info("Initializing QApplication for professional mode...")
         app = QApplication(sys.argv)

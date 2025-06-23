@@ -199,7 +199,14 @@ class TopControlsWidget(QWidget):
             if test_name in self.test_checkboxes:
                 checkbox = self.test_checkboxes[test_name]
                 checkbox.show()
-                checkbox.setChecked(True)  # Default to checked
+                
+                # For SMT mode, programming checkbox starts disabled until SKU is selected
+                if self.current_mode == "SMT" and test_name == "PROGRAMMING":
+                    checkbox.setEnabled(False)
+                    checkbox.setChecked(False)
+                else:
+                    checkbox.setEnabled(True)
+                    checkbox.setChecked(True)  # Default to checked
     
     def set_available_skus(self, skus: List[str]):
         """Update the available SKUs in the combo box"""
@@ -241,6 +248,23 @@ class TopControlsWidget(QWidget):
     def on_sku_text_changed(self, text):
         """Handle text changes"""
         pass
+    
+    def update_programming_checkbox(self, programming_enabled: bool):
+        """Update programming checkbox state based on SKU configuration
+        
+        Args:
+            programming_enabled: True if programming is enabled for the SKU, False otherwise
+        """
+        if "PROGRAMMING" in self.test_checkboxes:
+            checkbox = self.test_checkboxes["PROGRAMMING"]
+            if programming_enabled:
+                # Enable checkbox and check it by default
+                checkbox.setEnabled(True)
+                checkbox.setChecked(True)
+            else:
+                # Disable checkbox and uncheck it
+                checkbox.setEnabled(False)
+                checkbox.setChecked(False)
     
     def on_sku_highlighted(self, index):
         """Handle highlighting"""

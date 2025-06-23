@@ -8,7 +8,7 @@ from PySide6.QtCore import Qt, QTimer, Signal, QThread, QUrl, QPropertyAnimation
 from PySide6.QtGui import QPixmap, QPainter, QBrush, QColor, QGuiApplication
 from PySide6.QtMultimedia import QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
-from transition_manager import transition_manager
+from .transition_manager import transition_manager
 
 
 class PreloaderThread(QThread):

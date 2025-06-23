@@ -174,7 +174,7 @@ class SMTArduinoController:
             timeout = self.command_timeout
             
         # For critical commands, temporarily pause reading thread
-        pause_reading = command in ["I", "X", "T", "TS", "B"]
+        pause_reading = command in ["X", "T", "TS"]
         was_reading = False
         
         try:

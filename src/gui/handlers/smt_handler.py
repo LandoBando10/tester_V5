@@ -48,18 +48,11 @@ class SMTHandler(QObject, ThreadCleanupMixin):
         try:
             # PHASE 1: Check minimum time between tests
             time_since_last_test = time.time() - self._last_test_end_time
-            if time_since_last_test < 1.0:  # Minimum 1 second between tests
-                wait_time = 1.0 - time_since_last_test
+            if time_since_last_test < 0.3:  # Minimum 0.3 seconds between tests
+                wait_time = 0.3 - time_since_last_test
                 self.logger.info(f"Waiting {wait_time:.1f}s for cooldown between tests")
                 time.sleep(wait_time)
             
-            # PHASE 1: Quick Arduino pre-verification (moved from heavy verification)
-            if not self.pre_verify_arduino():
-                self.logger.error("Arduino pre-verification failed")
-                self._button_press_handled = False
-                QMessageBox.critical(self.main_window, "Error", 
-                                   "Arduino not responding. Please reconnect.")
-                return
             
             # Clear buffers and prepare for test
             if hasattr(self.main_window, 'arduino_controller') and self.main_window.arduino_controller:
@@ -307,61 +300,6 @@ class SMTHandler(QObject, ThreadCleanupMixin):
         except Exception as e:
             self.logger.error(f"Error during cleanup: {e}", exc_info=True)
     
-    def pre_verify_arduino(self) -> bool:
-        """Pre-verify Arduino connection without side effects"""
-        try:
-            if not hasattr(self.main_window, 'arduino_controller') or not self.main_window.arduino_controller:
-                return False
-                
-            arduino = self.main_window.arduino_controller
-            
-            # Check basic connection
-            if not hasattr(arduino, 'is_connected') or not arduino.is_connected():
-                return False
-            
-            # For SMT Arduino, do a quick communication test
-            if hasattr(arduino, '_send_command'):
-                try:
-                    # Temporarily pause the reading thread to prevent interference
-                    was_reading = arduino.is_reading
-                    if was_reading:
-                        arduino.stop_reading()
-                        # Give time for thread to stop
-                        time.sleep(0.1)
-                    
-                    # Temporarily disable button callback to prevent test triggers
-                    original_callback = None
-                    if hasattr(arduino, 'button_callback'):
-                        original_callback = arduino.button_callback
-                        arduino.set_button_callback(None)
-                    
-                    # Quick ID check with short timeout
-                    response = arduino._send_command("I", timeout=0.5)
-                    
-                    # Restore callback
-                    if original_callback:
-                        arduino.set_button_callback(original_callback)
-                    
-                    # Restart reading thread if it was running
-                    if was_reading:
-                        arduino.start_reading()
-                    
-                    return response and ("SMT" in response or "BATCH" in response)
-                    
-                except Exception:
-                    # Restore callback on error
-                    if original_callback:
-                        arduino.set_button_callback(original_callback)
-                    # Restart reading thread if it was running
-                    if was_reading:
-                        arduino.start_reading()
-                    return False
-            
-            return True
-            
-        except Exception as e:
-            self.logger.debug(f"Pre-verification failed: {e}")
-            return False
     
     def _handle_test_completion(self, result: TestResult):
         """Handle test completion with PHASE 1 timing updates"""
@@ -387,9 +325,6 @@ class SMTHandler(QObject, ThreadCleanupMixin):
                     for relay in range(1, 9):  # Turn off relays 1-8
                         arduino.send_command(f"RELAY:{relay}:OFF")
             
-            # If test failed, add extra recovery time
-            if not result.passed:
-                self._last_test_end_time += 3.0  # Add 3 seconds to cooldown for failed tests
             
             # Clean up worker
             if self.current_test_worker:

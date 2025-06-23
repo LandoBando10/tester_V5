@@ -61,10 +61,6 @@ class MainWindow(QMainWindow):
         # Setup SKU manager connections after UI is ready
         self.setup_sku_manager()  # Setup SKU manager connections
         
-        # Setup Arduino pre-verification timer (runs every 10 seconds)
-        self.arduino_preverify_timer = QTimer()
-        self.arduino_preverify_timer.timeout.connect(self._background_arduino_verification)
-        self.arduino_preverify_timer.start(10000)  # 10 seconds
         
         # Defer config loading slightly to allow UI to show first
         QTimer.singleShot(100, self.start_config_loading)
@@ -407,21 +403,37 @@ class MainWindow(QMainWindow):
                 # Update SMT panel layout based on SKU configuration
                 try:
                     params = self.sku_manager.get_test_parameters(sku, "SMT")
-                    if params and "panel_layout" in params:
-                        panel_layout = params["panel_layout"]
-                        rows = panel_layout.get("rows", 0)
-                        cols = panel_layout.get("columns", 0)
+                    if params:
+                        # Update panel layout
+                        if "panel_layout" in params:
+                            panel_layout = params["panel_layout"]
+                            rows = panel_layout.get("rows", 0)
+                            cols = panel_layout.get("columns", 0)
+                            
+                            # Update the SMT widget's panel layout
+                            if hasattr(self.test_area, 'smt_widget') and self.test_area.smt_widget:
+                                self.test_area.smt_widget.set_panel_layout(rows, cols)
+                                self.logger.info(f"Updated SMT panel layout for {sku}: {rows}x{cols}")
                         
-                        # Update the SMT widget's panel layout
-                        if hasattr(self.test_area, 'smt_widget') and self.test_area.smt_widget:
-                            self.test_area.smt_widget.set_panel_layout(rows, cols)
-                            self.logger.info(f"Updated SMT panel layout for {sku}: {rows}x{cols}")
+                        # Update programming checkbox based on SKU configuration
+                        programming_enabled = False
+                        if "programming" in params:
+                            programming_config = params["programming"]
+                            programming_enabled = programming_config.get("enabled", False)
+                        
+                        self.top_controls.update_programming_checkbox(programming_enabled)
+                        self.logger.info(f"Updated programming checkbox for {sku}: enabled={programming_enabled}")
+                        
                 except Exception as e:
-                    self.logger.error(f"Error updating SMT panel layout: {e}")
+                    self.logger.error(f"Error updating SMT configuration: {e}")
 
         else:
             if self.current_mode != "WeightChecking":
                 self.set_start_enabled(False)
+            
+            # If in SMT mode and no SKU selected, disable programming checkbox
+            if self.current_mode == "SMT":
+                self.top_controls.update_programming_checkbox(False)
 
     def start_test(self):
         """Start the selected test"""
@@ -604,9 +616,6 @@ class MainWindow(QMainWindow):
                 self._weight_handler.cleanup()
             self.connection_handler.cleanup()
 
-            # Stop background timer
-            if hasattr(self, 'arduino_preverify_timer'):
-                self.arduino_preverify_timer.stop()
             
             # Cleanup test area
             self.test_area.cleanup()
@@ -638,25 +647,6 @@ class MainWindow(QMainWindow):
             self.logger.error(f"Error during shutdown: {e}")
             event.accept()
     
-    def _background_arduino_verification(self):
-        """Background task to keep Arduino connection verified"""
-        try:
-            # Only verify if in SMT mode and not currently testing
-            if self.current_mode != "SMT":
-                return
-                
-            # Check if test is running
-            if hasattr(self, '_smt_handler') and self._smt_handler and self._smt_handler.is_test_running():
-                return
-            
-            # Perform quick verification
-            if hasattr(self, '_smt_handler') and self._smt_handler:
-                verified = self._smt_handler.pre_verify_arduino()
-                if not verified:
-                    self.logger.debug("Background Arduino verification failed")
-                    
-        except Exception as e:
-            self.logger.debug(f"Error in background Arduino verification: {e}")
     
     def update_crc_status(self, enabled: bool):
         """Update CRC status display in status bar"""

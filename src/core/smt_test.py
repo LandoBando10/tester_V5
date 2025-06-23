@@ -33,10 +33,6 @@ class SMTTest(BaseTest):
         self.programming_enabled = False
         self.programming_results: List[Dict[str, Any]] = []
 
-        # Test sequence control
-        self.test_phases = []
-        self.current_phase = 0
-
         # Initialize programmers if configured
         self._initialize_programmers()
 
@@ -117,48 +113,50 @@ class SMTTest(BaseTest):
     def run_test_sequence(self) -> TestResult:
         """Execute test sequence from configuration only"""
         try:
-            self.test_phases = []
-            
             # Programming phase if enabled
             if self.programming_enabled and self.programmers:
-                self.test_phases.append({
-                    "name": "Programming",
-                    "duration": 30.0,
-                    "action": "program_boards"
-                })
+                self.update_progress("Programming boards...", 45)
+                success = self._execute_programming_phase(30.0, 45)
+                if not success:
+                    self.result.failures.append("Programming phase failed")
             
-            # Power stabilization
-            timing = self.parameters.get("timing", {})
-            self.test_phases.append({
-                "name": "Power Stabilization",
-                "duration": timing.get("power_stabilization_s", 0.05),
-                "action": "stabilize_power"
-            })
+            
+            # Single panel measurement
+            self.update_progress("Measuring panel...", 60)
+            panel_measurements = self.arduino.test_panel()
+            
+            if not panel_measurements:
+                self.logger.error("Panel test failed - no measurements received")
+                self.result.failures.append("Failed to get panel measurements from Arduino")
+                return self.result
+            
+            # Log raw measurements
+            self.logger.info(f"Received measurements for {len(panel_measurements)} relays")
+            
+            # Distribute results by function
+            function_results = self._distribute_panel_results(panel_measurements, self.relay_mapping)
             
             # Read test sequence from configuration
             test_sequence = self.parameters.get("test_sequence", [])
             if not test_sequence:
                 raise ValueError("No test_sequence defined in SKU configuration")
             
-            # Create test phases from configuration (new format only)
+            # Analyze each function against its limits
+            self.update_progress("Analyzing results...", 80)
             for test_config in test_sequence:
                 function = test_config["function"]
+                limits = test_config["limits"]
                 
-                self.test_phases.append({
-                    "duration": test_config.get("duration", timing.get("default_test_duration_s", 2.0)),
-                    "action": "test_function",
-                    "function": function,
-                    "limits": test_config["limits"]
-                })
+                if function in function_results:
+                    # Store results for this function
+                    self.result.measurements[f"{function}_readings"] = {
+                        "board_results": self._format_board_results(function, function_results[function]),
+                        "limits": limits
+                    }
+                else:
+                    self.logger.warning(f"No measurements found for function: {function}")
             
-            # Execute all phases
-            for phase_idx, phase in enumerate(self.test_phases):
-                base_progress = 45 + (phase_idx * 40 // len(self.test_phases))
-                success = self._execute_phase(phase, phase_idx)
-                if not success:
-                    function_name = phase.get('function', phase.get('action', 'unknown'))
-                    self.result.failures.append(f"Failed: {function_name}")
-            
+            # Final analysis
             self._analyze_results()
             return self.result
             
@@ -167,21 +165,6 @@ class SMTTest(BaseTest):
             self.result.failures.append(str(e))
             return self.result
 
-    def _execute_phase(self, phase: Dict[str, Any], phase_idx: int) -> bool:
-        """Execute a single test phase"""
-        action = phase["action"]
-        base_progress = 45 + (phase_idx * 40 // len(self.test_phases))
-        
-        if action == "program_boards":
-            return self._execute_programming_phase(phase["duration"], base_progress)
-        elif action == "stabilize_power":
-            time.sleep(phase["duration"])
-            return True
-        elif action == "test_function":
-            return self._execute_function_test(phase, base_progress)
-        else:
-            self.logger.error(f"Unknown action: {action}")
-            return False
 
     def _execute_programming_phase(self, duration: float, base_progress: int) -> bool:
         """Execute board programming phase"""
@@ -288,93 +271,74 @@ class SMTTest(BaseTest):
             self.logger.error(f"Programming phase error: {e}")
             return False
 
-    # --- new helper ----------------------------------------------------
-    def _measure_group(self, relays: str, timeout: float = 15.0) -> Dict[str, Dict]:
+    def _distribute_panel_results(self, panel_measurements: Dict[int, Dict], relay_mapping: Dict) -> Dict[str, Dict[int, Dict]]:
         """
-        Measure a group of relays using batch panel test
-        Always uses the fast panel test command for all measurements
+        Distribute panel measurements by function based on relay mapping
+        
+        Args:
+            panel_measurements: Raw measurements from test_panel() {relay_num: {voltage, current, power}}
+            relay_mapping: Relay configuration from SKU
+            
+        Returns:
+            Dictionary organized by function -> board -> measurements
         """
-        board_results = {}
-        relay_list = [int(r.strip()) for r in relays.split(',') if r.strip()]
+        function_results = {}
         
-        # Always use panel test - it's the only way now
-        self.logger.info("Using batch panel test command")
-        
-        # Use panel test method (measures all 8 relays)
-        measurement_results = self.arduino.test_panel()
-        
-        if not measurement_results:
-            self.logger.error("Panel test failed - no measurements received")
-            self.result.failures.append("Failed to get panel measurements from Arduino")
-            return board_results
-        
-        # Map results to boards (only for requested relays)
-        for relay_num in relay_list:
-            if relay_num in measurement_results and measurement_results[relay_num]:
-                measurement = measurement_results[relay_num]
+        for relay_str, mapping in relay_mapping.items():
+            if mapping is None:
+                continue
                 
-                # Get board number from relay mapping
-                board_num = self.smt_controller.get_board_from_relay(relay_num)
-                if not board_num:
-                    self.logger.warning(f"No board mapping found for relay {relay_num}")
-                    continue
+            relay_num = int(relay_str)
+            board_num = mapping.get("board")
+            function = mapping.get("function")
+            
+            if not board_num or not function:
+                continue
                 
-                board_results[f"Board {board_num}"] = {
-                    "relay": relay_num,
-                    "voltage": measurement.get("voltage", 0),
-                    "current": measurement.get("current", 0),
-                    "power": measurement.get("power", 0)
-                }
-            else:
-                self.logger.warning(f"No measurement for relay {relay_num}")
+            # Initialize function dict if needed
+            if function not in function_results:
+                function_results[function] = {}
+                
+            # Add measurements for this board if relay was measured
+            if relay_num in panel_measurements and panel_measurements[relay_num]:
+                function_results[function][board_num] = panel_measurements[relay_num]
+                
+        return function_results
+    
+    def _format_board_results(self, function: str, board_measurements: Dict[int, Dict]) -> Dict[str, Dict]:
+        """
+        Format board measurements for storage in results
         
-        self.logger.info(f"Parsed board results: {list(board_results.keys())}")
+        Args:
+            function: Function name
+            board_measurements: {board_num: {voltage, current, power}}
+            
+        Returns:
+            Formatted results {Board_X: {relay, voltage, current, power}}
+        """
+        formatted = {}
         
-        # Validate we got measurements for requested relays
-        expected_count = len(relay_list)
-        actual_count = len(board_results)
-        
-        if actual_count == 0:
-            self.logger.error(f"No measurements received for relays {relay_list}")
-            self.result.failures.append(f"No measurements received from Arduino for relays {relay_list}")
-        elif actual_count < expected_count:
-            self.logger.warning(f"Only received {actual_count}/{expected_count} measurements")
-            missing_relays = [r for r in relay_list if f"Board {self.smt_controller.get_board_from_relay(r)}" not in board_results]
-            if missing_relays:
-                self.logger.warning(f"Missing measurements for relays: {missing_relays}")
-        
-        return board_results
-
-    def _execute_function_test(self, phase: Dict[str, Any], base_progress: int) -> bool:
-        """Execute test for any function based on configuration"""
-        try:
-            function_name = phase["function"]
-            limits = phase["limits"]
+        for board_num, measurements in board_measurements.items():
+            board_key = f"Board {board_num}"
             
-            self.update_progress(f"Testing {function_name}...", base_progress)
+            # Find relay number for this board/function combination
+            relay_num = None
+            for relay_str, mapping in self.relay_mapping.items():
+                if (mapping and 
+                    mapping.get("board") == board_num and 
+                    mapping.get("function") == function):
+                    relay_num = int(relay_str)
+                    break
             
-            # Get relays for this function from configuration
-            function_relays = self.smt_controller.get_relays_for_function(function_name)
-            if not function_relays:
-                self.logger.info(f"No relays configured for {function_name}")
-                return True
-            
-            # Measure all relays
-            relay_str = ",".join(map(str, function_relays))
-            board_results = self._measure_group(relay_str)
-            
-            # Simply store the board results and limits for analysis
-            # No averaging needed - pass/fail is determined per board
-            self.result.measurements[f"{function_name}_readings"] = {
-                "board_results": board_results,
-                "limits": limits
+            formatted[board_key] = {
+                "relay": relay_num,
+                "voltage": measurements.get("voltage", 0),
+                "current": measurements.get("current", 0),
+                "power": measurements.get("power", 0)
             }
             
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"Error testing {function_name}: {e}")
-            return False
+        return formatted
+
 
     def _analyze_results(self):
         """Analyze results based on configuration limits"""
