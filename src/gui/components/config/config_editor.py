@@ -30,8 +30,7 @@ class ConfigurationEditor(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Edit Configuration")
-        self.setMinimumSize(1200, 800)
-        self.resize(1400, 900)
+        self.showFullScreen()
         
         # Data managers
         self.sku_manager = None
@@ -63,7 +62,7 @@ class ConfigurationEditor(QDialog):
         
         title_label = QLabel("Configuration Editor")
         title_label.setFont(QFont("Arial", 16, QFont.Bold))
-        title_label.setStyleSheet("color: #ffffff; margin-bottom: 10px;")
+        title_label.setStyleSheet("color: #ffffff; margin-bottom: 10px; border: none;")
         header_layout.addWidget(title_label)
         
         header_layout.addStretch()
@@ -93,6 +92,12 @@ class ConfigurationEditor(QDialog):
         # Bottom buttons
         button_layout = QHBoxLayout()
         button_layout.addStretch()
+        
+        # Add Exit Fullscreen button
+        self.exit_fullscreen_btn = QPushButton("Exit Fullscreen (Esc)")
+        self.exit_fullscreen_btn.setFixedSize(140, 35)
+        self.exit_fullscreen_btn.clicked.connect(self.showNormal)
+        button_layout.addWidget(self.exit_fullscreen_btn)
         
         self.import_btn = QPushButton("Import Config...")
         self.export_btn = QPushButton("Export Config...")
@@ -137,22 +142,22 @@ class ConfigurationEditor(QDialog):
         
         sku_label = QLabel("SKUs")
         sku_label.setFont(QFont("Arial", 12, QFont.Bold))
-        sku_label.setStyleSheet("color: #ffffff;")
+        sku_label.setStyleSheet("color: #ffffff; border: none;")
         header_layout.addWidget(sku_label)
         
         header_layout.addStretch()
         
         # SKU management buttons
-        self.add_sku_btn = QPushButton("+")
-        self.add_sku_btn.setFixedSize(25, 25)
+        self.add_sku_btn = QPushButton("Add")
+        self.add_sku_btn.setFixedSize(40, 25)
         self.add_sku_btn.setToolTip("Add new SKU")
         
-        self.duplicate_sku_btn = QPushButton("⧉")
-        self.duplicate_sku_btn.setFixedSize(25, 25)
+        self.duplicate_sku_btn = QPushButton("Copy")
+        self.duplicate_sku_btn.setFixedSize(45, 25)
         self.duplicate_sku_btn.setToolTip("Duplicate selected SKU")
         
-        self.delete_sku_btn = QPushButton("×")
-        self.delete_sku_btn.setFixedSize(25, 25)
+        self.delete_sku_btn = QPushButton("Del")
+        self.delete_sku_btn.setFixedSize(35, 25)
         self.delete_sku_btn.setToolTip("Delete selected SKU")
         
         for btn in [self.add_sku_btn, self.duplicate_sku_btn, self.delete_sku_btn]:
@@ -163,6 +168,7 @@ class ConfigurationEditor(QDialog):
                     border: 1px solid #555555;
                     border-radius: 3px;
                     font-weight: bold;
+                    font-size: 11px;
                 }
                 QPushButton:hover {
                     background-color: #555555;
@@ -563,6 +569,13 @@ class ConfigurationEditor(QDialog):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to save configuration: {e}")
     
+    def keyPressEvent(self, event):
+        """Handle key press events"""
+        if event.key() == Qt.Key_Escape:
+            self.showNormal()
+        else:
+            super().keyPressEvent(event)
+    
     def closeEvent(self, event):
         """Handle close event"""
         if self.unsaved_changes:
@@ -589,6 +602,10 @@ class ConfigurationEditor(QDialog):
             QDialog {
                 background-color: #2b2b2b;
                 color: white;
+            }
+            
+            QLabel {
+                border: none;
             }
             
             QTabWidget::pane {

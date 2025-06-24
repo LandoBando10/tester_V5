@@ -8,11 +8,12 @@ from src.core.base_test import BaseTest, TestResult
 from src.core.programmer_controller import ProgrammerController
 from src.core.smt_controller import SMTController
 from src.hardware.smt_arduino_controller import SMTArduinoController
+from src.spc.spc_integration import SPCIntegration
 
 class SMTTest(BaseTest):
     """SMT panel testing with programming and power validation using dedicated SMT Arduino"""
 
-    def __init__(self, sku: str, parameters: Dict[str, Any], port: str, programming_config: Optional[Dict] = None, smt_config_path: Optional[str] = None, arduino_controller=None):
+    def __init__(self, sku: str, parameters: Dict[str, Any], port: str, programming_config: Optional[Dict] = None, smt_config_path: Optional[str] = None, arduino_controller=None, spc_config: Optional[Dict] = None):
         super().__init__(sku, parameters)
         self.port = port
         self.programming_config = programming_config or {}
@@ -35,7 +36,28 @@ class SMTTest(BaseTest):
 
         # Initialize programmers if configured
         self._initialize_programmers()
+        
+        # Initialize SPC if configured
+        self.spc_config = spc_config or {}
+        self.spc = None
+        if self.spc_config.get('enabled', False):
+            self.spc = SPCIntegration(
+                spc_enabled=True,
+                sampling_mode=self.spc_config.get('sampling_mode', True),
+                production_mode=self.spc_config.get('production_mode', False),
+                logger=self.logger
+            )
+            # Connect to spec calculation ready signal
+            self.spc.spec_calculation_ready.connect(self._on_spec_calculation_ready)
+            self.logger.info(f"SPC enabled - Sampling: {self.spc_config.get('sampling_mode')}, Production: {self.spc_config.get('production_mode')}")
 
+    def _on_spec_calculation_ready(self, sku: str):
+        """Handle when enough measurements collected for spec calculation"""
+        self.logger.info(f"Spec calculation ready for {sku}")
+        # This will be handled by the GUI - emit a signal or call a callback
+        if hasattr(self, 'spec_calculation_callback'):
+            self.spec_calculation_callback(sku)
+    
     def _initialize_programmers(self):
         """Initialize configured programmers"""
         if not self.programming_config:
@@ -387,11 +409,23 @@ class SMTTest(BaseTest):
                 current, min_val, max_val, "A"
             )
             
+            # Add to SPC if enabled
+            if self.spc and self.spc.sampling_mode:
+                board_id = board_name.replace(' ', '_')
+                self.spc.add_measurement(self.sku, function, board_id, current, measurements.get("voltage", 0))
+            
             if not (min_val <= current <= max_val):
                 self.result.failures.append(
                     f"{board_name} {function} current {current:.3f}A "
                     f"outside limits ({min_val:.3f}-{max_val:.3f}A)"
                 )
+            
+            # Check SPC control limits if in production mode
+            if self.spc and self.spc.production_mode:
+                violations = self.spc.check_control_limits(self.sku, function, board_name.replace(' ', '_'), current)
+                if violations:
+                    for violation in violations:
+                        self.result.failures.append(f"SPC violation: {violation}")
         
         # Check voltage
         if "voltage" in measurements and "voltage_V" in limits:

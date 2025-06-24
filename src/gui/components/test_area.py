@@ -22,6 +22,7 @@ class TestAreaWidget(QWidget):
         self.offroad_widget = None
         self.smt_widget = None
         self.weight_test_widget = None
+        self.spec_counter_widget = None
         self.setup_ui()
         
     def setup_ui(self):
@@ -245,6 +246,76 @@ class TestAreaWidget(QWidget):
         """Update programming progress"""
         if self.current_mode == "SMT" and self.smt_widget:
             self.smt_widget.update_programming_progress(current_board, board_name, status)
+    
+    def show_spec_counter(self):
+        """Show the spec calculator counter widget"""
+        if not self.spec_counter_widget:
+            self._create_spec_counter_widget()
+        
+        # Add it to the layout at the top
+        self.main_layout.insertWidget(0, self.spec_counter_widget)
+        self.spec_counter_widget.show()
+    
+    def hide_spec_counter(self):
+        """Hide the spec calculator counter widget"""
+        if self.spec_counter_widget:
+            self.spec_counter_widget.hide()
+    
+    def update_spec_counter(self, count: int):
+        """Update the spec calculator counter"""
+        if self.spec_counter_widget:
+            self.spec_counter_widget.update_count(count)
+    
+    def _create_spec_counter_widget(self):
+        """Create the spec counter widget"""
+        from PySide6.QtWidgets import QFrame, QHBoxLayout, QProgressBar
+        
+        self.spec_counter_widget = QFrame()
+        self.spec_counter_widget.setStyleSheet("""
+            QFrame {
+                background-color: #3a3a3a;
+                border: 2px solid #4a90a4;
+                border-radius: 8px;
+                padding: 10px;
+            }
+        """)
+        
+        layout = QHBoxLayout(self.spec_counter_widget)
+        
+        # Label
+        self.spec_counter_label = QLabel("Spec Calculator Progress:")
+        self.spec_counter_label.setStyleSheet("color: white; font-size: 14px; font-weight: bold;")
+        layout.addWidget(self.spec_counter_label)
+        
+        # Progress bar
+        self.spec_progress = QProgressBar()
+        self.spec_progress.setRange(0, 30)
+        self.spec_progress.setValue(0)
+        self.spec_progress.setFormat("%v/30 tests")
+        self.spec_progress.setStyleSheet("""
+            QProgressBar {
+                border: 2px solid #555;
+                border-radius: 5px;
+                text-align: center;
+                background-color: #2b2b2b;
+                color: white;
+                font-weight: bold;
+            }
+            QProgressBar::chunk {
+                background-color: #4a90a4;
+                border-radius: 3px;
+            }
+        """)
+        self.spec_progress.setMinimumWidth(200)
+        layout.addWidget(self.spec_progress)
+        
+        layout.addStretch()
+        
+        # Hide initially
+        self.spec_counter_widget.hide()
+    
+        # Method to update the counter
+        self.spec_counter_widget.update_count = lambda count: self.spec_progress.setValue(count)
     
     def complete_programming_progress(self, success_count: int, total_count: int):
         """Complete programming progress display"""

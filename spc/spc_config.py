@@ -5,7 +5,8 @@ Central configuration for Statistical Process Control system
 
 # Subgroup configuration
 SUBGROUP_SIZE = 5
-BASELINE_SUBGROUPS = 30  # Minimum subgroups needed to calculate control limits
+MIN_INDIVIDUAL_MEASUREMENTS = 30  # Minimum individual measurements needed
+BASELINE_SUBGROUPS = 6  # Minimum subgroups (30 measurements / 5 per subgroup)
 MAX_HISTORICAL_SUBGROUPS = 100  # Maximum subgroups to retain in rolling window
 
 # Statistical constants

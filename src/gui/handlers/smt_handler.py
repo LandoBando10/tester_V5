@@ -30,6 +30,9 @@ class SMTHandler(QObject, ThreadCleanupMixin):
         self._physical_button_state = "RELEASED"  # Track physical button state
         self._initial_state_received = False  # Track if we've received initial state
         
+        # SPC integration reference (will be set from test instance)
+        self.spc_integration = None
+        
         # Connect button signal to handler - ensures it runs on main thread
         self.button_pressed_signal.connect(self._handle_button_press_on_main_thread, Qt.QueuedConnection)
         
@@ -203,9 +206,29 @@ class SMTHandler(QObject, ThreadCleanupMixin):
                         return None
                     self.logger.info("User chose to continue without programming config.")
             
-            # Pass Arduino controller to SMT test
-            self.logger.info(f"SMTTest instance created with port: {port}, programming_config: {'present' if programming_config else 'absent'}")
-            return SMTTest(sku, params, port, programming_config, arduino_controller=arduino_controller)
+            # SPC configuration - enable in sampling mode by default
+            spc_config = {
+                'enabled': True,
+                'sampling_mode': True,    # Collect data, don't enforce limits
+                'production_mode': False  # Will be True once you have control limits
+            }
+            
+            # Pass Arduino controller and SPC config to SMT test
+            self.logger.info(f"SMTTest instance created with port: {port}, programming_config: {'present' if programming_config else 'absent'}, SPC: {spc_config.get('enabled')}")
+            test_instance = SMTTest(sku, params, port, programming_config, arduino_controller=arduino_controller, spc_config=spc_config)
+            
+            # Store last test instance for spec calculator
+            self.last_test_instance = test_instance
+            
+            # Store SPC integration reference if available
+            if hasattr(test_instance, 'spc') and test_instance.spc:
+                self.spc_integration = test_instance.spc
+                self.logger.info("SPC integration reference stored")
+            
+            # Set callback for spec calculation
+            test_instance.spec_calculation_callback = lambda sku: self._on_spec_calculation_ready(sku, test_instance)
+            
+            return test_instance
             
         except ImportError as e:
             self.logger.error(f"Import error creating test instance: {e}", exc_info=True)
@@ -299,6 +322,7 @@ class SMTHandler(QObject, ThreadCleanupMixin):
             
             self.current_test_worker = None
             self._button_press_handled = False
+            self.spc_integration = None
             self.cleanup_resources()
             self.logger.info("SMT handler cleanup completed.")
                 
@@ -312,6 +336,10 @@ class SMTHandler(QObject, ThreadCleanupMixin):
         try:
             # PHASE 1: Record test end time for cooldown tracking
             self._last_test_end_time = time.time()
+            
+            # Increment spec calculator counter if enabled
+            if hasattr(self.main_window, 'spec_calculator_enabled') and self.main_window.spec_calculator_enabled:
+                self.main_window.increment_spec_calculator_count()
             
             # PHASE 1: Always turn off relays after test (using individual commands)
             if hasattr(self.main_window, 'arduino_controller') and self.main_window.arduino_controller:
@@ -337,6 +365,19 @@ class SMTHandler(QObject, ThreadCleanupMixin):
                 
             # Update UI
             self.main_window.test_completed(result)
+            
+            # Update SPC widget if test passed and SPC data was collected
+            if result.passed and hasattr(self.main_window, 'spc_widget') and self.main_window.spc_widget:
+                try:
+                    # Check if SPC data was collected in the test
+                    if 'spc' in result.metadata and result.metadata['spc'].get('data_collected'):
+                        # Get the SKU from the result
+                        sku = result.metadata.get('sku') or getattr(result, 'sku', None)
+                        if sku:
+                            self.main_window.spc_widget.add_test_results(sku, result.to_dict())
+                            self.logger.info(f"Updated SPC widget with test results for {sku}")
+                except Exception as e:
+                    self.logger.error(f"Error updating SPC widget: {e}", exc_info=True)
             
             # Resume voltage monitoring after test
             if hasattr(self.main_window, 'voltage_monitor') and self.main_window.voltage_monitor.isVisible():
@@ -429,3 +470,25 @@ class SMTHandler(QObject, ThreadCleanupMixin):
         except Exception as e:
             self.logger.error(f"Error handling button press: {e}", exc_info=True)
             self._button_press_handled = False
+    
+    def _on_spec_calculation_ready(self, sku: str, test_instance):
+        """Handle when SPC has collected enough measurements for spec calculation"""
+        try:
+            self.logger.info(f"Spec calculation ready notification for {sku}")
+            
+            # Show message to user
+            reply = QMessageBox.question(
+                self.main_window,
+                "Spec Calculation Ready",
+                f"30 measurements collected for {sku}.\n\n"
+                f"Would you like to calculate and review new specification limits?",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            
+            if reply == QMessageBox.Yes:
+                # Show the approval dialog
+                if test_instance.spc:
+                    test_instance.spc.show_spec_approval_dialog(sku, self.main_window)
+                    
+        except Exception as e:
+            self.logger.error(f"Error handling spec calculation ready: {e}", exc_info=True)

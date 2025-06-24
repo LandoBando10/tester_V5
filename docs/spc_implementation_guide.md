@@ -52,7 +52,7 @@ spc_config = {
 
 # Data is automatically collected during tests
 # System groups measurements into subgroups (default size: 5)
-# After 30+ subgroups, control limits are calculated
+# After 30+ individual measurements (6 subgroups), control limits are calculated
 ```
 
 ### 2. Control Limit Calculation
@@ -224,23 +224,38 @@ The system checks for:
 
 ## Example Workflow
 
-### Initial Setup (Week 1-2)
+### Initial Setup (Day 1)
 1. Enable SPC in sampling mode
-2. Run normal production (collect 100+ samples per board/function)
-3. System automatically calculates control limits
+2. Run normal production (30+ units)
+3. After 30 measurements, system automatically:
+   - Calculates control limits
+   - Derives spec limits if none exist (targets Cp=1.33)
 4. Review control charts and capability indices
 
-### Validation (Week 3)
-1. Continue sampling mode
-2. Verify control limits are stable
-3. Adjust subgroup size if needed (typically 4-5)
+### Validation (Day 2)
+1. Continue sampling to verify stability
+2. Review derived spec limits
+3. Optionally force recalculation of specs
 4. Document baseline process capability
 
-### Production Implementation (Week 4+)
-1. Export validated control limits
-2. Switch to production mode
+### Production Implementation (Day 3+)
+1. Switch to production mode
+2. System enforces both spec and control limits
 3. Monitor for out-of-control conditions
-4. Recalculate limits periodically (monthly/quarterly)
+4. Recalculate limits periodically (weekly/monthly)
+
+### Recalculating Spec Limits
+To force recalculation of spec limits (even if they exist):
+```python
+from src.spc.data_collector import SPCDataCollector
+
+collector = SPCDataCollector()
+# Recalculate for specific function/board
+collector.force_recalculate_specs("DD5001", "mainbeam", "Board_1")
+
+# Recalculate all specs for a SKU
+collector.recalculate_all_specs("DD5001")
+```
 
 ## Configuration Options
 
@@ -250,10 +265,11 @@ The system checks for:
 - Larger subgroups = more sensitive to mean shifts
 - Smaller subgroups = more sensitive to variation changes
 
-### Minimum Subgroups
-- Default: 30 subgroups
-- Recommended: 30+ for initial limits
-- More subgroups = more reliable limits
+### Minimum Requirements
+- Default: 30 individual measurements (6 subgroups of 5)
+- Minimum for spec derivation: 30 measurements
+- Minimum for control limits: 6 subgroups
+- More data = more reliable limits
 - Absolute minimum: 5 subgroups (for analysis only)
 
 ### Control Limit Multiplier

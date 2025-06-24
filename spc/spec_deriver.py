@@ -113,22 +113,39 @@ class SpecDeriver:
             DerivedSpecs object or None if insufficient data
         """
         if not subgroups or len(subgroups) < 2:
-            logger.warning("Insufficient subgroups for spec derivation")
+            logger.warning(f"Insufficient subgroups for spec derivation: {len(subgroups) if subgroups else 0} subgroups")
             return None
             
-        # Convert to numpy for easier calculation
-        subgroups_array = np.array(subgroups)
-        
-        # Calculate statistics
-        subgroup_means = np.mean(subgroups_array, axis=1)
-        subgroup_ranges = np.ptp(subgroups_array, axis=1)  # ptp = peak-to-peak (max-min)
-        
-        x_bar_bar = np.mean(subgroup_means)
-        r_bar = np.mean(subgroup_ranges)
-        
-        subgroup_size = subgroups_array.shape[1]
-        
-        return self.derive_specs(x_bar_bar, r_bar, subgroup_size)
+        try:
+            # Check for variable-length subgroups
+            subgroup_lengths = [len(sg) for sg in subgroups]
+            if len(set(subgroup_lengths)) > 1:
+                logger.warning(f"Variable subgroup sizes detected: {subgroup_lengths}. Using most common size.")
+                # Use the most common subgroup size
+                from collections import Counter
+                most_common_size = Counter(subgroup_lengths).most_common(1)[0][0]
+                # Filter to only subgroups of the most common size
+                subgroups = [sg for sg in subgroups if len(sg) == most_common_size]
+                logger.info(f"Filtered to {len(subgroups)} subgroups of size {most_common_size}")
+            
+            # Convert to numpy for easier calculation
+            subgroups_array = np.array(subgroups)
+            logger.info(f"Processing {len(subgroups)} subgroups with shape {subgroups_array.shape}")
+            
+            # Calculate statistics
+            subgroup_means = np.mean(subgroups_array, axis=1)
+            subgroup_ranges = np.ptp(subgroups_array, axis=1)  # ptp = peak-to-peak (max-min)
+            
+            x_bar_bar = np.mean(subgroup_means)
+            r_bar = np.mean(subgroup_ranges)
+            
+            subgroup_size = subgroups_array.shape[1]
+            
+            return self.derive_specs(x_bar_bar, r_bar, subgroup_size)
+        except Exception as e:
+            logger.error(f"Error in derive_specs_from_data: {e}")
+            logger.error(f"Subgroups structure: {subgroups[:2] if subgroups else 'None'}")  # Log first 2 subgroups for debugging
+            return None
     
     def update_specs_for_drift(self, 
                               current_specs: DerivedSpecs,

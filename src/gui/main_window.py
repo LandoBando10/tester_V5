@@ -2,7 +2,7 @@
 import sys
 import logging
 from typing import Optional
-from PySide6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QWidget, QStatusBar, QLabel, QPushButton, QDialog
+from PySide6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QWidget, QStatusBar, QLabel, QPushButton, QDialog, QMessageBox
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont
 
@@ -22,6 +22,7 @@ from src.gui.handlers.weight_handler import WeightHandler
 from src.gui.handlers.connection_handler import ConnectionHandler
 from src.core.base_test import TestResult
 from src.utils.thread_cleanup import GlobalCleanupManager # Added import
+from src.spc.enhanced_spc_widget import EnhancedSPCWidget
 
 
 class MainWindow(QMainWindow):
@@ -38,20 +39,29 @@ class MainWindow(QMainWindow):
         self.logger = logging.getLogger(self.__class__.__name__)
         self.config_loading_dialog = None
         self.config_load_completed = False
+        
+        # SPC widget (will be initialized after UI setup)
+        self.spc_widget = None
+        self.spc_dialog = None
 
-        # Initialize handlers lazily
-        self._offroad_handler = None
-        self._smt_handler = None
-        self._weight_handler = None
+        # Preload all handlers to avoid lag on mode switch
+        self._offroad_handler = OffroadHandler(self)
+        self._smt_handler = SMTHandler(self)
+        self._weight_handler = WeightHandler(self)
         self.connection_handler = ConnectionHandler(self)  # Keep this one immediate
 
-        # UI Components (lazy load heavy ones)
-        self._connection_dialog = None
+        # UI Components - preload connection dialog too for better performance
+        self._connection_dialog = ConnectionDialog(self)
         self.test_worker: Optional[TestWorker] = None
         self.arduino_controller = None  # Persistent Arduino instance
 
         # Current state
         self.current_mode = None  # Will be set by launcher
+        self.spec_calculator_enabled = False  # Flag for spec calculator mode
+        self.spec_calculator_count = 0  # Counter for measurements
+        
+        # SKU filtering cache to improve performance
+        self._sku_filter_cache = {}  # Cache: {mode: [valid_skus]}
 
         # Setup UI and connections first
         self.setup_logging()
@@ -62,9 +72,8 @@ class MainWindow(QMainWindow):
         # Setup SKU manager connections after UI is ready
         self.setup_sku_manager()  # Setup SKU manager connections
         
-        
-        # Defer config loading slightly to allow UI to show first
-        QTimer.singleShot(100, self.start_config_loading)
+        # Start config loading immediately - no artificial delay
+        self.start_config_loading()
         
         # If config is already loaded, refresh the UI
         if self.config_load_completed and self.sku_manager.is_loaded():
@@ -72,30 +81,22 @@ class MainWindow(QMainWindow):
 
     @property
     def offroad_handler(self):
-        """Lazy load offroad handler"""
-        if self._offroad_handler is None:
-            self._offroad_handler = OffroadHandler(self)
+        """Get preloaded offroad handler"""
         return self._offroad_handler
     
     @property
     def smt_handler(self):
-        """Lazy load SMT handler"""
-        if self._smt_handler is None:
-            self._smt_handler = SMTHandler(self)
+        """Get preloaded SMT handler"""
         return self._smt_handler
     
     @property
     def weight_handler(self):
-        """Lazy load weight handler"""
-        if self._weight_handler is None:
-            self._weight_handler = WeightHandler(self)
+        """Get preloaded weight handler"""
         return self._weight_handler
     
     @property
     def connection_dialog(self):
-        """Lazy load connection dialog"""
-        if self._connection_dialog is None:
-            self._connection_dialog = ConnectionDialog(self)
+        """Get preloaded connection dialog"""
         return self._connection_dialog
 
     def setup_logging(self):
@@ -364,12 +365,95 @@ class MainWindow(QMainWindow):
             self.show_config_error(f"Configuration loading failed: {e}")
             self.show_config_error(f"Configuration loading failed: {e}")
     
+    def enable_spec_calculator(self):
+        """Enable spec calculator mode"""
+        self.spec_calculator_enabled = True
+        self.spec_calculator_count = 0
+        
+        # Add counter to test area
+        if hasattr(self.test_area, 'show_spec_counter'):
+            self.test_area.show_spec_counter()
+        
+        # Show notification
+        QMessageBox.information(self, "Spec Limit Calculator", 
+                              "Spec Limit Calculator is now active.\n\n"
+                              "Run 30 tests to calculate new specification limits.\n"
+                              "Progress will be shown on the test page.")
+        
+        # Update status bar
+        self.statusBar().showMessage("Spec Calculator Mode: 0/30 tests completed")
+    
+    def increment_spec_calculator_count(self):
+        """Increment the spec calculator counter"""
+        if self.spec_calculator_enabled:
+            self.spec_calculator_count += 1
+            
+            # Update counter display
+            if hasattr(self.test_area, 'update_spec_counter'):
+                self.test_area.update_spec_counter(self.spec_calculator_count)
+            
+            # Update status bar
+            self.statusBar().showMessage(f"Spec Calculator Mode: {self.spec_calculator_count}/30 tests completed")
+            
+            # Check if we've reached 30 tests
+            if self.spec_calculator_count >= 30:
+                self.on_spec_calculator_complete()
+    
+    def on_spec_calculator_complete(self):
+        """Handle completion of 30 tests for spec calculation"""
+        try:
+            # Get current SKU
+            current_sku = self.top_controls.get_current_sku()
+            if not current_sku or current_sku == "-- Select SKU --":
+                QMessageBox.warning(self, "No SKU Selected", 
+                                  "Please select a SKU before calculating limits.")
+                return
+            
+            # Show the spec approval dialog
+            if hasattr(self, 'current_mode') and self.current_mode == "SMT":
+                # Get the test instance if available
+                handler = getattr(self, f'{self.current_mode.lower()}_handler', None)
+                if handler and hasattr(handler, 'last_test_instance'):
+                    test_instance = handler.last_test_instance
+                    if test_instance and test_instance.spc:
+                        test_instance.spc.show_spec_approval_dialog(current_sku, self)
+                        # Reset counter
+                        self.spec_calculator_enabled = False
+                        self.spec_calculator_count = 0
+                        if hasattr(self.test_area, 'hide_spec_counter'):
+                            self.test_area.hide_spec_counter()
+                        return
+            
+            # Fallback - manual calculation
+            self._manual_spec_calculation(current_sku)
+            
+        except Exception as e:
+            self.logger.error(f"Error completing spec calculation: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to complete spec calculation: {e}")
+    
+    def _manual_spec_calculation(self, sku: str):
+        """Manual spec calculation fallback"""
+        QMessageBox.information(self, "Spec Calculation Complete", 
+                              f"30 tests completed for {sku}.\n\n"
+                              f"Spec calculation would normally happen here.\n"
+                              f"This is a placeholder for the actual implementation.")
+        
+        # Reset
+        self.spec_calculator_enabled = False
+        self.spec_calculator_count = 0
+        if hasattr(self.test_area, 'hide_spec_counter'):
+            self.test_area.hide_spec_counter()
+    
     def refresh_data(self):
         """Refresh SKU data and update UI"""
         try:
             if not self.sku_manager.is_loaded():
                 self.logger.warning("Attempting to refresh data before config is loaded")
                 return
+            
+            # Clear SKU filter cache when data is refreshed
+            self._sku_filter_cache.clear()
+            self.logger.debug("Cleared SKU filter cache")
             
             # Load SKUs
             skus = self.sku_manager.get_all_skus()
@@ -386,19 +470,29 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Error", f"Could not refresh UI: {e}")
 
     def filter_skus_by_mode(self):
-        """Filter SKUs based on selected test mode"""
+        """Filter SKUs based on selected test mode with caching"""
         current_sku = self.top_controls.get_current_sku()
 
-        # Get all SKUs that support the selected mode
-        valid_skus = []
-        try:
-            all_skus = self.sku_manager.get_all_skus()
-            for sku in all_skus:
-                if self.sku_manager.validate_sku_mode_combination(sku, self.current_mode):
-                    valid_skus.append(sku)
-        except Exception as e:
-            self.logger.error(f"Error filtering SKUs by mode: {e}")
+        # Check cache first
+        if self.current_mode in self._sku_filter_cache:
+            valid_skus = self._sku_filter_cache[self.current_mode]
+            self.logger.debug(f"Using cached SKU filter for mode {self.current_mode}: {len(valid_skus)} SKUs")
+        else:
+            # Get all SKUs that support the selected mode
             valid_skus = []
+            try:
+                all_skus = self.sku_manager.get_all_skus()
+                for sku in all_skus:
+                    if self.sku_manager.validate_sku_mode_combination(sku, self.current_mode):
+                        valid_skus.append(sku)
+                
+                # Cache the results
+                self._sku_filter_cache[self.current_mode] = valid_skus
+                self.logger.info(f"Cached SKU filter for mode {self.current_mode}: {len(valid_skus)} SKUs")
+                
+            except Exception as e:
+                self.logger.error(f"Error filtering SKUs by mode: {e}")
+                valid_skus = []
 
         # Update top controls
         self.top_controls.set_available_skus(valid_skus)
@@ -639,6 +733,76 @@ class MainWindow(QMainWindow):
             self.logger.error(f"Error opening programming configuration: {e}")
             from PySide6.QtWidgets import QMessageBox
             QMessageBox.critical(self, "Error", f"Could not open programming configuration: {e}")
+    
+    def show_spc_control(self):
+        """Show SPC control widget as a dialog"""
+        try:
+            # Create dialog if not exists
+            if not self.spc_dialog:
+                from PySide6.QtWidgets import QDialog, QVBoxLayout
+                self.spc_dialog = QDialog(self)
+                self.spc_dialog.setWindowTitle("SPC Control - Statistical Process Control")
+                self.spc_dialog.resize(1200, 900)
+                
+                # Create layout
+                layout = QVBoxLayout(self.spc_dialog)
+                layout.setContentsMargins(0, 0, 0, 0)
+                
+                # Create SPC widget if not exists
+                if not self.spc_widget:
+                    # Get SPC integration from SMT handler if available
+                    spc_integration = None
+                    if hasattr(self, 'smt_handler') and hasattr(self.smt_handler, 'spc_integration'):
+                        spc_integration = self.smt_handler.spc_integration
+                    
+                    self.spc_widget = EnhancedSPCWidget(spc_integration=spc_integration, parent=self.spc_dialog)
+                    
+                    # Connect signals
+                    self.spc_widget.mode_changed.connect(self.on_spc_mode_changed)
+                    self.spc_widget.spec_approval_requested.connect(self.on_spc_spec_approval_requested)
+                    
+                    # Update SKU list
+                    self.update_spc_sku_list()
+                
+                layout.addWidget(self.spc_widget)
+            
+            # Show the dialog
+            self.spc_dialog.show()
+            self.spc_dialog.raise_()
+            self.spc_dialog.activateWindow()
+            
+        except Exception as e:
+            self.logger.error(f"Error showing SPC control: {e}", exc_info=True)
+            QMessageBox.critical(self, "Error", f"Could not show SPC control: {e}")
+    
+    def on_spc_mode_changed(self, sku: str, config: dict):
+        """Handle SPC mode change for a SKU"""
+        self.logger.info(f"SPC mode changed for {sku}: {config}")
+        
+        # Update SPC integration if in SMT mode
+        if self.current_mode == "SMT" and hasattr(self, 'smt_handler'):
+            if hasattr(self.smt_handler, 'spc_integration') and self.smt_handler.spc_integration:
+                integration = self.smt_handler.spc_integration
+                integration.spc_enabled = config.get('enabled', True)
+                integration.sampling_mode = config.get('sampling_mode', True)
+                integration.production_mode = config.get('production_mode', False)
+    
+    def on_spc_spec_approval_requested(self, sku: str):
+        """Handle SPC spec approval request"""
+        self.logger.info(f"SPC spec approval requested for {sku}")
+        
+        # Use SPC integration to show approval dialog
+        if hasattr(self, 'smt_handler') and hasattr(self.smt_handler, 'spc_integration'):
+            if self.smt_handler.spc_integration:
+                self.smt_handler.spc_integration.show_spec_approval_dialog(sku, self.spc_dialog or self)
+    
+    def update_spc_sku_list(self):
+        """Update SPC widget with available SKUs"""
+        if self.spc_widget and self.sku_manager.is_loaded():
+            all_skus = self.sku_manager.get_all_skus()
+            # Filter for SKUs that support SMT mode
+            smt_skus = [sku for sku in all_skus if self.sku_manager.validate_sku_mode_combination(sku, "SMT")]
+            self.spc_widget.update_sku_list(smt_skus)
 
     def closeEvent(self, event):
         """Handle application closing"""

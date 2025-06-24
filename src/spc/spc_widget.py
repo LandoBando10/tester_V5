@@ -172,7 +172,7 @@ class SPCControlWidget(QWidget):
             
         # Progress bar
         self.progress_bar = QProgressBar()
-        self.progress_bar.setMaximum(30)  # Default min subgroups
+        self.progress_bar.setMaximum(6)  # 6 subgroups = 30 measurements
         right_layout.addWidget(self.progress_bar)
         
         layout.addLayout(left_layout)

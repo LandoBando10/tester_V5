@@ -1,6 +1,6 @@
 # gui/components/menu_bar.py
 import logging
-from PySide6.QtWidgets import QMenuBar, QMenu, QMessageBox
+from PySide6.QtWidgets import QMenuBar, QMenu, QMessageBox, QDialog
 from PySide6.QtGui import QAction
 from PySide6.QtCore import QObject, Signal
 import subprocess
@@ -134,6 +134,22 @@ class TestMenuBar(QMenuBar):
             logs_action = QAction("View Logs...", self)
             logs_action.triggered.connect(self.show_logs)
             menu.addAction(logs_action)
+            
+            menu.addSeparator()
+            
+            # Spec Limit Calculator
+            spec_calc_action = QAction("Spec Limit Calculator...", self)
+            spec_calc_action.triggered.connect(self.show_spec_calculator)
+            menu.addAction(spec_calc_action)
+            
+            menu.addSeparator()
+            
+            # SPC Control
+            spc_action = QAction("SPC Control...", self)
+            spc_action.setStatusTip("Open Statistical Process Control panel")
+            spc_action.triggered.connect(self.show_spc_control)
+            menu.addAction(spc_action)
+            
             logger.info("Tools menu setup complete.") # Added
         except Exception as e: # Added
             logger.error("Failed to set up tools menu: %s", e, exc_info=True) # Added
@@ -270,7 +286,7 @@ class TestMenuBar(QMenuBar):
             # Ensure parent is correctly passed if ConfigurationEditor expects it for modality or signals
             editor = ConfigurationEditor(self) 
             # editor.configuration_changed.connect(self.on_configuration_changed) # Connect if needed
-            editor.exec() # Use exec_() for older Qt versions if necessary, exec() is fine for PySide6
+            editor.show() # Use show() instead of exec() to allow fullscreen
             logger.debug("SKU Configuration Editor closed.") # Added
             
         except ImportError as ie: # Added
@@ -535,3 +551,70 @@ class TestMenuBar(QMenuBar):
         except Exception as e:
             logger.error("Could not open documentation: %s", e, exc_info=True) # Modified
             QMessageBox.information(self, "Documentation", f"Could not open documentation: {e}")
+    
+    def show_spc_control(self):
+        """Show SPC control dialog"""
+        logger.info("SPC Control requested")
+        try:
+            # Get main window reference to call the method
+            main_window = self.parent()
+            if main_window and hasattr(main_window, 'show_spc_control'):
+                main_window.show_spc_control()
+            else:
+                logger.warning("Main window not found or does not have 'show_spc_control' method.")
+                QMessageBox.information(self, "SPC Control", 
+                                        "SPC Control feature not available.")
+        except Exception as e:
+            logger.error(f"Could not open SPC control: {e}", exc_info=True)
+            QMessageBox.critical(self, "Error", f"Could not open SPC control: {e}")
+    
+    def show_spec_calculator(self):
+        """Show spec limit calculator with authentication"""
+        logger.info("Spec Limit Calculator requested")
+        try:
+            # First authenticate
+            from src.gui.components.spec_approval_dialog import LoginDialog
+            
+            login_dialog = LoginDialog(self)
+            login_dialog.setWindowTitle("Spec Limit Calculator - Authentication")
+            
+            if login_dialog.exec_() == QDialog.Accepted:
+                username, password = login_dialog.get_credentials()
+                
+                # Verify credentials
+                from src.auth.user_manager import get_user_manager
+                user_manager = get_user_manager()
+                
+                if user_manager.authenticate(username, password):
+                    if user_manager.has_permission('modify_specs'):
+                        # Enable spec calculator mode in main window
+                        main_window = self.parent()
+                        if main_window and hasattr(main_window, 'enable_spec_calculator'):
+                            main_window.enable_spec_calculator()
+                            logger.info(f"Spec calculator enabled for user: {username}")
+                        else:
+                            # Fallback - enable it differently
+                            self._enable_spec_calculator_mode()
+                    else:
+                        QMessageBox.warning(self, "Access Denied", 
+                                          f"User '{username}' does not have permission to use the Spec Limit Calculator.")
+                        user_manager.logout()
+                else:
+                    QMessageBox.warning(self, "Authentication Failed", 
+                                      "Invalid username or password.")
+        except Exception as e:
+            logger.error(f"Error showing spec calculator: {e}", exc_info=True)
+            QMessageBox.critical(self, "Error", f"Could not open Spec Limit Calculator: {e}")
+    
+    def _enable_spec_calculator_mode(self):
+        """Fallback method to enable spec calculator"""
+        try:
+            main_window = self.parent()
+            if main_window:
+                # Set a flag that the handlers can check
+                main_window.spec_calculator_enabled = True
+                QMessageBox.information(self, "Spec Limit Calculator", 
+                                      "Spec Limit Calculator is now active.\n\n"
+                                      "Run 30 tests to calculate new specification limits.")
+        except Exception as e:
+            logger.error(f"Error enabling spec calculator mode: {e}")

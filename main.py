@@ -599,7 +599,6 @@ def main():
         print(f"\nUnexpected error: {e}")
         sys.exit(1)
 
-
 if __name__ == "__main__":
     try:
         main()

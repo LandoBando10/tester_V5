@@ -24,6 +24,7 @@ from spc.spc_config import (
     BASELINE_SUBGROUPS,
     MAX_HISTORICAL_SUBGROUPS,
     MIN_SUBGROUPS_FOR_ANALYSIS,
+    MIN_INDIVIDUAL_MEASUREMENTS,
     SUBGROUP_FILE_PATTERN,
     LIMITS_FILE_PATTERN,
     SPECS_FILE_PATTERN
@@ -310,19 +311,34 @@ class SPCDataCollector:
             with open(filename, 'r') as f:
                 data = json.load(f)
                 
-            # Need sufficient data to derive specs
-            if len(data) < self.min_subgroups:
+            # Calculate total individual measurements
+            total_measurements = sum(len(subgroup['measurements']) for subgroup in data if 'measurements' in subgroup)
+            
+            # Log detailed information for debugging
+            self.logger.info(
+                f"Deriving specs for {sku} {function} {board}: "
+                f"{len(data)} subgroups, {total_measurements} total measurements"
+            )
+            
+            # Need sufficient individual measurements
+            if total_measurements < MIN_INDIVIDUAL_MEASUREMENTS:
                 self.logger.info(
-                    f"Only {len(data)} subgroups available for {sku} {function} {board}, "
-                    f"need {self.min_subgroups} to derive specs"
+                    f"Only {total_measurements} individual measurements available for {sku} {function} {board}, "
+                    f"need {MIN_INDIVIDUAL_MEASUREMENTS} to derive specs"
                 )
                 return None
                 
-            # Extract samples
+            # Extract samples - need to extract current values from measurement dicts
             samples = []
             for subgroup_data in data:
                 if 'measurements' in subgroup_data:
-                    samples.append(subgroup_data['measurements'])
+                    # Extract current values from each measurement dict in the subgroup
+                    current_values = []
+                    for measurement in subgroup_data['measurements']:
+                        if isinstance(measurement, dict) and 'current' in measurement:
+                            current_values.append(measurement['current'])
+                    if current_values:
+                        samples.append(current_values)
                     
             if not samples:
                 return None
@@ -343,6 +359,34 @@ class SPCDataCollector:
             self.logger.error(f"Error deriving specs: {e}")
             return None
             
+    def get_measurement_count(self, sku: str) -> Dict[str, int]:
+        """Get count of measurements for each function/board combination"""
+        counts = {}
+        pattern = f"{sku}_*_*_subgroups.json"
+        
+        for subgroup_file in self.data_dir.glob(pattern):
+            try:
+                with open(subgroup_file, 'r') as f:
+                    data = json.load(f)
+                    
+                # Parse filename
+                parts = subgroup_file.stem.split('_')
+                if len(parts) >= 4:
+                    function = parts[1]
+                    board = '_'.join(parts[2:-1])
+                    key = f"{function}_{board}"
+                    
+                    # Count total measurements
+                    total = sum(len(subgroup['measurements']) 
+                               for subgroup in data 
+                               if 'measurements' in subgroup)
+                    counts[key] = total
+                    
+            except Exception as e:
+                self.logger.warning(f"Error reading {subgroup_file}: {e}")
+                
+        return counts
+    
     def _save_derived_specs(self, sku: str, function: str, board: str, specs: DerivedSpecs):
         """Save derived specifications to file"""
         spec_file = self.data_dir / SPECS_FILE_PATTERN.format(sku=sku, function=function, board=board)
@@ -366,6 +410,100 @@ class SPCDataCollector:
             self.logger.info(f"Saved derived specs to {spec_file}")
         except Exception as e:
             self.logger.error(f"Error saving derived specs: {e}")
+    
+    def force_recalculate_specs(self, sku: str, function: str, board: str) -> Optional[DerivedSpecs]:
+        """Force recalculation of specification limits from current process data
+        
+        This will:
+        1. Remove any existing derived specs from cache
+        2. Recalculate specs from current subgroup data
+        3. Save the new specs
+        
+        Returns:
+            DerivedSpecs object if successful, None if insufficient data
+        """
+        # Clear from cache
+        spec_key = f"{sku}_{function}_{board}"
+        if spec_key in self.derived_specs:
+            del self.derived_specs[spec_key]
+            self.logger.info(f"Cleared cached specs for {spec_key}")
+        
+        # Delete existing spec file if it exists
+        spec_file = self.data_dir / SPECS_FILE_PATTERN.format(sku=sku, function=function, board=board)
+        if spec_file.exists():
+            try:
+                spec_file.unlink()
+                self.logger.info(f"Deleted existing spec file: {spec_file}")
+            except Exception as e:
+                self.logger.warning(f"Could not delete spec file: {e}")
+        
+        # Recalculate specs
+        derived = self._derive_specs(sku, function, board)
+        if derived:
+            self.derived_specs[spec_key] = derived
+            self._save_derived_specs(sku, function, board, derived)
+            self.logger.info(
+                f"Successfully recalculated specs for {sku} {function} {board}: "
+                f"LSL={derived.lsl:.4f}, USL={derived.usl:.4f}"
+            )
+        else:
+            self.logger.warning(f"Could not recalculate specs - insufficient data")
+            
+        return derived
+    
+    def flush_pending_measurements(self, sku: str):
+        """Force process any pending measurements for a SKU into subgroups"""
+        with self.lock:
+            if sku in self.current_data:
+                self.logger.info(f"Flushing pending measurements for SKU {sku}")
+                for function, board_data in self.current_data[sku].items():
+                    for board in list(board_data.keys()):  # Create a copy of keys
+                        measurements = self.current_data[sku][function][board]
+                        if measurements:
+                            self.logger.info(f"Flushing {len(measurements)} pending measurements for {sku} {function} {board}")
+                        # Process any remaining measurements as partial subgroups
+                        while len(measurements) > 0:
+                            # Take whatever measurements we have (even if less than subgroup_size)
+                            subgroup_size = min(len(measurements), self.subgroup_size)
+                            if subgroup_size > 0:
+                                subgroup = measurements[:subgroup_size]
+                                self._save_subgroup(sku, function, board, subgroup)
+                                # Update the list
+                                self.current_data[sku][function][board] = measurements[subgroup_size:]
+                                measurements = self.current_data[sku][function][board]
+                            else:
+                                break
+            else:
+                self.logger.info(f"No pending measurements found for SKU {sku}")
+    
+    def recalculate_all_specs(self, sku: str) -> Dict[str, DerivedSpecs]:
+        """Recalculate specs for all functions/boards of a SKU
+        
+        Returns:
+            Dictionary of {function_board: DerivedSpecs}
+        """
+        # First flush any pending measurements
+        self.flush_pending_measurements(sku)
+        
+        results = {}
+        
+        # Find all subgroup files for this SKU
+        pattern = f"{sku}_*_*_subgroups.json"
+        matching_files = list(self.data_dir.glob(pattern))
+        self.logger.info(f"Found {len(matching_files)} subgroup files for SKU {sku} in {self.data_dir}")
+        
+        for subgroup_file in matching_files:
+            # Parse filename to get function and board
+            parts = subgroup_file.stem.split('_')
+            if len(parts) >= 4:  # SKU_function_board_subgroups
+                function = parts[1]
+                board = '_'.join(parts[2:-1])  # Handle board names with underscores
+                
+                derived = self.force_recalculate_specs(sku, function, board)
+                if derived:
+                    results[f"{function}_{board}"] = derived
+                    
+        return results
     
     def export_spc_report(self, sku: str, output_file: Path):
         """Export comprehensive SPC report for a SKU"""
