@@ -183,16 +183,22 @@ class SMTArduinoController:
                 was_reading = True
                 self.stop_reading()
                 # Small delay to ensure thread has stopped
-                time.sleep(0.05)
+                time.sleep(0.1)
             
             # Clear input buffer
             self.connection.reset_input_buffer()
+            
+            # Small delay to ensure serial line is idle
+            time.sleep(0.02)
             
             # Send command
             cmd_bytes = f"{command}\n".encode()
             self.logger.debug(f"Sending: {command}")
             self.connection.write(cmd_bytes)
             self.connection.flush()
+            
+            # Small delay after sending to allow Arduino to process
+            time.sleep(0.01)
             
             # Read response
             self.connection.timeout = timeout
@@ -216,7 +222,8 @@ class SMTArduinoController:
 
     def test_panel(self) -> Dict[int, Optional[Dict[str, float]]]:
         """Test entire panel with single command"""
-        response = self._send_command("T", timeout=2.0)
+        # Increased timeout to 3.0 seconds to handle 8 relays
+        response = self._send_command("T", timeout=3.0)
         
         if not response:
             self.logger.error("No response from panel test - possible power loss or Arduino hang")
@@ -352,6 +359,46 @@ class SMTArduinoController:
     def get_firmware_info(self) -> Optional[str]:
         """Get firmware identification"""
         return self._send_command("I")
+    
+    def get_supply_voltage(self, retry_count: int = 3) -> Optional[float]:
+        """Get current supply voltage without activating relays with retry on corruption"""
+        for attempt in range(retry_count):
+            # Use the new V command that doesn't activate any relays
+            response = self._send_command("V", timeout=0.5)
+            
+            if not response:
+                if attempt < retry_count - 1:
+                    self.logger.debug(f"No response to V command (attempt {attempt + 1}/{retry_count})")
+                    time.sleep(0.05)  # Wait before retry
+                continue
+                
+            # Expected format: "VOLTAGE:13.200"
+            try:
+                if response.startswith("VOLTAGE:") and len(response) >= 9:
+                    voltage_str = response[8:]  # Remove "VOLTAGE:"
+                    voltage = float(voltage_str.strip())
+                    
+                    # Sanity check
+                    if 0 < voltage < 30:  # Reasonable voltage range
+                        return voltage
+                    else:
+                        self.logger.warning(f"Voltage {voltage}V outside reasonable range")
+                else:
+                    # Log corruption patterns for debugging
+                    if "VOLT" in response or "V" in response:
+                        self.logger.debug(f"Corrupted voltage response: '{response}' (attempt {attempt + 1}/{retry_count})")
+                    else:
+                        self.logger.error(f"Unexpected response format: '{response}'")
+                    
+            except Exception as e:
+                self.logger.debug(f"Failed to parse voltage from '{response}': {e} (attempt {attempt + 1}/{retry_count})")
+            
+            # Wait before retry if not last attempt
+            if attempt < retry_count - 1:
+                time.sleep(0.05)
+        
+        self.logger.warning(f"Failed to get valid voltage after {retry_count} attempts")
+        return None
 
     def set_button_callback(self, callback: Optional[Callable[[str], None]]):
         """Set callback for button events"""

@@ -635,6 +635,11 @@ class ConnectionDialog(QDialog):
                 self.arduino_port = port
                 self.arduino_crc_enabled = crc_enabled  # Store CRC status
                 
+                # Update voltage monitor with Arduino controller if in SMT mode
+                if current_mode == "SMT" and hasattr(self.parent(), 'voltage_monitor'):
+                    logger.info("Setting Arduino controller on voltage monitor")
+                    self.parent().voltage_monitor.set_arduino_controller(arduino)
+                
                 # Update status label to show CRC status
                 crc_status = " [CRC ON]" if crc_enabled else ""
                 self.arduino_status_label.setText(f"Status: Connected ({port}) - {firmware_type}{crc_status}")
@@ -656,6 +661,11 @@ class ConnectionDialog(QDialog):
     def disconnect_arduino(self):
         """Disconnect Arduino"""
         try:
+            # Stop voltage monitor if active
+            if hasattr(self.parent(), 'voltage_monitor'):
+                self.parent().voltage_monitor.stop_monitoring()
+                logger.info("Stopped voltage monitoring")
+                
             if self.parent().arduino_controller:
                 # Stop reading loop if running
                 if self.parent().arduino_controller.is_reading:

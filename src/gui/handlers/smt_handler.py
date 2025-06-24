@@ -54,6 +54,11 @@ class SMTHandler(QObject, ThreadCleanupMixin):
                 time.sleep(wait_time)
             
             
+            # Pause voltage monitoring during test
+            if hasattr(self.main_window, 'voltage_monitor') and self.main_window.voltage_monitor.isVisible():
+                self.main_window.voltage_monitor.pause_monitoring()
+                self.logger.info("Paused voltage monitoring for test")
+            
             # Clear buffers and prepare for test
             if hasattr(self.main_window, 'arduino_controller') and self.main_window.arduino_controller:
                 arduino = self.main_window.arduino_controller
@@ -333,6 +338,11 @@ class SMTHandler(QObject, ThreadCleanupMixin):
             # Update UI
             self.main_window.test_completed(result)
             
+            # Resume voltage monitoring after test
+            if hasattr(self.main_window, 'voltage_monitor') and self.main_window.voltage_monitor.isVisible():
+                self.main_window.voltage_monitor.resume_monitoring()
+                self.logger.info("Resumed voltage monitoring after test")
+            
             # Log summary
             if result.failures:
                 self.logger.warning(f"Test failures: {result.failures}")
@@ -398,6 +408,17 @@ class SMTHandler(QObject, ThreadCleanupMixin):
                 self.logger.warning("No SKU selected, ignoring button press")
                 self._button_press_handled = False
                 return
+            
+            # Check voltage validity (SMT mode only)
+            if hasattr(self.main_window, 'voltage_monitor') and self.main_window.voltage_monitor.isVisible():
+                if not self.main_window.voltage_monitor.is_voltage_valid():
+                    voltage = self.main_window.voltage_monitor.get_voltage()
+                    self.logger.warning(f"Voltage out of range ({voltage:.3f}V), ignoring button press")
+                    QMessageBox.warning(self.main_window, "Voltage Out of Range",
+                                        f"Cannot start test - voltage is {voltage:.3f}V\n\n"
+                                        f"Required range: 13.18-13.22V")
+                    self._button_press_handled = False
+                    return
             
             # Get enabled tests and connection status
             enabled_tests = self.main_window.top_controls.get_enabled_tests()

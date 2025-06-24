@@ -14,6 +14,7 @@ from src.gui.components.top_controls import TopControlsWidget
 from src.gui.components.test_area import TestAreaWidget
 from src.gui.components.connection_dialog import ConnectionDialog
 from src.gui.components.header_bar import HeaderBar, get_window_icon
+from src.gui.components.voltage_monitor import VoltageMonitorWidget
 from src.gui.workers.test_worker import TestWorker
 from src.gui.handlers.offroad_handler import OffroadHandler
 from src.gui.handlers.smt_handler import SMTHandler
@@ -154,8 +155,14 @@ class MainWindow(QMainWindow):
         self.connection_status_label.setStyleSheet("color: #ff6b6b; margin: 0px;")
         self.bottom_controls_layout.addWidget(self.connection_status_label)
         
-        # Stretch to push start button to the right
+        # Stretch to push voltage monitor and start button to the right
         self.bottom_controls_layout.addStretch()
+        
+        # Voltage monitor (only shown in SMT mode)
+        self.voltage_monitor = VoltageMonitorWidget(self)
+        self.voltage_monitor.voltage_valid_changed.connect(self.on_voltage_validity_changed)
+        self.voltage_monitor.hide()  # Hidden by default
+        self.bottom_controls_layout.addWidget(self.voltage_monitor)
         
         # Start button (bottom right)
         self.start_btn = QPushButton("START TEST")
@@ -239,6 +246,17 @@ class MainWindow(QMainWindow):
         
         # Update menu bar to reflect current mode
         self.menu_bar.set_mode(mode)
+        
+        # Show/hide voltage monitor based on mode
+        if hasattr(self, 'voltage_monitor'):
+            if mode == "SMT":
+                self.voltage_monitor.show()
+                # Set Arduino controller if available
+                if hasattr(self, 'arduino_controller') and self.arduino_controller:
+                    self.voltage_monitor.set_arduino_controller(self.arduino_controller)
+            else:
+                self.voltage_monitor.hide()
+                self.voltage_monitor.stop_monitoring()
         
         # Show/hide start button based on mode
         if hasattr(self, 'start_btn'):
@@ -389,12 +407,35 @@ class MainWindow(QMainWindow):
         if current_sku in valid_skus:
             self.top_controls.set_current_sku(current_sku)
 
+    def on_voltage_validity_changed(self, is_valid: bool):
+        """Handle voltage validity changes"""
+        if self.current_mode == "SMT":
+            # Update start button state based on both SKU selection and voltage
+            sku = self.top_controls.get_current_sku()
+            has_sku = sku and sku != "-- Select SKU --"
+            
+            # Enable start button only if both SKU is selected AND voltage is valid
+            self.set_start_enabled(has_sku and is_valid)
+            
+            if not is_valid and has_sku:
+                self.statusBar().showMessage(f"Voltage out of range: {self.voltage_monitor.get_voltage():.3f}V (13.18-13.22V required)")
+            elif is_valid and has_sku:
+                self.statusBar().showMessage("Ready to test")
+    
     def on_sku_changed(self, sku: str):
         """Handle SKU selection change"""
         if sku and sku != "-- Select SKU --":
             # Enable start button when SKU is selected (for non-weight modes)
             if self.current_mode != "WeightChecking":
-                self.set_start_enabled(True)
+                if self.current_mode == "SMT":
+                    # For SMT, also check voltage validity
+                    if hasattr(self, 'voltage_monitor'):
+                        is_voltage_valid = self.voltage_monitor.is_voltage_valid()
+                        self.set_start_enabled(is_voltage_valid)
+                    else:
+                        self.set_start_enabled(False)
+                else:
+                    self.set_start_enabled(True)
 
             # Update test area based on current mode
             if self.current_mode == "WeightChecking":

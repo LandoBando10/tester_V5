@@ -1,6 +1,6 @@
 /*
  * SMT Simple Tester - Batch-only Arduino firmware for SMT board testing
- * Version: 2.0.0
+ * Version: 2.1.0
  * 
  * Commands:
  * - T: Test entire panel (returns all relay measurements)
@@ -8,6 +8,7 @@
  * - X: Turn all relays off
  * - I: Get board ID/info
  * - B: Get button status
+ * - V: Get supply voltage (no relay activation)
  * 
  * REMOVED: Individual relay commands (R1-R8) for simplification
  * 
@@ -112,7 +113,7 @@ void processCommand(String command) {
   }
   else if (command == "I") {
     // Get board info
-    Serial.println("ID:SMT_BATCH_TESTER_V2.0");
+    Serial.println("ID:SMT_BATCH_TESTER_V2.1");
   }
   else if (command == "B") {
     // Get current button status
@@ -122,6 +123,10 @@ void processCommand(String command) {
     } else {
       Serial.println("BUTTON:RELEASED");
     }
+  }
+  else if (command == "V") {
+    // Get supply voltage without turning on any relays
+    getSupplyVoltage();
   }
   else {
     Serial.println("ERROR:UNKNOWN_COMMAND");
@@ -203,6 +208,32 @@ void allRelaysOff() {
   for (int i = 0; i < 8; i++) {
     digitalWrite(RELAY_PINS[i], RELAY_OFF);
   }
+}
+
+// Get supply voltage without activating any relays
+void getSupplyVoltage() {
+  if (!INA_OK) {
+    Serial.println("VOLTAGE:0.000");
+    return;
+  }
+  
+  // Take multiple samples for accuracy
+  float totalVoltage = 0;
+  const int samples = 5;
+  
+  for (int i = 0; i < samples; i++) {
+    totalVoltage += ina260.readBusVoltage();
+    if (i < samples - 1) {
+      delay(5);  // Small delay between samples
+    }
+  }
+  
+  // Calculate average and convert mV to V
+  float voltage = totalVoltage / samples / 1000.0;
+  
+  // Send result
+  Serial.print("VOLTAGE:");
+  Serial.println(voltage, 3);
 }
 
 void checkButton() {
