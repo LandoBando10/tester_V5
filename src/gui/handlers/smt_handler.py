@@ -366,8 +366,9 @@ class SMTHandler(QObject, ThreadCleanupMixin):
             # Update UI
             self.main_window.test_completed(result)
             
-            # Update SPC widget if test passed and SPC data was collected
-            if result.passed and hasattr(self.main_window, 'spc_widget') and self.main_window.spc_widget:
+            # Update SPC widget with ALL test data (including failed tests)
+            # This is important for spec recalculation when current specs are wrong
+            if hasattr(self.main_window, 'spc_widget') and self.main_window.spc_widget:
                 try:
                     # Check if SPC data was collected in the test
                     if 'spc' in result.metadata and result.metadata['spc'].get('data_collected'):
@@ -375,7 +376,7 @@ class SMTHandler(QObject, ThreadCleanupMixin):
                         sku = result.metadata.get('sku') or getattr(result, 'sku', None)
                         if sku:
                             self.main_window.spc_widget.add_test_results(sku, result.to_dict())
-                            self.logger.info(f"Updated SPC widget with test results for {sku}")
+                            self.logger.info(f"Updated SPC widget with test results for {sku} (Pass: {result.passed})")
                 except Exception as e:
                     self.logger.error(f"Error updating SPC widget: {e}", exc_info=True)
             
@@ -420,13 +421,15 @@ class SMTHandler(QObject, ThreadCleanupMixin):
         previous_state = self._physical_button_state
         self._physical_button_state = button_state
         
-        # If this is the first state update, just record it without triggering
+        # Handle initial state
         if not self._initial_state_received:
             self._initial_state_received = True
             self.logger.info(f"Initial button state recorded: {button_state}")
-            return
+            # Don't trigger on initial state unless explicitly called from connection dialog
+            # The connection dialog will call this with PRESSED if button is held at startup
         
-        if button_state == "PRESSED" and previous_state == "RELEASED":
+        # Always check for transitions, even on first state
+        if button_state == "PRESSED" and (previous_state == "RELEASED" or previous_state is None):
             # Button was just pressed (transition from released to pressed)
             if not self.is_test_running():
                 self.logger.info("Physical button pressed - triggering test start")

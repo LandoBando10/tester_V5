@@ -168,8 +168,8 @@ class TopControlsWidget(QWidget):
         self.current_mode = mode
         
         # Hide/show tests section based on mode
-        if mode == "WeightChecking":
-            # Hide entire tests section for weight checking
+        if mode in ["WeightChecking", "Configuration"]:
+            # Hide entire tests section for weight checking and configuration
             self.tests_label.hide()
             for checkbox in self.test_checkboxes.values():
                 checkbox.hide()

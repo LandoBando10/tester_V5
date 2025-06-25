@@ -27,7 +27,7 @@ This document describes the implementation of Statistical Process Control (SPC) 
    - Stores data persistently for historical analysis
    - Triggers control limit updates when sufficient data is available
 
-3. **SPCControlWidget** (`spc_widget.py`)
+3. **SPCWidget** (`spc_widget.py`)
    - Provides GUI for SPC visualization and control
    - Displays real-time control charts
    - Shows process status and capability metrics
@@ -142,10 +142,10 @@ result = test.execute()
 In your main window, add the SPC control widget:
 
 ```python
-from src.spc import SPCControlWidget
+from src.spc import SPCWidget
 
 # In your MainWindow class
-self.spc_widget = SPCControlWidget()
+self.spc_widget = SPCWidget()
 self.spc_widget.update_sku_list(available_skus)
 
 # Add to layout or tab widget

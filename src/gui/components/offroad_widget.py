@@ -7,9 +7,9 @@ from typing import Optional, Dict, Any
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGroupBox,
     QSplitter, QTableWidget, QTableWidgetItem, QHeaderView,
-    QTextEdit, QMessageBox
+    QTextEdit
 )
-from PySide6.QtCore import Signal, Qt, QThread
+from PySide6.QtCore import Signal, Qt
 from PySide6.QtGui import QColor
 
 # Defer pyqtgraph import until needed

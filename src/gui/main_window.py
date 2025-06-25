@@ -22,7 +22,7 @@ from src.gui.handlers.weight_handler import WeightHandler
 from src.gui.handlers.connection_handler import ConnectionHandler
 from src.core.base_test import TestResult
 from src.utils.thread_cleanup import GlobalCleanupManager # Added import
-from src.spc.enhanced_spc_widget import EnhancedSPCWidget
+from src.spc import SPCWidget
 
 
 class MainWindow(QMainWindow):
@@ -57,6 +57,7 @@ class MainWindow(QMainWindow):
 
         # Current state
         self.current_mode = None  # Will be set by launcher
+        self.previous_mode = "Offroad"  # Track previous mode for configuration
         self.spec_calculator_enabled = False  # Flag for spec calculator mode
         self.spec_calculator_count = 0  # Counter for measurements
         
@@ -78,6 +79,9 @@ class MainWindow(QMainWindow):
         # If config is already loaded, refresh the UI
         if self.config_load_completed and self.sku_manager.is_loaded():
             self.refresh_data()
+        
+        # Trigger auto-scan for Arduino devices after a short delay
+        QTimer.singleShot(500, self._startup_arduino_scan)
 
     @property
     def offroad_handler(self):
@@ -108,11 +112,53 @@ class MainWindow(QMainWindow):
 
     def setup_window_icon(self):
         """Setup window icon with company logo"""
-        icon = get_window_icon()
-        if icon:
-            self.setWindowIcon(icon)
-            # Also set for the application (taskbar)
-            QApplication.instance().setWindowIcon(icon)
+        try:
+            # Get the application instance first
+            app = QApplication.instance()
+            if not app:
+                self.logger.warning("No QApplication instance available for icon setup")
+                return
+            
+            # Try to load the icon from logo.jpg
+            from pathlib import Path
+            from PySide6.QtGui import QPixmap, QIcon
+            
+            logo_path = Path(__file__).parent.parent.parent / "resources" / "logo.jpg"
+            self.logger.info(f"Looking for logo at: {logo_path}")
+            
+            if logo_path.exists():
+                # Create pixmap from the logo
+                pixmap = QPixmap(str(logo_path))
+                
+                if not pixmap.isNull():
+                    # Create icon from pixmap
+                    icon = QIcon(pixmap)
+                    
+                    # Set icon for the window
+                    self.setWindowIcon(icon)
+                    self.logger.info("Window icon set successfully")
+                    
+                    # Set icon for the application (this affects the taskbar)
+                    app.setWindowIcon(icon)
+                    self.logger.info("Application icon set successfully")
+                    
+                    # For Windows, also set the taskbar icon explicitly
+                    if sys.platform == 'win32':
+                        try:
+                            import ctypes
+                            # Set a unique application ID for Windows
+                            myappid = 'diodedynamics.tester.v5.production'
+                            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+                            self.logger.info("Windows app ID set for taskbar grouping")
+                        except Exception as e:
+                            self.logger.warning(f"Could not set Windows app ID: {e}")
+                else:
+                    self.logger.warning("Failed to create pixmap from logo.jpg")
+            else:
+                self.logger.warning(f"Logo file not found at {logo_path}")
+                
+        except Exception as e:
+            self.logger.error(f"Error setting window icon: {e}", exc_info=True)
 
     def setup_ui(self):
         """Setup the main user interface"""
@@ -235,11 +281,26 @@ class MainWindow(QMainWindow):
         # Connection handler
         self.connection_handler.setup_connections()
 
+    def _startup_arduino_scan(self):
+        """Perform startup scan for Arduino devices and auto-connect"""
+        try:
+            # Only scan if not already connected
+            if not self.connection_dialog.arduino_connected:
+                self.logger.info("Starting automatic Arduino device scan on startup...")
+                # The quick_refresh_ports will trigger auto-connect if Arduino is found
+                self.connection_dialog.quick_refresh_ports()
+        except Exception as e:
+            self.logger.error(f"Error during startup Arduino scan: {e}")
+    
     def set_mode(self, mode: str):
         """Set the current test mode"""
+        # Track previous mode only if not already in configuration mode
+        if self.current_mode != "Configuration" and self.current_mode is not None:
+            self.previous_mode = self.current_mode
+        
         previous_mode = self.current_mode
         self.current_mode = mode
-        self.logger.info(f"Mode changed from {previous_mode} to {mode}")
+        self.logger.info(f"Mode changed from {previous_mode} to {mode} (previous mode stored: {self.previous_mode})")
 
         # Update UI components
         self.top_controls.set_mode(mode)
@@ -261,7 +322,7 @@ class MainWindow(QMainWindow):
         
         # Show/hide start button based on mode
         if hasattr(self, 'start_btn'):
-            if mode == "WeightChecking":
+            if mode in ["WeightChecking", "Configuration"]:
                 self.start_btn.hide()
             else:
                 self.start_btn.show()
@@ -322,7 +383,16 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(100, self.update_connection_status)
 
         # Filter SKUs and update tests
-        self.filter_skus_by_mode()
+        if mode != "Configuration":
+            self.filter_skus_by_mode()
+        else:
+            # In configuration mode, show all SKUs
+            all_skus = self.sku_manager.get_all_skus() if self.sku_manager else []
+            self.top_controls.set_available_skus(all_skus)
+            # Update configuration widget with current SKU
+            current_sku = self.top_controls.get_current_sku()
+            if current_sku and current_sku != "-- Select SKU --":
+                self.test_area.set_current_sku(current_sku)
 
     def setup_sku_manager(self):
         """Setup SKU manager - unified manager loads immediately"""
@@ -534,6 +604,8 @@ class MainWindow(QMainWindow):
             # Update test area based on current mode
             if self.current_mode == "WeightChecking":
                 self.test_area.set_sku(sku)
+            elif self.current_mode == "Configuration":
+                self.test_area.set_current_sku(sku)
             elif self.current_mode == "SMT":
                 # Update SMT panel layout based on SKU configuration
                 try:
@@ -588,6 +660,10 @@ class MainWindow(QMainWindow):
         """Show the connection management dialog"""
         self.connection_dialog.exec()
         self.update_connection_status()
+    
+    def get_previous_mode(self) -> str:
+        """Get the previous test mode (for configuration exit)"""
+        return self.previous_mode
 
     def update_connection_status(self):
         """Update the connection status display and propagate to test widgets"""
@@ -755,7 +831,7 @@ class MainWindow(QMainWindow):
                     if hasattr(self, 'smt_handler') and hasattr(self.smt_handler, 'spc_integration'):
                         spc_integration = self.smt_handler.spc_integration
                     
-                    self.spc_widget = EnhancedSPCWidget(spc_integration=spc_integration, parent=self.spc_dialog)
+                    self.spc_widget = SPCWidget(spc_integration=spc_integration, parent=self.spc_dialog)
                     
                     # Connect signals
                     self.spc_widget.mode_changed.connect(self.on_spc_mode_changed)

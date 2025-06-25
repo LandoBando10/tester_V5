@@ -1,6 +1,6 @@
 /*
  * SMT Simple Tester - Batch-only Arduino firmware for SMT board testing
- * Version: 2.1.0
+ * Version: 2.3.0
  * 
  * Commands:
  * - T: Test entire panel (returns all relay measurements)
@@ -10,10 +10,14 @@
  * - B: Get button status
  * - V: Get supply voltage (no relay activation)
  * 
- * REMOVED: Individual relay commands (R1-R8) for simplification
+ * Events (sent automatically):
+ * - EVENT:BUTTON_PRESSED - Sent when button is pressed
+ * - EVENT:BUTTON_RELEASED - Sent when button is released
  * 
  * Response format: Simple text without CRC or framing
  * All measurements sent in Volts and Amps (not millivolts/milliamps)
+ * 
+ * v2.3.0: Proper event system for button presses
  */
 
 #include <Wire.h>
@@ -35,8 +39,7 @@ bool INA_OK = false;  // Global flag to track if sensor is available
 
 // Button state tracking
 bool lastButtonState = HIGH;
-bool buttonPressed = false;
-bool buttonEventSent = false;  // Track if we've sent the current button state
+bool currentButtonPressed = false;  // Current debounced state
 unsigned long lastButtonTime = 0;
 const unsigned long DEBOUNCE_DELAY = 50;
 
@@ -113,12 +116,11 @@ void processCommand(String command) {
   }
   else if (command == "I") {
     // Get board info
-    Serial.println("ID:SMT_BATCH_TESTER_V2.1");
+    Serial.println("ID:SMT_BATCH_TESTER_V2.3");
   }
   else if (command == "B") {
-    // Get current button status
-    bool currentState = digitalRead(BUTTON_PIN);
-    if (currentState == LOW) {
+    // Get current button status (use debounced state)
+    if (currentButtonPressed) {
       Serial.println("BUTTON:PRESSED");
     } else {
       Serial.println("BUTTON:RELEASED");
@@ -234,6 +236,8 @@ void getSupplyVoltage() {
   // Send result
   Serial.print("VOLTAGE:");
   Serial.println(voltage, 3);
+  Serial.flush();  // Ensure complete transmission
+  delay(5);  // Small delay to prevent buffer conflicts
 }
 
 void checkButton() {
@@ -244,15 +248,15 @@ void checkButton() {
     if (millis() - lastButtonTime > DEBOUNCE_DELAY) {
       if (currentState == LOW && lastButtonState == HIGH) {
         // Button was pressed
-        buttonPressed = true;
-        // Send button pressed event immediately
-        Serial.println("BUTTON:PRESSED");
-        buttonEventSent = true;
+        currentButtonPressed = true;
+        // Send event immediately for responsiveness
+        Serial.println("EVENT:BUTTON_PRESSED");
+        Serial.flush();  // Ensure immediate transmission
       } else if (currentState == HIGH && lastButtonState == LOW) {
         // Button was released
-        // Send button released event immediately
-        Serial.println("BUTTON:RELEASED");
-        buttonEventSent = false;
+        currentButtonPressed = false;
+        Serial.println("EVENT:BUTTON_RELEASED");
+        Serial.flush();  // Ensure immediate transmission
       }
       lastButtonTime = millis();
     }

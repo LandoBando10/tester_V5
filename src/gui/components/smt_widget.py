@@ -35,7 +35,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QSplitter,
 )
-from PySide6.QtGui import QColor, QPalette
+from PySide6.QtGui import QColor
 from PySide6.QtCore import Qt, Signal
 
 # ---------------------------------------------------------------------------

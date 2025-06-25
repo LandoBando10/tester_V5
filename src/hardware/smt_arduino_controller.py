@@ -17,6 +17,7 @@ import time
 import logging
 import serial
 import threading
+import queue
 from typing import Dict, Optional, Callable
 
 class SMTArduinoController:
@@ -36,6 +37,12 @@ class SMTArduinoController:
         self.is_reading = False
         self._reading_thread = None
         self._stop_reading = threading.Event()
+        
+        # Event queue for messages during command execution
+        self._event_queue = queue.Queue()
+        self._command_lock = threading.Lock()
+        self._expecting_response = False
+        self._response_queue = queue.Queue()
         
         # Simple retry and timeout settings
         self.command_timeout = 2.0
@@ -77,6 +84,10 @@ class SMTArduinoController:
             # Read any startup messages
             self._read_startup_messages()
             
+            # Start reading thread BEFORE testing communication
+            # This is essential for the queue-based command system to work
+            self.start_reading()
+            
             # Test communication
             if self._test_communication():
                 self.logger.info(f"Connected to SMT Arduino on {port}")
@@ -110,13 +121,21 @@ class SMTArduinoController:
         return self.connection is not None and self.connection.is_open
 
     def _flush_buffers(self):
-        """Clear serial buffers"""
+        """Clear serial buffers - safe to call with reading thread active"""
         if self.connection and self.connection.is_open:
             try:
+                # Just clear the input buffer - output buffer flush is less critical
+                # and could interfere with ongoing writes
                 self.connection.reset_input_buffer()
-                self.connection.reset_output_buffer()
-            except:
-                pass
+                # Also clear our internal queues
+                while not self._response_queue.empty():
+                    try:
+                        self._response_queue.get_nowait()
+                    except:
+                        break
+                self.logger.debug("Buffers flushed")
+            except Exception as e:
+                self.logger.debug(f"Buffer flush error: {e}")
 
     def _read_startup_messages(self):
         """Read and log any startup messages"""
@@ -172,53 +191,42 @@ class SMTArduinoController:
             
         if timeout is None:
             timeout = self.command_timeout
-            
-        # For critical commands, temporarily pause reading thread
-        pause_reading = command in ["X", "T", "TS"]
-        was_reading = False
         
-        try:
-            # Pause reading thread for critical commands to prevent interference
-            if pause_reading and self.is_reading:
-                was_reading = True
-                self.stop_reading()
-                # Small delay to ensure thread has stopped
-                time.sleep(0.1)
-            
-            # Clear input buffer
-            self.connection.reset_input_buffer()
-            
-            # Small delay to ensure serial line is idle
-            time.sleep(0.02)
-            
-            # Send command
-            cmd_bytes = f"{command}\n".encode()
-            self.logger.debug(f"Sending: {command}")
-            self.connection.write(cmd_bytes)
-            self.connection.flush()
-            
-            # Small delay after sending to allow Arduino to process
-            time.sleep(0.01)
-            
-            # Read response
-            self.connection.timeout = timeout
-            response_bytes = self.connection.readline()
-            
-            if response_bytes:
-                response = response_bytes.decode('utf-8', errors='ignore').strip()
-                self.logger.debug(f"Received: {response}")
-                return response
-            else:
-                self.logger.warning(f"No response to command: {command}")
-                return None
+        with self._command_lock:
+            try:
+                # Clear any stale responses
+                while not self._response_queue.empty():
+                    self._response_queue.get_nowait()
                 
-        except Exception as e:
-            self.logger.error(f"Command error: {e}")
-            return None
-        finally:
-            # Resume reading thread if it was paused
-            if was_reading and pause_reading:
-                self.start_reading()
+                # Signal that we're expecting a response
+                self._expecting_response = True
+                
+                # Clear input buffer
+                self.connection.reset_input_buffer()
+                
+                # Small delay to ensure serial line is idle
+                time.sleep(0.02)
+                
+                # Send command
+                cmd_bytes = f"{command}\n".encode()
+                self.logger.debug(f"Sending: {command}")
+                self.connection.write(cmd_bytes)
+                self.connection.flush()
+                
+                # Wait for response with timeout
+                try:
+                    response = self._response_queue.get(timeout=timeout)
+                    self.logger.debug(f"Received: {response}")
+                    return response
+                except queue.Empty:
+                    self.logger.warning(f"No response to command: {command}")
+                    return None
+                    
+            except Exception as e:
+                self.logger.error(f"Command error: {e}")
+                return None
+            finally:
+                self._expecting_response = False
 
     def test_panel(self) -> Dict[int, Optional[Dict[str, float]]]:
         """Test entire panel with single command"""
@@ -363,6 +371,11 @@ class SMTArduinoController:
     def get_supply_voltage(self, retry_count: int = 3) -> Optional[float]:
         """Get current supply voltage without activating relays with retry on corruption"""
         for attempt in range(retry_count):
+            # Clear buffer before sending to avoid partial reads
+            if self.connection and self.connection.is_open:
+                self.connection.reset_input_buffer()
+                time.sleep(0.02)  # Let buffer clear
+            
             # Use the new V command that doesn't activate any relays
             response = self._send_command("V", timeout=0.5)
             
@@ -385,17 +398,20 @@ class SMTArduinoController:
                         self.logger.warning(f"Voltage {voltage}V outside reasonable range")
                 else:
                     # Log corruption patterns for debugging
-                    if "VOLT" in response or "V" in response:
+                    if "VOLT" in response or response == "V":
                         self.logger.debug(f"Corrupted voltage response: '{response}' (attempt {attempt + 1}/{retry_count})")
+                        # Clear buffer after corruption
+                        if self.connection and self.connection.is_open:
+                            self.connection.reset_input_buffer()
                     else:
                         self.logger.error(f"Unexpected response format: '{response}'")
                     
             except Exception as e:
                 self.logger.debug(f"Failed to parse voltage from '{response}': {e} (attempt {attempt + 1}/{retry_count})")
             
-            # Wait before retry if not last attempt
+            # Wait longer before retry if not last attempt
             if attempt < retry_count - 1:
-                time.sleep(0.05)
+                time.sleep(0.1)
         
         self.logger.warning(f"Failed to get valid voltage after {retry_count} attempts")
         return None
@@ -431,18 +447,43 @@ class SMTArduinoController:
         self.logger.info("Reading thread stopped")
 
     def _reading_loop(self):
-        """Background thread to read button events"""
+        """Background thread to read all serial data and route appropriately"""
         while not self._stop_reading.is_set():
             try:
-                if self.connection and self.connection.is_open and self.connection.in_waiting > 0:
-                    data = self.connection.readline()
-                    if data:
-                        message = data.decode('utf-8', errors='ignore').strip()
-                        if message.startswith("BUTTON:") and self.button_callback:
-                            self.logger.info(f"Button event: {message}")
-                            self.button_callback(message[7:])
-            except:
-                pass
+                if self.connection and self.connection.is_open:
+                    # Use non-blocking check with very short timeout
+                    old_timeout = self.connection.timeout
+                    self.connection.timeout = 0.05
+                    
+                    try:
+                        data = self.connection.readline()
+                        if data:
+                            message = data.decode('utf-8', errors='ignore').strip()
+                            if message:
+                                # Route the message appropriately
+                                if message.startswith("EVENT:"):
+                                    # Handle events
+                                    event_type = message[6:]
+                                    if event_type.startswith("BUTTON_") and self.button_callback:
+                                        self.logger.info(f"Button event: {event_type}")
+                                        # Extract just the state (PRESSED/RELEASED)
+                                        state = event_type.replace("BUTTON_", "")
+                                        self.button_callback(state)
+                                elif self._expecting_response:
+                                    # This is a response to a command
+                                    self._response_queue.put(message)
+                                else:
+                                    # Unexpected message - could be a delayed response
+                                    # Common responses we can safely ignore
+                                    if message in ["OK:ALL_OFF", "PANEL_COMPLETE"] or message.startswith(("VOLTAGE:", "RELAY:", "PANEL:", "ID:")):
+                                        self.logger.debug(f"Ignoring delayed response: {message}")
+                                    else:
+                                        self.logger.debug(f"Unexpected message: {message}")
+                    finally:
+                        self.connection.timeout = old_timeout
+            except Exception as e:
+                if not self._stop_reading.is_set():
+                    self.logger.error(f"Reading thread error: {e}")
                 
             time.sleep(0.01)
 
@@ -452,14 +493,18 @@ class SMTArduinoController:
         return True
     
     def pause_reading_for_test(self):
-        """Pause reading thread for test execution"""
-        if self.is_reading:
-            self.stop_reading()
+        """Compatibility method - reading thread must stay active in new architecture"""
+        # In the new queue-based architecture, the reading thread MUST continue running
+        # to route command responses to the queue. Button events during tests are harmless
+        # as they'll be ignored if a test is already running.
+        self.logger.debug("pause_reading_for_test called - keeping thread active")
+        pass
     
     def resume_reading_after_test(self):
-        """Resume reading thread after test"""
-        if not self.is_reading and self.is_connected():
-            self.start_reading()
+        """Compatibility method - reading thread should already be active"""
+        # Thread should never be stopped, so nothing to resume
+        self.logger.debug("resume_reading_after_test called - thread already active")
+        pass
     
     @property
     def serial(self):

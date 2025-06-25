@@ -65,7 +65,9 @@ class VoltageMonitorWidget(QWidget):
         """Set the Arduino controller for voltage readings"""
         self.arduino_controller = controller
         if controller and controller.is_connected():
-            # Start monitoring at 2Hz (500ms) to reduce serial congestion
+            # Do an immediate voltage check
+            self.check_voltage()
+            # Then start monitoring at 2Hz (500ms) to reduce serial congestion
             self.update_timer.start(500)
             self.logger.info("Started voltage monitoring")
         else:

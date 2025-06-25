@@ -47,6 +47,10 @@ class TestMenuBar(QMenuBar):
             tools_menu = self.addMenu("Tools")
             self.setup_tools_menu(tools_menu)
             
+            # SPC Menu
+            spc_menu = self.addMenu("SPC")
+            self.setup_spc_menu(spc_menu)
+            
             # Help Menu
             help_menu = self.addMenu("Help")
             self.setup_help_menu(help_menu)
@@ -135,20 +139,6 @@ class TestMenuBar(QMenuBar):
             logs_action.triggered.connect(self.show_logs)
             menu.addAction(logs_action)
             
-            menu.addSeparator()
-            
-            # Spec Limit Calculator
-            spec_calc_action = QAction("Spec Limit Calculator...", self)
-            spec_calc_action.triggered.connect(self.show_spec_calculator)
-            menu.addAction(spec_calc_action)
-            
-            menu.addSeparator()
-            
-            # SPC Control
-            spc_action = QAction("SPC Control...", self)
-            spc_action.setStatusTip("Open Statistical Process Control panel")
-            spc_action.triggered.connect(self.show_spc_control)
-            menu.addAction(spc_action)
             
             logger.info("Tools menu setup complete.") # Added
         except Exception as e: # Added
@@ -168,6 +158,19 @@ class TestMenuBar(QMenuBar):
             docs_action = QAction("Documentation", self)
             docs_action.triggered.connect(self.show_documentation)
             menu.addAction(docs_action)
+            
+            menu.addSeparator()
+            
+            # View Production Log
+            prod_log_action = QAction("View Production Log", self)
+            prod_log_action.triggered.connect(self.show_production_log)
+            menu.addAction(prod_log_action)
+            
+            # View Critical Errors Log
+            critical_log_action = QAction("View Critical Errors Log", self)
+            critical_log_action.triggered.connect(self.show_critical_errors_log)
+            menu.addAction(critical_log_action)
+            
             logger.info("Help menu setup complete.") # Added
         except Exception as e: # Added
             logger.error("Failed to set up help menu: %s", e, exc_info=True) # Added
@@ -214,16 +217,44 @@ class TestMenuBar(QMenuBar):
         except Exception as e: # Added
             logger.error("Failed to apply dark style: %s", e, exc_info=True) # Added
     
+    def setup_spc_menu(self, menu: QMenu):
+        """Setup the SPC menu"""
+        logger.debug("Setting up SPC menu")
+        try:
+            # SPC Control
+            spc_action = QAction("SPC Control...", self)
+            spc_action.setStatusTip("Open Statistical Process Control panel")
+            spc_action.triggered.connect(self.show_spc_control)
+            menu.addAction(spc_action)
+            
+            # Spec Limit Calculator
+            spec_calc_action = QAction("Spec Limit Calculator...", self)
+            spec_calc_action.triggered.connect(self.show_spec_calculator)
+            menu.addAction(spec_calc_action)
+            
+            logger.info("SPC menu setup complete.")
+        except Exception as e:
+            logger.error("Failed to set up SPC menu: %s", e, exc_info=True)
+            menu.addAction(QAction("Error loading SPC items", self, enabled=False))
+    
     def set_mode(self, mode: str):
         """Set the current mode and update menu"""
         logger.info(f"Setting mode to: {mode}") # Added
         try: # Added
             # Update mode actions without triggering signals
-            for m, action in self.mode_actions.items():
-                # Temporarily block signals to prevent infinite recursion
-                action.blockSignals(True)
-                action.setChecked(m == mode)
-                action.blockSignals(False)
+            # Only update if it's a standard mode (not Configuration)
+            if mode in self.mode_actions:
+                for m, action in self.mode_actions.items():
+                    # Temporarily block signals to prevent infinite recursion
+                    action.blockSignals(True)
+                    action.setChecked(m == mode)
+                    action.blockSignals(False)
+            else:
+                # Configuration mode - uncheck all mode actions
+                for action in self.mode_actions.values():
+                    action.blockSignals(True)
+                    action.setChecked(False)
+                    action.blockSignals(False)
             
             logger.debug(f"Mode menu updated for {mode}") # Added
         except Exception as e: # Added
@@ -242,8 +273,8 @@ class TestMenuBar(QMenuBar):
             # from pathlib import Path # Moved to top
             
             # Securely build path to utility
-            # Assuming utils is a sibling of gui directory
-            utility_path = Path(__file__).parent.parent.parent / "utils" / "smt_setup_utility.py" # Modified
+            # The utility is in the tools directory at project root
+            utility_path = Path(__file__).parent.parent.parent.parent / "tools" / "smt_setup_utility.py" # Modified
             utility_path = utility_path.resolve()
             
             # Security validation
@@ -253,8 +284,8 @@ class TestMenuBar(QMenuBar):
                                         f"SMT Setup Utility not found. Please ensure it exists at expected location: {utility_path.parent}") # Modified
                 return
             
-            # Validate it's actually in our utils directory (prevent path traversal)
-            expected_dir = (Path(__file__).parent.parent.parent / "utils").resolve() # Modified
+            # Validate it's actually in our tools directory (prevent path traversal)
+            expected_dir = (Path(__file__).parent.parent.parent.parent / "tools").resolve() # Modified
             if not str(utility_path).startswith(str(expected_dir)):
                 logger.error(f"Security Error: Invalid SMT utility path detected: {utility_path}. Expected to be in {expected_dir}") # Added
                 QMessageBox.critical(self, "Security Error", "Invalid utility path detected.")
@@ -277,16 +308,14 @@ class TestMenuBar(QMenuBar):
             QMessageBox.critical(self, "Error", f"Could not launch SMT Setup Utility: {e}")
     
     def show_config_editor(self):
-        """Show configuration editor"""
-        logger.info("Attempting to show SKU Configuration Editor") # Added
+        """Show configuration editor in test area"""
+        logger.info("Opening Configuration Editor in test area") # Added
         try:
-            from .config.config_editor import ConfigurationEditor # Assuming this is the correct path
-            
-            # Create and show configuration editor
-            # Ensure parent is correctly passed if ConfigurationEditor expects it for modality or signals
-            editor = ConfigurationEditor(self) 
-            # editor.configuration_changed.connect(self.on_configuration_changed) # Connect if needed
-            editor.show() # Use show() instead of exec() to allow fullscreen
+            # Directly set the mode on the main window to Configuration
+            if hasattr(self.parent(), 'set_mode'):
+                self.parent().set_mode("Configuration")
+            else:
+                logger.error("Parent window does not have set_mode method")
             logger.debug("SKU Configuration Editor closed.") # Added
             
         except ImportError as ie: # Added
@@ -327,7 +356,7 @@ class TestMenuBar(QMenuBar):
             # from pathlib import Path # Moved to top
             
             # Securely build path to logs directory
-            logs_dir = (Path(__file__).parent.parent.parent / "logs").resolve() # Modified
+            logs_dir = (Path(__file__).parent.parent.parent.parent / "logs").resolve() # Modified
             
             # Security validation - ensure logs directory exists and is in expected location
             if not logs_dir.exists() or not logs_dir.is_dir(): # Added check for is_dir
@@ -336,8 +365,8 @@ class TestMenuBar(QMenuBar):
                 return
             
             # Validate it's actually in our project directory (prevent path traversal)
-            # Assuming project root is parent of gui directory
-            project_root = (Path(__file__).parent.parent.parent).resolve() # Modified
+            # Assuming project root is parent of src directory
+            project_root = (Path(__file__).parent.parent.parent.parent).resolve() # Modified
             if not str(logs_dir).startswith(str(project_root)):
                 logger.error(f"Security Error: Invalid logs path detected: {logs_dir}. Expected to be within {project_root}") # Added
                 QMessageBox.critical(self, "Security Error", "Invalid logs path detected.")
@@ -360,8 +389,23 @@ class TestMenuBar(QMenuBar):
                 subprocess.run(['open', str(logs_dir)], check=True, shell=False, timeout=10)
                 logger.info(f"Successfully requested to open logs directory on macOS: {logs_dir}") # Added
             else: # Linux and other POSIX
-                subprocess.run(['xdg-open', str(logs_dir)], check=True, shell=False, timeout=10)
-                logger.info(f"Successfully requested to open logs directory with xdg-open: {logs_dir}") # Added
+                # Check if we're on WSL
+                import platform
+                if 'microsoft' in platform.uname().release.lower():
+                    # We're on WSL, use explorer.exe
+                    try:
+                        # Convert WSL path to Windows path
+                        windows_path = str(logs_dir).replace('/mnt/c/', 'C:\\')
+                        subprocess.run(['explorer.exe', windows_path], check=True, shell=False, timeout=10)
+                        logger.info(f"Successfully requested to open logs directory on WSL: {windows_path}")
+                    except Exception as e:
+                        logger.error(f"Failed to open logs directory on WSL: {e}", exc_info=True)
+                        # Try with WSL path as fallback
+                        subprocess.run(['explorer.exe', str(logs_dir)], check=False, shell=False, timeout=10)
+                else:
+                    # Regular Linux
+                    subprocess.run(['xdg-open', str(logs_dir)], check=True, shell=False, timeout=10)
+                    logger.info(f"Successfully requested to open logs directory with xdg-open: {logs_dir}") # Added
                 
         except subprocess.TimeoutExpired:
             logger.warning(f"Timeout opening logs directory: {logs_dir}") # Added
@@ -618,3 +662,49 @@ class TestMenuBar(QMenuBar):
                                       "Run 30 tests to calculate new specification limits.")
         except Exception as e:
             logger.error(f"Error enabling spec calculator mode: {e}")
+    
+    def show_production_log(self):
+        """Show production log in a viewer dialog"""
+        logger.info("Opening production log viewer")
+        try:
+            from src.gui.components.log_viewer_dialog import LogViewerDialog
+            
+            # Build path to production log
+            log_path = Path(__file__).parent.parent.parent.parent / "logs" / "production_test.log"
+            log_path = log_path.resolve()
+            
+            if not log_path.exists():
+                QMessageBox.information(self, "Production Log", 
+                                      f"Production log not found at:\n{log_path}")
+                return
+                
+            # Create and show log viewer
+            viewer = LogViewerDialog(str(log_path), "Production Test Log", self)
+            viewer.show()  # Non-modal
+            
+        except Exception as e:
+            logger.error(f"Error showing production log: {e}", exc_info=True)
+            QMessageBox.critical(self, "Error", f"Could not open production log: {e}")
+    
+    def show_critical_errors_log(self):
+        """Show critical errors log in a viewer dialog"""
+        logger.info("Opening critical errors log viewer")
+        try:
+            from src.gui.components.log_viewer_dialog import LogViewerDialog
+            
+            # Build path to critical errors log
+            log_path = Path(__file__).parent.parent.parent.parent / "logs" / "critical_errors.log"
+            log_path = log_path.resolve()
+            
+            if not log_path.exists():
+                QMessageBox.information(self, "Critical Errors Log", 
+                                      f"Critical errors log not found at:\n{log_path}")
+                return
+                
+            # Create and show log viewer
+            viewer = LogViewerDialog(str(log_path), "Critical Errors Log", self)
+            viewer.show()  # Non-modal
+            
+        except Exception as e:
+            logger.error(f"Error showing critical errors log: {e}", exc_info=True)
+            QMessageBox.critical(self, "Error", f"Could not open critical errors log: {e}")

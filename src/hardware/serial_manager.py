@@ -213,13 +213,6 @@ class SerialManager(ThreadCleanupMixin):
                 # The Arduino firmware doesn't parse CRC on incoming commands
                 # CRC should only be used for validating responses FROM Arduino
                 
-                # Original problematic code:
-                # if self.crc_enabled and self.crc_calculator:
-                #     message = data.rstrip('\r\n')
-                #     data_with_crc = self.crc_calculator.append_crc(message)
-                #     data = data_with_crc + '\r\n'
-                #     self.logger.debug(f"Sending with CRC: {data_with_crc}")
-                
                 # Just send the plain command
                 data_bytes = data.encode('utf-8')
                 bytes_written = self.connection.write(data_bytes)
@@ -489,8 +482,3 @@ if __name__ == "__main__":
 
     print("Available ports:", serial_mgr.get_available_ports())
 
-    # Example of how to use it
-    # if serial_mgr.connect("COM3"):  # Replace with actual port
-    #     response = serial_mgr.query("*IDN?")  # Common SCPI command
-    #     print(f"Device response: {response}")
-    #     serial_mgr.disconnect()

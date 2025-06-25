@@ -347,6 +347,3 @@ if __name__ == "__main__":
     print("✅ Uses standardized callbacks and resource management")
     print("✅ Compatible with existing test infrastructure")
     print("✅ Separated concerns: hardware control vs test logic")
-    
-    # Example test - replace with actual values
-    # result = run_weight_test("DD5000", "COM3", 10.0, 15.0, "weights.json")

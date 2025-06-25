@@ -261,8 +261,6 @@ class TestHandler(QObject, ThreadCleanupMixin):
                     # In Qt, QThread.kill() is not a method. terminate() is the forceful way.
                     # If it's still running, it might be stuck.
                     # We rely on the resource manager to eventually clean up if it's truly stuck.
-                    # For now, we'll just log it.
-                    # self.current_test_worker.kill() # This method doesn't exist for QThread
                 else:
                     self.logger.info("Test worker stopped after terminate().")
 

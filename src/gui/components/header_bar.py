@@ -1,5 +1,4 @@
 # gui/components/header_bar.py
-import os
 import logging  # Added
 from pathlib import Path
 from PySide6.QtGui import QIcon, QPixmap

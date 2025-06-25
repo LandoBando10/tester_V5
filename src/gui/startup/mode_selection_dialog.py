@@ -4,7 +4,7 @@ Clean and professional mode selection dialog
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton, 
                               QLabel, QWidget, QGraphicsDropShadowEffect)
 from PySide6.QtCore import Qt, Signal, QPropertyAnimation, QRect, QEasingCurve, QPoint
-from PySide6.QtGui import QFont, QIcon, QColor, QGuiApplication
+from PySide6.QtGui import QFont, QIcon, QColor, QGuiApplication, QPixmap
 
 
 class ModeButton(QPushButton):
@@ -78,6 +78,7 @@ class ModeSelectionDialog(QDialog):
         super().__init__(parent)
         self.selected_mode = None
         self.target_position = position  # Position to show at (for seamless transition)
+        self.setup_window_icon()  # Set icon before UI setup
         self.setup_ui()
     
     def exec(self):
@@ -101,6 +102,26 @@ class ModeSelectionDialog(QDialog):
         
         # Set size and center
         self.setFixedSize(1000, 400)
+    
+    def setup_window_icon(self):
+        """Setup window icon for mode selection dialog"""
+        try:
+            # Get the application instance
+            from PySide6.QtWidgets import QApplication
+            app = QApplication.instance()
+            if app:
+                # Try to load the icon from logo.jpg
+                from pathlib import Path
+                logo_path = Path(__file__).parent.parent.parent.parent / "resources" / "logo.jpg"
+                
+                if logo_path.exists():
+                    pixmap = QPixmap(str(logo_path))
+                    if not pixmap.isNull():
+                        icon = QIcon(pixmap)
+                        self.setWindowIcon(icon)
+                        # Application icon should already be set by splash screen
+        except Exception as e:
+            print(f"Could not set mode dialog icon: {e}")
         
         # Ensure window is not minimized
         self.setWindowState(Qt.WindowNoState)

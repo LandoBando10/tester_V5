@@ -2,7 +2,8 @@ import time
 import logging
 from typing import Dict, Any, List, Optional
 from .base_test import BaseTest, TestResult
-from src.hardware.arduino_controller import ArduinoController, SensorConfigurations, TestResult as ArduinoTestResult, RGBWSample
+from src.hardware.offroad_arduino_controller import OffroadArduinoController
+from src.hardware.arduino_controller import SensorConfigurations, TestResult as ArduinoTestResult, RGBWSample
 from config.settings import SENSOR_TIMINGS, TEST_SENSOR_CONFIGS
 import json
 
@@ -21,7 +22,7 @@ class OffroadTest(BaseTest):
         self.arduino = arduino_controller
         self.owns_arduino = False  # Track if we created the Arduino instance
         if not self.arduino:
-            self.arduino = ArduinoController(baud_rate=115200)
+            self.arduino = OffroadArduinoController(baud_rate=115200)
             self.owns_arduino = True
             
         self.required_params = ["LUX", "COLOR"]  # PRESSURE is global

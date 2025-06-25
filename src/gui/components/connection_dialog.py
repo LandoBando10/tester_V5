@@ -82,13 +82,18 @@ class PortScannerThread(QThread):
                 try:
                     temp_serial.flush_buffers()
                     
-                    # Send ID command with short timeout
+                    # Try I command first (SMT Arduino expects this), then ID for compatibility
                     response = temp_serial.query("I", response_timeout=0.3)
+                    if not response or "ERROR" in response.upper():
+                        response = temp_serial.query("ID", response_timeout=0.3)
+                    
                     if response:
                         response_upper = response.upper()
-                        if "SMT" in response_upper or "SMT_SIMPLE_TESTER" in response_upper:
+                        logger.debug(f"Arduino response on {port}: {response}")
+                        # Check for specific Arduino types
+                        if "SMT_BATCH_TESTER" in response_upper or "SMT" in response_upper or "SMT_SIMPLE_TESTER" in response_upper or "ARDUINO SMT" in response_upper:
                             device_type = "SMT Arduino"
-                        elif "OFFROAD" in response_upper:
+                        elif "OFFROAD" in response_upper or "ARDUINO OFFROAD" in response_upper:
                             device_type = "Offroad Arduino"
                         elif "DIODE" in response_upper or "ARDUINO" in response_upper:
                             device_type = "Arduino"
@@ -145,11 +150,15 @@ class ConnectionDialog(QDialog):
         # Device cache (instance variable for thread safety)
         self._device_cache = {}
         self._load_device_cache()
+        
+        # Auto-connect flag for startup
+        self._auto_connect_enabled = True
+        self._startup_scan_done = False
 
         self.setup_ui()
         
-        # Auto-refresh on dialog open
-        QTimer.singleShot(100, self.quick_refresh_ports)
+        # Load ports initially without UI popup
+        self._load_ports_silently()
 
     def setup_ui(self):
         """Setup the connection dialog UI"""
@@ -280,6 +289,27 @@ class ConnectionDialog(QDialog):
 
         logger.debug("ConnectionDialog UI setup complete.")
 
+    def _load_ports_silently(self):
+        """Load ports initially without showing any dialog"""
+        try:
+            logger.info("Loading ports silently on startup...")
+            temp_serial = SerialManager()
+            ports = temp_serial.get_available_ports()
+            
+            if not ports:
+                logger.info("No serial ports found during startup")
+                return
+            
+            # Just populate combo boxes with port names for now
+            port_items = [f"{port} (Unknown)" for port in sorted(ports)]
+            self.arduino_port_combo.addItems(port_items)
+            self.scale_port_combo.addItems(port_items)
+            
+            logger.info(f"Loaded {len(ports)} ports into combo boxes")
+            
+        except Exception as e:
+            logger.error(f"Error loading ports silently: {e}")
+    
     def quick_refresh_ports(self):
         """Quick refresh using cached device types"""
         try:
@@ -291,6 +321,7 @@ class ConnectionDialog(QDialog):
             port_info = {}
             current_time = time.time()
             unknown_count = 0
+            arduino_found_in_cache = False
             
             for port in ports:
                 # Check if already connected
@@ -303,6 +334,8 @@ class ConnectionDialog(QDialog):
                     cached = self._device_cache[port]
                     if current_time - cached.timestamp < self.CACHE_TIMEOUT:
                         port_info[port] = cached.device_type
+                        if cached.device_type in ["SMT Arduino", "Offroad Arduino", "Arduino"]:
+                            arduino_found_in_cache = True
                     else:
                         port_info[port] = "Unknown"
                         unknown_count += 1
@@ -310,22 +343,115 @@ class ConnectionDialog(QDialog):
                     port_info[port] = "Unknown"
                     unknown_count += 1
             
-            # If all non-connected ports are unknown, do a full refresh instead
+            # If all non-connected ports are unknown, trigger silent scan for startup
             non_connected_ports = [p for p in ports 
                                   if not (self.arduino_connected and self.arduino_port == p) 
                                   and not (self.scale_connected and self.scale_port == p)]
             
-            if non_connected_ports and unknown_count >= len(non_connected_ports):
-                logger.info("No cached device info available, switching to full refresh")
-                self.full_refresh_ports()
+            if (non_connected_ports and unknown_count >= len(non_connected_ports) and 
+                self._auto_connect_enabled and not self._startup_scan_done):
+                logger.info("No cached device info available, triggering silent startup scan")
+                # Do a silent background scan for startup
+                self._silent_scan_for_startup(ports)
                 return
                 
             self._update_port_combos(port_info)
             logger.info(f"Quick refresh completed. Found: {port_info}")
             
+            # Auto-connect to Arduino if found in cache during startup
+            if (self._auto_connect_enabled and not self._startup_scan_done and 
+                not self.arduino_connected and arduino_found_in_cache):
+                self._startup_scan_done = True
+                
+                # Find first Arduino in port_info
+                for port, device_type in port_info.items():
+                    if device_type in ["SMT Arduino", "Offroad Arduino", "Arduino"]:
+                        logger.info(f"Auto-connecting to cached {device_type} on {port} during startup")
+                        
+                        # Select the port in the combo box
+                        for i in range(self.arduino_port_combo.count()):
+                            if self.arduino_port_combo.itemText(i).startswith(port + " ("):
+                                self.arduino_port_combo.setCurrentIndex(i)
+                                break
+                        
+                        # Trigger connection
+                        QTimer.singleShot(100, self.connect_arduino)
+                        break
+            
         except Exception as e:
             logger.error(f"Quick refresh error: {e}")
             QMessageBox.warning(self, "Error", f"Could not refresh ports: {e}")
+    
+    def _silent_scan_for_startup(self, ports: List[str]):
+        """Perform silent port scanning for startup without showing progress dialog"""
+        try:
+            logger.info("Starting silent port scan for auto-connect...")
+            
+            # Create scanner thread
+            self.scanner_thread = PortScannerThread(ports)
+            
+            # Connect finished signal directly without progress dialog
+            self.scanner_thread.finished.connect(self._on_silent_scan_finished)
+            
+            # Start scanning
+            self.scanner_thread.start()
+            
+        except Exception as e:
+            logger.error(f"Silent scan error: {e}")
+            # Fall back to just updating with unknown ports
+            port_info = {port: "Unknown" for port in ports}
+            self._update_port_combos(port_info)
+    
+    def _on_silent_scan_finished(self, port_info: dict):
+        """Handle silent scan completion for startup"""
+        logger.info(f"Silent scan completed. Found: {port_info}")
+        
+        # Update cache with results
+        current_time = time.time()
+        for port, device_type in port_info.items():
+            if device_type not in ["Unknown"]:
+                self._device_cache[port] = DeviceInfo(port, device_type, current_time)
+        
+        # Save cache
+        self._save_device_cache()
+        
+        # Update UI
+        self._update_port_combos(port_info)
+        
+        # Auto-connect to first Arduino found
+        if self._auto_connect_enabled and not self._startup_scan_done and not self.arduino_connected:
+            self._startup_scan_done = True
+            
+            # Look for Arduino devices
+            arduino_ports = []
+            for port, device_type in port_info.items():
+                if device_type in ["SMT Arduino", "Offroad Arduino", "Arduino"]:
+                    arduino_ports.append((port, device_type))
+            
+            if arduino_ports:
+                # Connect to the first Arduino found
+                first_arduino = arduino_ports[0]
+                port, device_type = first_arduino
+                logger.info(f"Auto-connecting to {device_type} on {port} during startup")
+                
+                # Select the port in the combo box
+                for i in range(self.arduino_port_combo.count()):
+                    if self.arduino_port_combo.itemText(i).startswith(port + " ("):
+                        self.arduino_port_combo.setCurrentIndex(i)
+                        break
+                
+                # Trigger connection
+                QTimer.singleShot(100, self.connect_arduino)
+    
+    def set_auto_connect(self, enabled: bool):
+        """Enable or disable auto-connect feature"""
+        self._auto_connect_enabled = enabled
+        logger.info(f"Auto-connect {'enabled' if enabled else 'disabled'}")
+    
+    def reset_startup_scan(self):
+        """Reset startup scan flag to allow auto-connect again"""
+        self._startup_scan_done = False
+        logger.info("Startup scan flag reset")
 
     def full_refresh_ports(self):
         """Full refresh with background scanning"""
@@ -398,6 +524,31 @@ class ConnectionDialog(QDialog):
         # Update UI
         self._update_port_combos(port_info)
         logger.info(f"Full refresh completed. Found: {port_info}")
+        
+        # Auto-connect to first Arduino found during startup
+        if self._auto_connect_enabled and not self._startup_scan_done and not self.arduino_connected:
+            self._startup_scan_done = True
+            
+            # Look for Arduino devices in the scanned ports
+            arduino_ports = []
+            for port, device_type in port_info.items():
+                if device_type in ["SMT Arduino", "Offroad Arduino", "Arduino"]:
+                    arduino_ports.append((port, device_type))
+            
+            if arduino_ports:
+                # Connect to the first Arduino found
+                first_arduino = arduino_ports[0]
+                port, device_type = first_arduino
+                logger.info(f"Auto-connecting to {device_type} on {port} during startup")
+                
+                # Select the port in the combo box
+                for i in range(self.arduino_port_combo.count()):
+                    if self.arduino_port_combo.itemText(i).startswith(port + " ("):
+                        self.arduino_port_combo.setCurrentIndex(i)
+                        break
+                
+                # Trigger connection
+                QTimer.singleShot(100, self.connect_arduino)
 
     def _update_port_combos(self, port_info: dict):
         """Update combo boxes with port information"""
@@ -528,19 +679,15 @@ class ConnectionDialog(QDialog):
 
         logger.info(f"Attempting to connect to Arduino on port: {port}")
         try:
-            # Import the appropriate controller based on mode
+            # Use factory to create appropriate controller based on mode
             current_mode = self.parent().current_mode
             
-            if current_mode == "SMT":
-                from src.hardware.smt_arduino_controller import SMTArduinoController
-                # Create SMT Arduino instance if it doesn't exist
-                if not self.parent().arduino_controller:
-                    self.parent().arduino_controller = SMTArduinoController(baud_rate=115200)
-            else:
-                from src.hardware.arduino_controller import ArduinoController
-                # Create Arduino instance if it doesn't exist
-                if not self.parent().arduino_controller:
-                    self.parent().arduino_controller = ArduinoController(baud_rate=115200)
+            # Create Arduino instance if it doesn't exist
+            if not self.parent().arduino_controller:
+                from src.hardware.controller_factory import ArduinoControllerFactory
+                self.parent().arduino_controller = ArduinoControllerFactory.create_controller(
+                    current_mode, baud_rate=115200
+                )
             
             arduino = self.parent().arduino_controller
             
@@ -579,6 +726,15 @@ class ConnectionDialog(QDialog):
                     self.parent().arduino_controller = None
                     return
                 
+                # For SMT, reading thread should already be started by the controller during connect()
+                # Just verify it's running
+                if firmware_type == "SMT" and hasattr(arduino, 'is_reading'):
+                    if arduino.is_reading:
+                        logger.info("Arduino reading loop already running for SMT event handling")
+                    else:
+                        logger.warning("Arduino reading loop not running - starting now")
+                        arduino.start_reading()
+                
                 # Configure sensors based on current mode
                 from src.hardware.arduino_controller import SensorConfigurations
                 
@@ -610,23 +766,20 @@ class ConnectionDialog(QDialog):
                 except Exception as crc_error:
                     logger.warning(f"Could not enable CRC: {crc_error}")
                 
-                # Set up button callback for SMT mode (AFTER CRC setup)
+                # Set up button callback for SMT mode (reading thread already running)
                 if current_mode == "SMT" and hasattr(self.parent(), 'smt_handler'):
                     logger.info("Setting up physical button callback for SMT mode")
                     arduino.set_button_callback(self.parent().smt_handler.handle_button_event)
                     
-                    # Start the reading loop to process button events (AFTER CRC is configured)
-                    if not arduino.is_reading:
-                        logger.info("Starting Arduino reading loop for button events")
-                        arduino.start_reading()
-                    
-                    # Check initial button state in case it's already pressed
+                    # Check initial button state (reading thread is already handling events)
                     try:
                         initial_state = arduino.get_button_status()
                         if initial_state:
                             logger.info(f"Initial button state: {initial_state}")
-                            # Notify handler of initial state
-                            self.parent().smt_handler.handle_button_event(initial_state)
+                            # Only trigger test if button is currently pressed
+                            if initial_state == "PRESSED":
+                                logger.info("Button is pressed at startup - triggering initial test")
+                                self.parent().smt_handler.handle_button_event(initial_state)
                     except Exception as e:
                         logger.warning(f"Could not get initial button state: {e}")
                 
@@ -646,6 +799,10 @@ class ConnectionDialog(QDialog):
                 self.arduino_status_label.setStyleSheet("color: green; font-weight: bold;")
                 self.arduino_connect_btn.setText("Disconnect")
                 logger.info(f"Successfully connected to {firmware_type} Arduino on {port} with CRC={'enabled' if crc_enabled else 'disabled'}.")
+                
+                # Update main window connection status
+                if hasattr(self.parent(), 'connection_handler'):
+                    self.parent().connection_handler.update_connection_status()
             else:
                 logger.warning(f"Could not connect to Arduino on {port}.")
                 QMessageBox.warning(self, "Connection Failed", 

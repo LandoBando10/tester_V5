@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QApplication
 from PySide6.QtCore import Qt, QTimer, Signal, QThread, QUrl, QPropertyAnimation
-from PySide6.QtGui import QPixmap, QPainter, QBrush, QColor, QGuiApplication
+from PySide6.QtGui import QPixmap, QPainter, QBrush, QColor, QGuiApplication, QIcon
 from PySide6.QtMultimedia import QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from .transition_manager import transition_manager
@@ -60,6 +60,7 @@ class SplashScreen(QWidget):
         self.is_closing = False  # Prevent multiple close attempts
         self.video_ended = False  # Track if video has ended
         self.static_content_widget = None  # For seamless transition
+        self.setup_window_icon()  # Set icon before UI setup
         self.setup_ui()
         self.start_preloading()
         
@@ -68,6 +69,33 @@ class SplashScreen(QWidget):
         # Window flags for borderless window
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
         self.setAttribute(Qt.WA_TranslucentBackground, False)
+    
+    def setup_window_icon(self):
+        """Setup window icon for splash screen"""
+        try:
+            # Get the application instance
+            app = QApplication.instance()
+            if app:
+                # Try to load the icon from logo.jpg
+                logo_path = Path(__file__).parent.parent.parent.parent / "resources" / "logo.jpg"
+                
+                if logo_path.exists():
+                    pixmap = QPixmap(str(logo_path))
+                    if not pixmap.isNull():
+                        icon = QIcon(pixmap)
+                        self.setWindowIcon(icon)
+                        app.setWindowIcon(icon)
+                        
+                        # For Windows, set app ID
+                        if sys.platform == 'win32':
+                            try:
+                                import ctypes
+                                myappid = 'diodedynamics.tester.v5.production'
+                                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+                            except:
+                                pass
+        except Exception as e:
+            print(f"Could not set splash screen icon: {e}")
         
         # Set size to match mode selector
         self.setFixedSize(self.SPLASH_WIDTH, self.SPLASH_HEIGHT)

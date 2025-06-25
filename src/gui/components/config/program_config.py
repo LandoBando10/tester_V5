@@ -8,7 +8,6 @@ from PySide6.QtCore import Signal, Qt
 from PySide6.QtGui import QFont
 
 from typing import Dict, List, Any
-from pathlib import Path
 import logging
 
 logger = logging.getLogger(__name__)
@@ -947,24 +946,13 @@ class ProgrammingConfigurationDialog(QDialog):
         """Delete the programming configuration for the selected SKU"""
         if not self.current_sku:
             logger.warning("Delete SKU config called with no current SKU selected.")
-            # QMessageBox.warning(self, "Warning", "No SKU selected to delete.")
             return
-
-        # from PySide6.QtWidgets import QMessageBox # Moved for clarity if used more
-        # reply = QMessageBox.question(self, 'Confirm Delete',
-        #                              f"Are you sure you want to delete the programming configuration for {self.current_sku}?",
-        #                              QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-
-        # if reply == QMessageBox.No:
-        #     logger.info(f"Deletion cancelled for SKU: {self.current_sku}")
-        #     return
         
         try:
             logger.info(f"Attempting to delete programming configuration for SKU: {self.current_sku}")
             # Assume sku_manager has a method to delete programming config
             self.sku_manager.delete_programming_config(self.current_sku)
             logger.info(f"Programming configuration deleted for SKU: {self.current_sku}")
-            # QMessageBox.information(self, "Success", f"Configuration for {self.current_sku} deleted.")
             
             self.editor.load_config_data({}) # Clear editor
             self.editor.set_groups_enabled(False)
@@ -976,7 +964,6 @@ class ProgrammingConfigurationDialog(QDialog):
 
         except Exception as e:
             logger.error(f"Error deleting programming config for SKU {self.current_sku}: {e}", exc_info=True)
-            # QMessageBox.critical(self, "Error", f"Could not delete configuration for {self.current_sku}: {e}")
 
     def on_editor_data_changed(self):
         """Enable save button when editor data changes"""

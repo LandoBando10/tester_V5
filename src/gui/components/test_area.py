@@ -18,11 +18,12 @@ class TestAreaWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.logger = logging.getLogger(self.__class__.__name__)
-        self.current_mode = "Offroad"
+        self.current_mode = None  # Don't set default - wait for main window
         self.offroad_widget = None
         self.smt_widget = None
         self.weight_test_widget = None
         self.spec_counter_widget = None
+        self.config_widget = None
         self.setup_ui()
         
     def setup_ui(self):
@@ -34,8 +35,7 @@ class TestAreaWidget(QWidget):
         self.main_layout = QVBoxLayout(self)
         self.main_layout.setContentsMargins(5, 5, 5, 5)
         
-        # Initialize with default mode
-        self.set_mode("Offroad")
+        # Don't initialize with default mode - wait for main window to set it
         
     def _create_weight_widget(self):
         """Create weight widget on demand"""
@@ -72,6 +72,8 @@ class TestAreaWidget(QWidget):
                 self.weight_test_widget.resume_reading()
         elif mode == "SMT":
             self.setup_smt_testing_area()
+        elif mode == "Configuration":
+            self.setup_configuration_area()
         else:  # Offroad mode
             self.setup_offroad_testing_area()
             
@@ -132,7 +134,22 @@ class TestAreaWidget(QWidget):
         except ImportError as e:
             self.logger.error(f"Weight test widget not available: {e}")
             self._show_error_placeholder("Weight Testing Mode\n(Weight widget not implemented)")
+    
+    def setup_configuration_area(self):
+        """Setup configuration widget"""
+        try:
+            if not self.config_widget:
+                from src.gui.components.config_widget import ConfigWidget
+                self.config_widget = ConfigWidget()
+                self.logger.debug("Created new ConfigWidget")
             
+            self.main_layout.addWidget(self.config_widget)
+            self.logger.info("Configuration area setup complete")
+            
+        except ImportError as e:
+            self.logger.error(f"Failed to import ConfigWidget: {e}")
+            self._show_error_placeholder("Configuration widget not available")
+    
     def _show_error_placeholder(self, message: str):
         """Show error placeholder when widget is not available"""
         placeholder = QLabel(message)
@@ -226,6 +243,11 @@ class TestAreaWidget(QWidget):
         """End pressure test - delegates to offroad widget"""
         if self.current_mode == "Offroad" and self.offroad_widget:
             self.offroad_widget.end_pressure_test()
+    
+    def set_current_sku(self, sku: str):
+        """Update the current SKU for configuration widget"""
+        if self.config_widget:
+            self.config_widget.set_sku(sku)
         
     def set_sku(self, sku: str):
         """Set SKU for weight testing widget"""
