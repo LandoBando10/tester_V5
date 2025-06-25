@@ -5,11 +5,9 @@ Removes old log files and test results to save disk space
 """
 
 import os
-import sys
 import time
 import argparse
 from pathlib import Path
-from datetime import datetime, timedelta
 
 
 def get_file_age_days(file_path):

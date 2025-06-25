@@ -4,11 +4,10 @@ Desktop-friendly authentication without web complexity
 """
 
 import json
-import hashlib
 import logging
 from pathlib import Path
 from datetime import datetime
-from typing import Optional, Dict, List
+from typing import Optional, Dict
 import bcrypt
 
 

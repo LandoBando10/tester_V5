@@ -3,11 +3,9 @@ import os
 import time
 from datetime import datetime
 from collections import deque
-from typing import Optional, Dict, Any
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGroupBox,
-    QSplitter, QTableWidget, QTableWidgetItem, QHeaderView,
-    QTextEdit
+    QWidget, QVBoxLayout, QLabel, QSplitter, QTableWidget,
+    QTableWidgetItem, QHeaderView, QTextEdit
 )
 from PySide6.QtCore import Signal, Qt
 from PySide6.QtGui import QColor
@@ -509,4 +507,3 @@ class OffroadWidget(QWidget):
         
     def cleanup(self):
         """Cleanup the widget"""
-        pass

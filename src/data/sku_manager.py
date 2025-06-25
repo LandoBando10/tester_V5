@@ -4,7 +4,6 @@ Loads SKUs from config/skus/ directory
 """
 
 import json
-import os
 import threading
 import logging
 from typing import Dict, List, Optional, Any

@@ -1,6 +1,6 @@
 # gui/handlers/weight_handler.py
 import logging
-from typing import Dict, Optional, Any
+from typing import Dict, Any
 from PySide6.QtWidgets import QMessageBox
 from PySide6.QtCore import QObject
 

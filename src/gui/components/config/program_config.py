@@ -4,10 +4,10 @@ from PySide6.QtWidgets import (
     QComboBox, QCheckBox, QTextEdit, QLabel, QGroupBox, QFrame,
     QListWidget, QListWidgetItem, QPushButton, QFileDialog, QScrollArea, QDialog
 )
-from PySide6.QtCore import Signal, Qt
+from PySide6.QtCore import Signal
 from PySide6.QtGui import QFont
 
-from typing import Dict, List, Any
+from typing import Dict, Any
 import logging
 
 logger = logging.getLogger(__name__)

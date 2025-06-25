@@ -6,8 +6,8 @@ from collections import deque
 from enum import Enum
 from dataclasses import dataclass
 
-from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGroupBox,
-                               QPushButton, QTextEdit, QProgressBar)
+from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTextEdit,
+                               QProgressBar)
 from PySide6.QtCore import Signal, Qt, QTimer
 from PySide6.QtGui import QFont
 

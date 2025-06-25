@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QApplication
 from PySide6.QtCore import Qt, QTimer, Signal, QThread, QUrl, QPropertyAnimation
-from PySide6.QtGui import QPixmap, QPainter, QBrush, QColor, QGuiApplication, QIcon
+from PySide6.QtGui import QPixmap, QGuiApplication, QIcon
 from PySide6.QtMultimedia import QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from .transition_manager import transition_manager
@@ -25,8 +25,6 @@ class PreloaderThread(QThread):
         try:
             # Import heavy modules to warm up the import cache
             print("Preloading imports...")
-            from src.gui.main_window import MainWindow
-            from src.data.sku_manager import create_sku_manager
             
             # DO NOT create MainWindow instance here!
             # Just importing saves time
@@ -315,7 +313,6 @@ class SplashScreen(QWidget):
     def on_position_changed(self, position):
         """Handle video position changes for optimization"""
         # Ensure minimum splash duration even if video is short
-        pass
     
     def get_preloaded_window(self):
         """Get the preloaded MainWindow instance"""

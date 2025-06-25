@@ -1,7 +1,5 @@
 # gui/handlers/test_handler.py
 import logging
-import json
-from pathlib import Path
 from typing import Dict, List, Optional, Any
 from PySide6.QtWidgets import QMessageBox
 from PySide6.QtCore import QObject

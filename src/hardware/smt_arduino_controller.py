@@ -107,14 +107,29 @@ class SMTArduinoController:
         
         if self.connection and self.connection.is_open:
             try:
-                self.all_relays_off()
+                # Try to turn off relays, but don't fail if it doesn't work
+                try:
+                    self.all_relays_off()
+                except:
+                    pass
+                
+                # Force close the connection
                 self.connection.close()
+                time.sleep(0.1)  # Give OS time to release the port
                 self.logger.info("Disconnected from Arduino")
             except Exception as e:
                 self.logger.error(f"Error during disconnect: {e}")
+                # Force connection to None even if close failed
         
         self.connection = None
         self.port = None
+        
+        # Clear response queue
+        while not self._response_queue.empty():
+            try:
+                self._response_queue.get_nowait()
+            except:
+                break
 
     def is_connected(self) -> bool:
         """Check if Arduino is connected"""
@@ -498,13 +513,11 @@ class SMTArduinoController:
         # to route command responses to the queue. Button events during tests are harmless
         # as they'll be ignored if a test is already running.
         self.logger.debug("pause_reading_for_test called - keeping thread active")
-        pass
     
     def resume_reading_after_test(self):
         """Compatibility method - reading thread should already be active"""
         # Thread should never be stopped, so nothing to resume
         self.logger.debug("resume_reading_after_test called - thread already active")
-        pass
     
     @property
     def serial(self):
@@ -515,7 +528,7 @@ class SMTArduinoController:
             
             def flush_buffers(self):
                 self.controller._flush_buffers()
-        
+        # Enable parameter removed - not used in implementation
         return SerialWrapper(self)
     
     def get_board_info(self) -> Optional[str]:

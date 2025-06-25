@@ -12,7 +12,6 @@ from typing import List, Optional, Set
 
 class SecurityValidationError(Exception):
     """Raised when input validation fails for security reasons"""
-    pass
 
 
 class InputValidator:

@@ -107,7 +107,7 @@ def run_professional_gui_mode(args=None):
 
     try:
         from PySide6.QtWidgets import QApplication
-        from PySide6.QtCore import QTimer, QPropertyAnimation, Qt
+        from PySide6.QtCore import Qt
         from src.gui.startup import SplashScreen, ModeSelectionDialog
         from src.gui.main_window import MainWindow
         from src.gui.startup.transition_manager import transition_manager
@@ -343,7 +343,6 @@ def run_smt_test(sku: str, port: str, programming_enabled: bool = True):
     try:
         from src.core.smt_test import SMTTest
         from src.data.sku_manager import load_test_parameters
-        import json
         
         logger.info(f"Starting SMT test for SKU: {sku}")
         

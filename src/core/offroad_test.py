@@ -1,10 +1,9 @@
 import time
 import logging
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List
 from .base_test import BaseTest, TestResult
 from src.hardware.offroad_arduino_controller import OffroadArduinoController
 from src.hardware.arduino_controller import SensorConfigurations, TestResult as ArduinoTestResult, RGBWSample
-from config.settings import SENSOR_TIMINGS, TEST_SENSOR_CONFIGS
 import json
 
 

@@ -9,12 +9,10 @@ from PySide6.QtWidgets import (
     QDialogButtonBox, QMessageBox
 )
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QFont
 import json
 from datetime import datetime
 from pathlib import Path
-import hashlib
-from typing import Dict, Optional, Tuple
+from typing import Dict, Tuple
 
 
 class LoginDialog(QDialog):

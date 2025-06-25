@@ -1,8 +1,7 @@
 # gui/components/test_area.py
 import logging
-from typing import Optional
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel
-from PySide6.QtCore import Signal, Qt, QTimer
+from PySide6.QtCore import Signal, Qt
 from PySide6.QtGui import QFont
 
 from src.core.base_test import TestResult

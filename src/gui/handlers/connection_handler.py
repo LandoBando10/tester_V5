@@ -1,6 +1,5 @@
 # gui/handlers/connection_handler.py
 import logging
-from typing import Dict, Any
 from PySide6.QtCore import QObject
 
 from src.utils.thread_cleanup import ThreadCleanupMixin
@@ -19,7 +18,6 @@ class ConnectionHandler(QObject, ThreadCleanupMixin):
         """Setup signal connections for connection management"""
         self.logger.debug("Setting up connections for ConnectionHandler.")
         # This could be expanded to handle automatic connection status updates
-        pass
     
     def update_connection_status(self):
         """Update the connection status display across all UI components"""

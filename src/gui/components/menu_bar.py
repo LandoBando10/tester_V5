@@ -2,7 +2,7 @@
 import logging
 from PySide6.QtWidgets import QMenuBar, QMenu, QMessageBox, QDialog
 from PySide6.QtGui import QAction
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import Signal
 import subprocess
 import sys
 from pathlib import Path
@@ -83,7 +83,7 @@ class TestMenuBar(QMenuBar):
                 action.setCheckable(True)
                 if mode == "Offroad": # Default mode
                     action.setChecked(True)
-                action.triggered.connect(lambda checked, m=mode: self.set_mode(m))
+                action.triggered.connect(lambda _, m=mode: self._on_mode_action_triggered(m))
                 menu.addAction(action)
                 self.mode_actions[mode] = action
             logger.info("Modes menu setup complete.") # Added
@@ -237,8 +237,15 @@ class TestMenuBar(QMenuBar):
             logger.error("Failed to set up SPC menu: %s", e, exc_info=True)
             menu.addAction(QAction("Error loading SPC items", self, enabled=False))
     
+    def _on_mode_action_triggered(self, mode: str):
+        """Handle mode action triggered from menu"""
+        logger.info(f"Mode action triggered: {mode}")
+        self.set_mode(mode)
+        # Emit the mode_changed signal to actually change the mode
+        self.mode_changed.emit(mode)
+    
     def set_mode(self, mode: str):
-        """Set the current mode and update menu"""
+        """Set the current mode and update menu (without emitting signal)"""
         logger.info(f"Setting mode to: {mode}") # Added
         try: # Added
             # Update mode actions without triggering signals

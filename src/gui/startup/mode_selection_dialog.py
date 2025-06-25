@@ -2,16 +2,16 @@
 Clean and professional mode selection dialog
 """
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton, 
-                              QLabel, QWidget, QGraphicsDropShadowEffect)
+                              QLabel, QGraphicsDropShadowEffect)
 from PySide6.QtCore import Qt, Signal, QPropertyAnimation, QRect, QEasingCurve, QPoint
-from PySide6.QtGui import QFont, QIcon, QColor, QGuiApplication, QPixmap
+from PySide6.QtGui import QIcon, QColor, QGuiApplication, QPixmap
 
 
 class ModeButton(QPushButton):
     """Stylized button for mode selection"""
     
-    def __init__(self, title: str, description: str, icon_name: str = None):
-        super().__init__()
+    def __init__(self, title: str, description: str, parent=None):
+        super().__init__(parent)
         self.title = title
         self.description = description
         

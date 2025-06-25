@@ -1,7 +1,7 @@
 # gui/components/top_controls.py
 from typing import List
 from PySide6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QComboBox, 
-                               QLabel, QCheckBox, QApplication)
+                               QLabel, QCheckBox)
 from PySide6.QtCore import Signal, Qt, QEvent
 from PySide6.QtGui import QFont
 import logging
@@ -243,11 +243,9 @@ class TopControlsWidget(QWidget):
     
     def on_sku_index_changed(self, index):
         """Handle index changes"""
-        pass
     
     def on_sku_text_changed(self, text):
         """Handle text changes"""
-        pass
     
     def update_programming_checkbox(self, programming_enabled: bool):
         """Update programming checkbox state based on SKU configuration
@@ -268,19 +266,18 @@ class TopControlsWidget(QWidget):
     
     def on_sku_highlighted(self, index):
         """Handle highlighting"""
-        pass
     
     def eventFilter(self, obj, event):
         """Event filter for debugging combo box behavior"""
-        event_types_to_log = [
-            QEvent.MouseButtonPress,
-            QEvent.MouseButtonRelease,
-            QEvent.FocusIn,
-            QEvent.FocusOut,
-            QEvent.Show,
-            QEvent.Hide,
-            QEvent.Close
-        ]
+        # Event types for debugging (commented out as unused)
+        # event_types_to_log = [
+        #     QEvent.MouseButtonRelease,
+        #     QEvent.FocusIn,
+        #     QEvent.FocusOut,
+        #     QEvent.Show,
+        #     QEvent.Hide,
+        #     QEvent.Close
+        # ]
         
         if obj == self.sku_combo or obj == self.sku_combo.view():
             pass

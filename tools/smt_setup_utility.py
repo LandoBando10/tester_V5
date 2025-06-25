@@ -13,11 +13,10 @@ It provides functions to:
 
 import json
 import logging
-import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict
 
 # Add project root to path
 project_root = Path(__file__).parent.parent
@@ -29,7 +28,6 @@ SMTArduinoController = None
 SerialManager = None
 
 try:
-    from src.hardware.serial_manager import SerialManager
     from src.core.smt_test import ProgrammerController, SMTArduinoController
 except ImportError as e:
     print(f"Warning: Could not import some modules: {e}")
@@ -834,7 +832,7 @@ def main():
                     print(f"    {name}: {'✅' if status else '❌'}")
 
             elif choice == '8':
-                template_file = "smt_config_template.json"
+                    # template_file variable removed - not used
                 utility.create_enhanced_config()
                 print(f"\n📋 Configuration template exported as {utility.programming_config_file}")
 

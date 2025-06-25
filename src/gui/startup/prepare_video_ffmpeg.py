@@ -2,12 +2,10 @@
 Alternative video preparation script using ffmpeg directly
 More reliable than moviepy for simple operations
 """
-import os
 import sys
 import subprocess
 from pathlib import Path
 import tempfile
-import shutil
 
 
 def check_ffmpeg():

@@ -57,17 +57,14 @@ class BaseTest(ABC):
     @abstractmethod
     def setup_hardware(self) -> bool:
         """Initialize hardware connections. Returns True if successful."""
-        pass
 
     @abstractmethod
     def run_test_sequence(self) -> TestResult:
         """Execute the test sequence. Returns TestResult object."""
-        pass
 
     @abstractmethod
     def cleanup_hardware(self):
         """Clean up hardware connections"""
-        pass
 
     def execute(self) -> TestResult:
         """Main test execution method"""

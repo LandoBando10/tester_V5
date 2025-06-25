@@ -1,9 +1,9 @@
 # gui/components/config/parameter_editor.py
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QLineEdit, 
-    QDoubleSpinBox, QSpinBox, QLabel, QGroupBox, QFrame, QScrollArea, QTabWidget
+    QWidget, QVBoxLayout, QFormLayout, QLineEdit, QDoubleSpinBox, 
+    QSpinBox, QLabel, QGroupBox, QScrollArea, QTabWidget
 )
-from PySide6.QtCore import Signal, Qt
+from PySide6.QtCore import Signal
 from PySide6.QtGui import QFont
 
 from typing import Dict, Any

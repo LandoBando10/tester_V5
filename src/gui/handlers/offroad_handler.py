@@ -1,6 +1,6 @@
 # gui/handlers/offroad_handler.py
 import logging
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Any
 from PySide6.QtWidgets import QMessageBox
 from PySide6.QtCore import QObject
 

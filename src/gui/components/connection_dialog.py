@@ -1,5 +1,5 @@
 # gui/components/connection_dialog.py
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, Optional, List
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QGroupBox, 
                                QGridLayout, QLabel, QComboBox, QPushButton, 
                                QDialogButtonBox, QMessageBox, QProgressDialog)

@@ -1,8 +1,5 @@
-import time
-import json
 import logging
-import threading
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional
 from pathlib import Path
 from src.core.base_test import BaseTest, TestResult
 from src.core.programmer_controller import ProgrammerController

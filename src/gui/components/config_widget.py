@@ -3,13 +3,12 @@ import json
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Optional, Any
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTabWidget, QPushButton,
-    QMessageBox, QFileDialog, QSplitter, QLabel, QFrame, QGroupBox
+    QMessageBox, QFileDialog, QLabel, QGroupBox
 )
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Signal
 from PySide6.QtGui import QFont
 
 from .config.sku_editor import SKUEditor

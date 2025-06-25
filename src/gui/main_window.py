@@ -3,17 +3,15 @@ import sys
 import logging
 from typing import Optional
 from PySide6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QWidget, QStatusBar, QLabel, QPushButton, QDialog, QMessageBox
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QTimer
 from PySide6.QtGui import QFont
 
 # Import our modules
 from src.data.sku_manager import create_sku_manager
-from src.gui.components.config_loading_dialog import ConfigLoadingDialog, MinimalProgressDialog
 from src.gui.components.menu_bar import TestMenuBar
 from src.gui.components.top_controls import TopControlsWidget
 from src.gui.components.test_area import TestAreaWidget
 from src.gui.components.connection_dialog import ConnectionDialog
-from src.gui.components.header_bar import HeaderBar, get_window_icon
 from src.gui.components.voltage_monitor import VoltageMonitorWidget
 from src.gui.workers.test_worker import TestWorker
 from src.gui.handlers.offroad_handler import OffroadHandler
@@ -410,12 +408,10 @@ class MainWindow(QMainWindow):
     def start_config_loading(self):
         """Start configuration loading - unified manager loads immediately"""
         # No need to call setup_sku_manager again since it's already called in __init__
-        pass
     
     def show_progress_dialog_if_still_loading(self):
         """Legacy method - no longer needed with unified manager"""
         # Unified manager loads immediately, no progress dialog needed
-        pass
     
     def fallback_to_sync_loading(self):
         """Fallback loading - unified manager handles this automatically"""

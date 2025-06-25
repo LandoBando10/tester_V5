@@ -1,6 +1,6 @@
-from PySide6.QtCore import QObject, Signal, QPropertyAnimation, QTimer, QEasingCurve, QParallelAnimationGroup
-from PySide6.QtWidgets import QWidget, QGraphicsOpacityEffect
-from PySide6.QtGui import QPixmap, QPainter
+from PySide6.QtCore import QObject, Signal, QPropertyAnimation, QEasingCurve, QParallelAnimationGroup
+from PySide6.QtWidgets import QWidget
+from PySide6.QtGui import QPixmap
 from typing import Optional, Callable
 
 

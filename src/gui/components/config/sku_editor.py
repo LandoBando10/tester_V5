@@ -1,9 +1,9 @@
 # gui/components/config/sku_editor.py
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QLineEdit, 
-    QComboBox, QTextEdit, QLabel, QGroupBox, QFrame
+    QWidget, QVBoxLayout, QFormLayout, QLineEdit, QComboBox, 
+    QTextEdit, QLabel, QGroupBox, QFrame
 )
-from PySide6.QtCore import Signal, Qt
+from PySide6.QtCore import Signal
 from PySide6.QtGui import QFont
 
 from typing import Dict, Any

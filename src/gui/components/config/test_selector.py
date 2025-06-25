@@ -1,12 +1,12 @@
 # gui/components/config/test_selector.py
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QCheckBox, 
-    QLabel, QFrame, QScrollArea, QGridLayout, QPushButton
+    QWidget, QVBoxLayout, QGroupBox, QCheckBox, QLabel, 
+    QFrame, QScrollArea
 )
 from PySide6.QtCore import Signal, Qt
 from PySide6.QtGui import QFont
 
-from typing import Dict, List, Any
+from typing import Dict, Any
 
 
 class TestSelector(QWidget):

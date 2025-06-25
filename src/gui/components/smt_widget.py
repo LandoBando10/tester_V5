@@ -20,7 +20,7 @@ Fixes & updates
 * **Documentation & comments** kept pure ASCII to avoid stray Unicode.
 """
 
-from typing import Dict, Optional, Tuple, List, Any
+from typing import Dict, Optional, Tuple, List
 
 from PySide6.QtWidgets import (
     QWidget,

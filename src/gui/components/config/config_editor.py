@@ -3,15 +3,14 @@ import json
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Any
 
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTabWidget, QWidget, QPushButton,
     QMessageBox, QFileDialog, QSplitter, QListWidget, QListWidgetItem,
-    QStackedWidget, QLabel, QFrame
+    QLabel
 )
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QFont, QIcon
+from PySide6.QtGui import QFont
 
 from .sku_editor import SKUEditor
 from .test_selector import TestSelector

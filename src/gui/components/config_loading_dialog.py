@@ -8,10 +8,9 @@ from PySide6.QtWidgets import (
     QPushButton, QTextEdit, QFrame
 )
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QFont, QPixmap, QMovie
+from PySide6.QtGui import QFont
 import logging
 import time
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
