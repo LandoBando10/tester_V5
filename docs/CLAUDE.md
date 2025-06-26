@@ -29,40 +29,22 @@
 - Hardware testing script for real Arduino validation
 - Files: `test_phase1_verification.py`, `test_phase1_hardware_benchmark.py`
 
-### ✅ Phase 2.1 - CRC-16 Implementation (COMPLETED)
-- Created CRC-16 module with CCITT polynomial (0x1021)
-- Integrated CRC validation into SerialManager for message integrity
-- Updated SMT Arduino firmware to v5.1.0 with CRC-16 support
-- Updated Offroad Arduino firmware to v4.1.0 with CRC-16 support  
-- Added firmware version detection and CRC capability negotiation
-- Implemented retry mechanism with exponential backoff for CRC failures
-- Created comprehensive CRC test suite with performance benchmarks
-- Files: `src/utils/crc16.py`, `test_phase2_crc_verification.py`
+### ✅ Phase 2.1 - CRC-16 Implementation (DEPRECATED AND REMOVED)
+- Originally planned for data integrity verification
+- Determined to be unnecessary for reliable USB serial communication
+- All CRC-related code has been removed from the codebase
 
-### ✅ Phase 3 - Binary Framing Protocol (COMPLETED)
-- Implemented binary framing protocol with STX/ETX markers
-- Created frame encoder with escape sequence handling for special characters
-- Implemented state machine parser with timeout recovery
-- Added CRC-16 validation for frame integrity
-- Updated SMT Arduino firmware to v5.2.0 with framing support
-- Updated Offroad Arduino firmware to v4.2.0 with basic framing support
-- Integrated framing protocol into SerialManager
-- Added framing capabilities to SMT Arduino controller
-- Created comprehensive Phase 3 verification test suite
-- Files: `test_phase3_verification.py` (deprecated)
+### ✅ Phase 3 - Binary Framing Protocol (DEPRECATED AND REMOVED)
+- Originally planned for structured message passing
+- Determined to be overly complex for the application needs
+- Simple text-based communication proved sufficient
+- All binary framing code has been removed from the codebase
 
-### ✅ Phase 4.4 - Binary Protocol Implementation (COMPLETED)
-- Designed comprehensive binary message schemas for all command types
-- Implemented efficient binary message serialization with custom format optimized for Arduino
-- Created binary message encoder/decoder classes with CRC-16 validation
-- Developed full binary protocol implementation with async communication support
-- Updated Arduino firmware to v5.3.0 with complete binary protocol support
-- Added automatic protocol detection (text, framed, binary) in Arduino firmware
-- Memory optimized implementation for UNO R4 WiFi constraints (32KB SRAM, 256KB Flash)
-- Comprehensive binary message format verification test suite
-- Performance benchmarking showing 38.5% bandwidth savings for group operations
-- Excellent memory efficiency (under 100KB for 1000 messages)
-- Files: `Arduino_firmware/SMT_Board_Tester_Binary_v5.3.0.ino` (deprecated)
+### ✅ Phase 4.4 - Binary Protocol Implementation (DEPRECATED AND REMOVED)
+- Originally planned for bandwidth optimization
+- Performance testing showed minimal benefit over text protocol
+- Added unnecessary complexity to firmware and Python code
+- All binary protocol code has been removed from the codebase
 
 ### Testing Commands
 ```bash
@@ -84,23 +66,11 @@ python test_phase1_verification.py
 # Phase 1 hardware benchmark (requires Arduino)
 python test_phase1_hardware_benchmark.py
 
-# Phase 2.1 CRC verification tests (unit tests with mocks)
-python test_phase2_crc_verification.py
+# Note: CRC tests have been removed as this feature is deprecated
 
-# Phase 3 binary framing verification tests (unit tests with mocks)
-python test_phase3_verification.py
+# Note: Binary framing tests have been removed as this feature is deprecated
 
-# Phase 3 basic framing test (simple integration test)
-python test_phase3_basic.py
-
-# Phase 4.4 binary protocol verification tests (unit tests with mocks)
-python test_phase4_4_verification.py
-
-# Phase 4.4 basic functionality test (simple verification)
-python test_phase4_4_basic.py
-
-# Phase 4.4 performance benchmark (binary vs text protocol)
-python test_phase4_4_performance_benchmark.py
+# Note: Binary protocol tests have been removed as this feature is deprecated
 
 # Phase 4.4 simple benchmark (no dependencies)
 python test_phase4_4_simple_benchmark.py

@@ -142,7 +142,6 @@ class ConnectionDialog(QDialog):
         self.scale_connected = False
         self.arduino_port = None
         self.scale_port = None
-        self.arduino_crc_enabled = False
         
         # Port scanner thread
         self.scanner_thread = None
@@ -752,20 +751,6 @@ class ConnectionDialog(QDialog):
                 arduino._sensors_configured = True
                 logger.info(f"Sensors configured for {current_mode} mode")
                 
-                # Enable CRC-16 validation if supported (BEFORE starting reading loop)
-                crc_enabled = False
-                try:
-                    # Check if this is SMT Arduino controller with CRC support
-                    if hasattr(arduino, 'enable_crc_validation'):
-                        logger.info("Attempting to enable CRC-16 validation...")
-                        crc_enabled = arduino.enable_crc_validation(True)
-                        if crc_enabled:
-                            logger.info("CRC-16 validation enabled successfully")
-                        else:
-                            logger.info("CRC-16 not supported by firmware - continuing without it")
-                except Exception as crc_error:
-                    logger.warning(f"Could not enable CRC: {crc_error}")
-                
                 # Set up button callback for SMT mode (reading thread already running)
                 if current_mode == "SMT" and hasattr(self.parent(), 'smt_handler'):
                     logger.info("Setting up physical button callback for SMT mode")
@@ -786,19 +771,16 @@ class ConnectionDialog(QDialog):
                 # Connection successful!
                 self.arduino_connected = True
                 self.arduino_port = port
-                self.arduino_crc_enabled = crc_enabled  # Store CRC status
                 
                 # Update voltage monitor with Arduino controller if in SMT mode
                 if current_mode == "SMT" and hasattr(self.parent(), 'voltage_monitor'):
                     logger.info("Setting Arduino controller on voltage monitor")
                     self.parent().voltage_monitor.set_arduino_controller(arduino)
                 
-                # Update status label to show CRC status
-                crc_status = " [CRC ON]" if crc_enabled else ""
-                self.arduino_status_label.setText(f"Status: Connected ({port}) - {firmware_type}{crc_status}")
+                self.arduino_status_label.setText(f"Status: Connected ({port}) - {firmware_type}")
                 self.arduino_status_label.setStyleSheet("color: green; font-weight: bold;")
                 self.arduino_connect_btn.setText("Disconnect")
-                logger.info(f"Successfully connected to {firmware_type} Arduino on {port} with CRC={'enabled' if crc_enabled else 'disabled'}.")
+                logger.info(f"Successfully connected to {firmware_type} Arduino on {port}.")
                 
                 # Update main window connection status
                 if hasattr(self.parent(), 'connection_handler'):
@@ -838,7 +820,6 @@ class ConnectionDialog(QDialog):
         
         self.arduino_connected = False
         self.arduino_port = None
-        self.arduino_crc_enabled = False
         self.arduino_status_label.setText("Status: Disconnected")
         self.arduino_status_label.setStyleSheet("color: red; font-weight: bold;")
         self.arduino_connect_btn.setText("Connect")
@@ -1070,7 +1051,6 @@ class ConnectionDialog(QDialog):
         status = {
             'arduino_connected': self.arduino_connected,
             'arduino_port': self.arduino_port,
-            'arduino_crc_enabled': self.arduino_crc_enabled,
             'scale_connected': self.scale_connected,
             'scale_port': self.scale_port
         }

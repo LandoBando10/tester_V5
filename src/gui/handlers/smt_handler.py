@@ -77,15 +77,6 @@ class SMTHandler(QObject, ThreadCleanupMixin):
                     arduino._flush_buffers()
                 else:
                     self.logger.warning("Arduino controller does not have _flush_buffers method")
-                
-                # Log current CRC status for verification
-                if hasattr(arduino, 'is_crc_enabled'):
-                    crc_status = arduino.is_crc_enabled()
-                    self.logger.info(f"CRC validation status: {'enabled' if crc_status else 'disabled'}")
-                    
-                    # Update main window CRC status if method exists
-                    if hasattr(self.main_window, 'update_crc_status'):
-                        self.main_window.update_crc_status(crc_status)
             # Validation
             if not sku or sku == "-- Select SKU --":
                 self.logger.warning("SKU not selected.")

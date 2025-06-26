@@ -1,6 +1,6 @@
 /* ======================================================================
- * TesterV4_Offroad with Binary Framing Support (Phase 3)
- * Version 4.2.0 - Added binary framing protocol with STX/ETX markers
+ * TesterV4_Offroad
+ * Version 4.2.0
  * =====================================================================*/
 #include <Wire.h>
 #include <avr/pgmspace.h>
@@ -12,7 +12,7 @@
 
 /* ------------------------- Compile switches ---------------------------- */
 //#define DEBUG_MODE
-#define CRC_MODE
+//#define CRC_MODE
 
 /* ------------------------- Debug Macros -------------------------------- */
 #ifdef DEBUG_MODE
@@ -91,106 +91,6 @@ void sendLine(const String& s) {
 #else
   inline void sendLine(const String& s){ Serial.println(s); }
 #endif
-
-/* ---------- Binary Framing Protocol (Phase 3) ----------------------- */
-// Frame format: <STX>LLL:TYPE:PAYLOAD<ETX>CCCC
-constexpr uint8_t STX = 0x02;
-constexpr uint8_t ETX = 0x03;
-constexpr uint8_t ESC = 0x1B;
-constexpr uint16_t MAX_FRAME_SIZE = 512;
-constexpr uint16_t FRAME_TIMEOUT_MS = 5000;
-
-enum class FrameState {
-  IDLE,
-  LENGTH,
-  TYPE,
-  PAYLOAD,
-  CRC
-};
-
-struct FrameParser {
-  FrameState state = FrameState::IDLE;
-  String buffer = "";
-  uint16_t expectedLength = 0;
-  String frameType = "";
-  String framePayload = "";
-  uint32_t frameStartTime = 0;
-  
-  void reset() {
-    state = FrameState::IDLE;
-    buffer = "";
-    expectedLength = 0;
-    frameType = "";
-    framePayload = "";
-    frameStartTime = 0;
-  }
-  
-  bool isTimedOut() {
-    return (state != FrameState::IDLE) && 
-           (millis() - frameStartTime > FRAME_TIMEOUT_MS);
-  }
-};
-
-String encodeFrame(const String& type, const String& payload) {
-  if (type.length() != 3) {
-    return "";  // Invalid type length
-  }
-  
-  // Escape special characters in payload
-  String escapedPayload = "";
-  for (size_t i = 0; i < payload.length(); i++) {
-    char c = payload.charAt(i);
-    if (c == STX || c == ETX || c == ESC) {
-      escapedPayload += char(ESC);
-      escapedPayload += char(c ^ 0x20);  // XOR with 0x20 for escaping
-    } else {
-      escapedPayload += c;
-    }
-  }
-  
-  String content = type + ":" + escapedPayload;
-  if (content.length() > 999) {
-    return "";  // Content too large
-  }
-  
-  String lengthStr = String(content.length());
-  while (lengthStr.length() < 3) {
-    lengthStr = "0" + lengthStr;  // Zero-pad to 3 digits
-  }
-  
-  String frameContent = lengthStr + ":" + content;
-  uint16_t crc = crc16(frameContent.c_str(), frameContent.length());
-  
-  char crcStr[5];
-  sprintf(crcStr, "%04X", crc);
-  
-  String frame = "";
-  frame += char(STX);
-  frame += frameContent;
-  frame += char(ETX);
-  frame += String(crcStr);
-  
-  return frame;
-}
-
-String unescapePayload(const String& escapedPayload) {
-  String result = "";
-  bool escapeNext = false;
-  
-  for (size_t i = 0; i < escapedPayload.length(); i++) {
-    char c = escapedPayload.charAt(i);
-    if (escapeNext) {
-      result += char(c ^ 0x20);  // Unescape character
-      escapeNext = false;
-    } else if (c == ESC) {
-      escapeNext = true;
-    } else {
-      result += c;
-    }
-  }
-  
-  return result;
-}
 
 /* ----------------------------- Constants ------------------------------- */
 constexpr uint32_t SERIAL_BAUD = 115200;

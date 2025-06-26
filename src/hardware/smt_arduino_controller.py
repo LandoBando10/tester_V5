@@ -543,13 +543,6 @@ class SMTArduinoController:
         """Public wrapper for _send_command for compatibility"""
         return self._send_command(command, timeout)
     
-    def enable_crc_validation(self, enable: bool) -> bool:
-        """Enable/disable CRC validation - not supported in batch mode"""
-        # CRC was part of the complex individual command system
-        # Not needed for simple batch communication
-        self.logger.info("CRC validation not supported in batch-only mode")
-        return False
-    
     # Legacy method stubs for backward compatibility
     def measure_relay(self, relay_num: int):
         """DEPRECATED: Use test_panel() instead"""

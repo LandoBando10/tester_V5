@@ -300,8 +300,8 @@ src/
 The SMT system underwent a significant architectural simplification to improve maintainability and reliability:
 
 **Phase 1 (Complex)**: Over-engineered approach with:
-- Binary framing protocol with STX/ETX markers
-- CRC-16 validation for message integrity  
+- Binary framing protocol with STX/ETX markers (removed)
+- CRC-16 validation for message integrity (removed)
 - Complex threading and command queues
 - Resource management overhead
 - Health monitoring and statistics

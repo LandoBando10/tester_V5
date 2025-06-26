@@ -248,11 +248,6 @@ class MainWindow(QMainWindow):
         """Setup the status bar"""
         self.setStatusBar(QStatusBar())
         
-        # Add CRC status label as a permanent widget
-        self.crc_status_label = QLabel("CRC: OFF")
-        self.crc_status_label.setStyleSheet("color: #999999; font-weight: bold; margin-right: 10px;")
-        self.statusBar().addPermanentWidget(self.crc_status_label)
-        
         self.statusBar().showMessage("Ready")
         self.statusBar().setStyleSheet("""
             QStatusBar {
@@ -669,17 +664,6 @@ class MainWindow(QMainWindow):
         # Update main window display
         self.connection_handler.update_connection_status()
         
-        # Update CRC status if Arduino is connected in SMT mode
-        if (self.current_mode == "SMT" and 
-            hasattr(self, 'arduino_controller') and 
-            self.arduino_controller and 
-            hasattr(self.arduino_controller, 'is_crc_enabled')):
-            try:
-                crc_enabled = self.arduino_controller.is_crc_enabled()
-                self.update_crc_status(crc_enabled)
-            except:
-                pass
-        
         # Propagate to weight test widget if in weight checking mode
         if self.current_mode == "WeightChecking":
             # Get scale connection info from connection dialog
@@ -923,17 +907,6 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.logger.error(f"Error during shutdown: {e}")
             event.accept()
-    
-    
-    def update_crc_status(self, enabled: bool):
-        """Update CRC status display in status bar"""
-        if hasattr(self, 'crc_status_label'):
-            if enabled:
-                self.crc_status_label.setText("CRC: ON")
-                self.crc_status_label.setStyleSheet("color: #51cf66; font-weight: bold; margin-right: 10px;")
-            else:
-                self.crc_status_label.setText("CRC: OFF")
-                self.crc_status_label.setStyleSheet("color: #999999; font-weight: bold; margin-right: 10px;")
     
     def on_config_load_progress(self, message: str, percentage: int):
         """Handle configuration loading progress"""
