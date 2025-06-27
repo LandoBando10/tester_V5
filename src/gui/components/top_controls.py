@@ -2,6 +2,7 @@
 from typing import List
 from PySide6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QComboBox, 
                                QLabel, QCheckBox)
+from .searchable_combo import SearchableComboBox
 from PySide6.QtCore import Signal, Qt, QEvent
 from PySide6.QtGui import QFont
 import logging
@@ -54,7 +55,7 @@ class TopControlsWidget(QWidget):
         sku_label.setStyleSheet("color: white; margin: 0px;")
         sku_layout.addWidget(sku_label)
         
-        self.sku_combo = QComboBox()
+        self.sku_combo = SearchableComboBox()
         self.sku_combo.setMinimumHeight(25)
         self.sku_combo.setMinimumWidth(150)
         self.sku_combo.setMaximumWidth(300)
@@ -62,11 +63,7 @@ class TopControlsWidget(QWidget):
         
         # Configure combo box
         self.sku_combo.setMaxVisibleItems(10)
-        self.sku_combo.setEditable(False)
         self.sku_combo.setFocusPolicy(Qt.StrongFocus)
-        
-        # Set the combo box to NOT keep the popup open after selection
-        self.sku_combo.setInsertPolicy(QComboBox.NoInsert)
         
         # Don't modify the popup window flags - let QComboBox handle it internally
         # This was causing the popup to stay open after selection
@@ -78,14 +75,8 @@ class TopControlsWidget(QWidget):
         # Apply minimal styling to avoid popup conflicts
         self.apply_simple_combo_style()
         
-        # Connect all relevant signals
-        self.sku_combo.activated.connect(self.on_sku_activated)
-        self.sku_combo.currentIndexChanged.connect(self.on_sku_index_changed)
-        self.sku_combo.currentTextChanged.connect(self.on_sku_text_changed)
-        self.sku_combo.highlighted.connect(self.on_sku_highlighted)
-        
-        # Also connect the final signal
-        self.sku_combo.currentTextChanged.connect(self.sku_changed.emit)
+        # Connect signals
+        self.sku_combo.item_selected.connect(self.sku_changed.emit)
         
         sku_layout.addWidget(self.sku_combo)
         
@@ -117,7 +108,7 @@ class TopControlsWidget(QWidget):
     def apply_simple_combo_style(self):
         """Apply minimal styling that doesn't interfere with popup behavior"""
         self.sku_combo.setStyleSheet("""
-            QComboBox {
+            SearchableComboBox, QComboBox {
                 background-color: #555555;
                 color: white;
                 border: 1px solid #666666;
@@ -125,16 +116,16 @@ class TopControlsWidget(QWidget):
                 padding: 4px 8px;
                 min-height: 25px;
             }
-            QComboBox:hover {
+            SearchableComboBox:hover, QComboBox:hover {
                 background-color: #666666;
             }
-            QComboBox:focus {
+            SearchableComboBox:focus, QComboBox:focus {
                 border: 2px solid #0078d4;
             }
-            QComboBox::drop-down {
+            SearchableComboBox::drop-down, QComboBox::drop-down {
                 border: none;
             }
-            QComboBox QAbstractItemView {
+            SearchableComboBox QAbstractItemView, QComboBox QAbstractItemView {
                 background-color: #555555;
                 color: white;
                 border: 1px solid #666666;
@@ -219,6 +210,9 @@ class TopControlsWidget(QWidget):
         # Try to restore previous selection if still available
         if current_sku in skus:
             self.sku_combo.setCurrentText(current_sku)
+        else:
+            # No previous selection or it's not available, select placeholder
+            self.sku_combo.setCurrentIndex(0)
     
     def get_current_sku(self) -> str:
         """Get the currently selected SKU"""
@@ -236,17 +230,6 @@ class TopControlsWidget(QWidget):
                 enabled_tests.append(test_name)
         return enabled_tests
     
-    def on_sku_activated(self, index):
-        """Handle SKU selection"""
-        
-        # The popup will now close automatically since we're not messing with window flags
-    
-    def on_sku_index_changed(self, index):
-        """Handle index changes"""
-    
-    def on_sku_text_changed(self, text):
-        """Handle text changes"""
-    
     def update_programming_checkbox(self, programming_enabled: bool):
         """Update programming checkbox state based on SKU configuration
         
@@ -263,9 +246,6 @@ class TopControlsWidget(QWidget):
                 # Disable checkbox and uncheck it
                 checkbox.setEnabled(False)
                 checkbox.setChecked(False)
-    
-    def on_sku_highlighted(self, index):
-        """Handle highlighting"""
     
     def eventFilter(self, obj, event):
         """Event filter for debugging combo box behavior"""

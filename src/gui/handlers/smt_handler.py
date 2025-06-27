@@ -451,7 +451,7 @@ class SMTHandler(QObject, ThreadCleanupMixin):
                     self.logger.warning(f"Voltage out of range ({voltage:.3f}V), ignoring button press")
                     QMessageBox.warning(self.main_window, "Voltage Out of Range",
                                         f"Cannot start test - voltage is {voltage:.3f}V\n\n"
-                                        f"Required range: 13.18-13.22V")
+                                        f"Required range: 13.15-13.25V")
                     self._button_press_handled = False
                     return
             

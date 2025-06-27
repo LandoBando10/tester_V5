@@ -1,10 +1,10 @@
 /*
- * SMT Simple Tester - Batch-only Arduino firmware for SMT board testing
- * Version: 2.3.0
+ * SMT Simple Tester - 16-relay Arduino firmware for SMT board testing
+ * Version: 3.0.0
  * 
  * Commands:
- * - T: Test entire panel (returns all relay measurements)
- * - TS: Test panel with streaming updates
+ * - TX:1,2,5,6: Test specific relays (supports comma-separated and ranges)
+ * - TX:ALL: Test all 16 relays
  * - X: Turn all relays off
  * - I: Get board ID/info
  * - B: Get button status
@@ -14,10 +14,16 @@
  * - EVENT:BUTTON_PRESSED - Sent when button is pressed
  * - EVENT:BUTTON_RELEASED - Sent when button is released
  * 
- * Response format: Simple text without CRC or framing
- * All measurements sent in Volts and Amps (not millivolts/milliamps)
+ * Response format:
+ * - TX command: PANELX:1=v1,i1;2=v2,i2;...
  * 
- * v2.3.0: Proper event system for button presses
+ * Examples:
+ * - TX:1,2,5,6 - Test relays 1, 2, 5, and 6
+ * - TX:1-4,9-12 - Test relays 1-4 and 9-12
+ * - TX:1-8 - Test relays 1-8 (replaces old T command)
+ * - TX:ALL - Test all 16 relays
+ * 
+ * v3.0.0: 16-relay support only, no backward compatibility
  */
 
 #include <Wire.h>
@@ -29,8 +35,12 @@ const bool RELAY_ON = LOW;   // Change to HIGH if using active-HIGH relays
 const bool RELAY_OFF = HIGH;  // Change to LOW if using active-HIGH relays
 
 // Pin definitions
-const int RELAY_PINS[] = {2, 3, 4, 5, 6, 7, 8, 9}; // Relay control pins
-const int BUTTON_PIN = 10;
+const int RELAY_PINS[] = {
+  2, 3, 4, 5, 6, 7, 8, 9,        // Relays 1-8 (original pins)
+  10, 11, 12, 13, 14, 15, 16, 17 // Relays 9-16 (pin 10-13, A0-A3)
+};
+const int NUM_RELAYS = 16;
+const int BUTTON_PIN = 18; // A4 (moved from pin 10)
 const int LED_PIN = LED_BUILTIN;
 
 // INA260 sensor
@@ -57,7 +67,7 @@ void setup() {
   while (!Serial && (millis() - t0 < 5000)) { }
   
   // Initialize relay pins
-  for (int i = 0; i < 8; i++) {
+  for (int i = 0; i < NUM_RELAYS; i++) {
     pinMode(RELAY_PINS[i], OUTPUT);
     digitalWrite(RELAY_PINS[i], RELAY_OFF);
   }
@@ -81,7 +91,7 @@ void setup() {
     ina260.setAveragingCount(INA260_COUNT_1);
   }
   
-  Serial.println("SMT_BATCH_TESTER_READY");
+  Serial.println("SMT_BATCH_TESTER_V3_READY");
 }
 
 void loop() {
@@ -101,13 +111,9 @@ void loop() {
 void processCommand(String command) {
   digitalWrite(LED_PIN, HIGH); // Indicate activity
   
-  if (command == "T") {
-    // Test entire panel - batch mode
-    testPanel();
-  }
-  else if (command == "TS") {
-    // Test panel with streaming updates
-    testPanelStream();
+  if (command.startsWith("TX:")) {
+    // Test specific relays (the only test command)
+    testPanelSelective(command.substring(3));
   }
   else if (command == "X") {
     // Turn all relays off
@@ -116,7 +122,7 @@ void processCommand(String command) {
   }
   else if (command == "I") {
     // Get board info
-    Serial.println("ID:SMT_BATCH_TESTER_V2.3");
+    Serial.println("ID:SMT_BATCH_TESTER_V3.0_16RELAY");
   }
   else if (command == "B") {
     // Get current button status (use debounced state)
@@ -166,48 +172,10 @@ void measureRelayValues(int relayIndex, float &voltage, float &current) {
   current = totalCurrent / MEASUREMENT_SAMPLES / 1000.0;
 }
 
-// Test entire panel and return all results at once
-void testPanel() {
-  String result = "PANEL:";
-  
-  for (int i = 0; i < 8; i++) {
-    float voltage, current;
-    measureRelayValues(i, voltage, current);
-    
-    // Append to result string
-    if (i > 0) result += ";";
-    result += String(voltage, 3) + "," + String(current, 3);
-    
-    // Small delay between relays
-    if (i < 7) delay(INTER_RELAY_DELAY_MS);
-  }
-  
-  Serial.println(result);
-}
 
-// Test panel with streaming updates
-void testPanelStream() {
-  for (int i = 0; i < 8; i++) {
-    float voltage, current;
-    measureRelayValues(i, voltage, current);
-    
-    // Send individual relay result
-    Serial.print("RELAY:");
-    Serial.print(i + 1);
-    Serial.print(",");
-    Serial.print(voltage, 3);
-    Serial.print(",");
-    Serial.println(current, 3);
-    
-    // Small delay between relays
-    if (i < 7) delay(INTER_RELAY_DELAY_MS);
-  }
-  
-  Serial.println("PANEL_COMPLETE");
-}
 
 void allRelaysOff() {
-  for (int i = 0; i < 8; i++) {
+  for (int i = 0; i < NUM_RELAYS; i++) {
     digitalWrite(RELAY_PINS[i], RELAY_OFF);
   }
 }
@@ -262,4 +230,112 @@ void checkButton() {
     }
     lastButtonState = currentState;
   }
+}
+
+
+// Parse relay list and test specific relays
+void testPanelSelective(String relayList) {
+  // Array to store which relays to test
+  bool relaysToTest[NUM_RELAYS] = {false};
+  int relayCount = 0;
+  
+  // Special case: TX:ALL tests all 16 relays
+  if (relayList == "ALL") {
+    for (int i = 0; i < NUM_RELAYS; i++) {
+      relaysToTest[i] = true;
+    }
+    relayCount = NUM_RELAYS;
+  } else {
+    // Parse the relay list
+    if (!parseRelayList(relayList, relaysToTest, relayCount)) {
+      Serial.println("ERROR:INVALID_RELAY_LIST");
+      return;
+    }
+    
+    if (relayCount == 0) {
+      Serial.println("ERROR:EMPTY_RELAY_LIST");
+      return;
+    }
+  }
+  
+  // Test selected relays
+  String result = "PANELX:";
+  bool firstRelay = true;
+  
+  for (int i = 0; i < NUM_RELAYS; i++) {
+    if (relaysToTest[i]) {
+      float voltage, current;
+      measureRelayValues(i, voltage, current);
+      
+      // Append to result string with relay number
+      if (!firstRelay) result += ";";
+      result += String(i + 1) + "=" + String(voltage, 3) + "," + String(current, 3);
+      firstRelay = false;
+      
+      // Small delay between relays
+      if (relayCount > 1) delay(INTER_RELAY_DELAY_MS);
+      relayCount--;
+    }
+  }
+  
+  Serial.println(result);
+}
+
+
+// Parse relay list (supports individual numbers and ranges)
+// Examples: "1,2,5,6" or "1-4,9-12" or "1,2,5-8,12"
+bool parseRelayList(String relayList, bool relaysToTest[], int &count) {
+  count = 0;
+  int startPos = 0;
+  
+  // Clear the array
+  for (int i = 0; i < NUM_RELAYS; i++) {
+    relaysToTest[i] = false;
+  }
+  
+  // Parse comma-separated tokens
+  while (startPos < relayList.length()) {
+    int commaPos = relayList.indexOf(',', startPos);
+    if (commaPos == -1) commaPos = relayList.length();
+    
+    String token = relayList.substring(startPos, commaPos);
+    token.trim();
+    
+    // Check for range (contains dash)
+    int dashPos = token.indexOf('-');
+    if (dashPos > 0) {
+      // Parse range
+      int rangeStart = token.substring(0, dashPos).toInt();
+      int rangeEnd = token.substring(dashPos + 1).toInt();
+      
+      if (rangeStart < 1 || rangeStart > NUM_RELAYS || 
+          rangeEnd < 1 || rangeEnd > NUM_RELAYS || 
+          rangeStart > rangeEnd) {
+        return false; // Invalid range
+      }
+      
+      // Mark relays in range
+      for (int i = rangeStart; i <= rangeEnd; i++) {
+        if (!relaysToTest[i - 1]) {
+          relaysToTest[i - 1] = true;
+          count++;
+        }
+      }
+    } else {
+      // Parse single number
+      int relayNum = token.toInt();
+      if (relayNum < 1 || relayNum > NUM_RELAYS) {
+        return false; // Invalid relay number
+      }
+      
+      if (!relaysToTest[relayNum - 1]) {
+        relaysToTest[relayNum - 1] = true;
+        count++;
+      }
+    }
+    
+    startPos = commaPos + 1;
+  }
+  
+  return true;
 }

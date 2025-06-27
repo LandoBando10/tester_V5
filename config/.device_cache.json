@@ -1,7 +1,1 @@
-{
-  "COM7": {
-    "port": "COM7",
-    "device_type": "SMT Arduino",
-    "timestamp": 1750918883.96588
-  }
-}
+{"timestamp": 1751065318.1442964, "devices": {"COM7": "SMT Arduino", "COM3": "Unknown"}}

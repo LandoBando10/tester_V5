@@ -120,17 +120,17 @@ def run_professional_gui_mode(args=None):
         # Variables to hold windows
         selected_mode = None
         main_window = None
-        preloaded_main_window = None
+        preloaded_components = None
         
-        def on_preloaded_window(window):
-            """Handle preloaded MainWindow from splash screen"""
-            nonlocal preloaded_main_window
-            preloaded_main_window = window
-            logger.info("MainWindow preloaded and ready")
+        def on_preloaded_components(components):
+            """Handle preloaded components from splash screen"""
+            nonlocal preloaded_components
+            preloaded_components = components
+            logger.info(f"Components preloaded. SKUs loaded: {len(components.sku_manager.get_all_skus()) if components.sku_manager else 0}")
         
         def on_splash_ready_for_transition():
             """Handle splash screen ready for seamless transition"""
-            nonlocal selected_mode, main_window, preloaded_main_window
+            nonlocal selected_mode, main_window, preloaded_components
             
             # Create mode dialog but don't show it yet
             splash_pos = splash.pos() if splash and hasattr(splash, 'pos') else None
@@ -138,17 +138,13 @@ def run_professional_gui_mode(args=None):
             mode_dialog._transition_managed = True  # Mark as managed by transition manager
             
             def on_mode_selected(mode):
-                nonlocal selected_mode, main_window, preloaded_main_window
+                nonlocal selected_mode, main_window, preloaded_components
                 selected_mode = mode
                 logger.info(f"User selected mode: {mode}")
                 
-                # Use preloaded window if available, otherwise create new one
-                if preloaded_main_window:
-                    main_window = preloaded_main_window
-                    logger.info("Using preloaded MainWindow - instant startup!")
-                else:
-                    logger.info("Creating new MainWindow...")
-                    main_window = MainWindow()
+                # Create MainWindow with preloaded components
+                logger.info("Creating MainWindow with preloaded components...")
+                main_window = MainWindow(preloaded_components=preloaded_components)
                 
                 # IMPORTANT: Hide the window first to prevent it showing during initialization
                 main_window.hide()
@@ -200,7 +196,7 @@ def run_professional_gui_mode(args=None):
         # Create and show splash screen (longer duration for 3-second video)
         splash = SplashScreen(str(video_path) if video_path else None, duration_ms=3500)
         splash.ready_for_transition.connect(on_splash_ready_for_transition)
-        splash.preloaded_window.connect(on_preloaded_window)
+        splash.preloaded_components_signal.connect(on_preloaded_components)
         splash.show_centered()
         
         # Run application

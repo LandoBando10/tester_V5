@@ -13,9 +13,9 @@ class VoltageMonitorWidget(QWidget):
     
     # Target voltage and tolerance
     TARGET_VOLTAGE = 13.20
-    TOLERANCE = 0.02  # ±0.02V
-    MIN_VOLTAGE = TARGET_VOLTAGE - TOLERANCE  # 13.18V
-    MAX_VOLTAGE = TARGET_VOLTAGE + TOLERANCE  # 13.22V
+    TOLERANCE = 0.05  # ±0.05V
+    MIN_VOLTAGE = TARGET_VOLTAGE - TOLERANCE  # 13.15V
+    MAX_VOLTAGE = TARGET_VOLTAGE + TOLERANCE  # 13.25V
     
     def __init__(self, parent=None):
         super().__init__(parent)

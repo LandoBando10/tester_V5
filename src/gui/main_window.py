@@ -26,17 +26,24 @@ from src.spc import SPCWidget
 class MainWindow(QMainWindow):
     """Main application window - refactored for maintainability"""
 
-    def __init__(self):
+    def __init__(self, preloaded_components=None):
         super().__init__()
         self.setWindowTitle("Diode Dynamics Tester V5")
         self.setMinimumSize(1200, 800)
         # Don't show window here - let transition manager handle it
 
         # Core managers
-        self.sku_manager = create_sku_manager()
-        self.logger = logging.getLogger(self.__class__.__name__)
+        if preloaded_components and preloaded_components.sku_manager:
+            self.sku_manager = preloaded_components.sku_manager
+            self.logger = logging.getLogger(self.__class__.__name__)
+            self.logger.info(f"Using preloaded SKU manager with {len(self.sku_manager.get_all_skus())} SKUs")
+        else:
+            self.sku_manager = create_sku_manager()
+            self.logger = logging.getLogger(self.__class__.__name__)
+            
+        self.preloaded_components = preloaded_components
         self.config_loading_dialog = None
-        self.config_load_completed = False
+        self.config_load_completed = True  # Mark as completed if using preloaded
         
         # SPC widget (will be initialized after UI setup)
         self.spc_widget = None
@@ -48,8 +55,23 @@ class MainWindow(QMainWindow):
         self._weight_handler = WeightHandler(self)
         self.connection_handler = ConnectionHandler(self)  # Keep this one immediate
 
-        # UI Components - preload connection dialog too for better performance
+        # UI Components - preload connection dialog with cached port info
         self._connection_dialog = ConnectionDialog(self)
+        if preloaded_components and preloaded_components.port_info:
+            # Convert preloaded port info to the expected format
+            import time
+            from src.gui.components.connection_dialog import DeviceInfo
+            
+            device_cache = {}
+            for port, device_type in preloaded_components.port_info.items():
+                device_cache[port] = DeviceInfo(
+                    port=port,
+                    device_type=device_type,
+                    timestamp=time.time()
+                )
+            
+            self._connection_dialog._device_cache = device_cache
+            self.logger.info(f"Using preloaded port info: {preloaded_components.port_info}")
         self.test_worker: Optional[TestWorker] = None
         self.arduino_controller = None  # Persistent Arduino instance
 
@@ -71,14 +93,20 @@ class MainWindow(QMainWindow):
         # Setup SKU manager connections after UI is ready
         self.setup_sku_manager()  # Setup SKU manager connections
         
-        # Start config loading immediately - no artificial delay
-        self.start_config_loading()
-        
-        # If config is already loaded, refresh the UI
-        if self.config_load_completed and self.sku_manager.is_loaded():
+        # If using preloaded components, skip config loading
+        if preloaded_components and preloaded_components.sku_manager:
+            # Config already loaded during splash screen
             self.refresh_data()
+        else:
+            # Start config loading immediately - no artificial delay
+            self.start_config_loading()
+            
+            # If config is already loaded, refresh the UI
+            if self.config_load_completed and self.sku_manager.is_loaded():
+                self.refresh_data()
         
         # Trigger auto-scan for Arduino devices after a short delay
+        # If we have preloaded port info, this will be faster
         QTimer.singleShot(500, self._startup_arduino_scan)
 
     @property

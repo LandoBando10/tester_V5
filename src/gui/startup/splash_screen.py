@@ -9,40 +9,14 @@ from PySide6.QtGui import QPixmap, QGuiApplication, QIcon
 from PySide6.QtMultimedia import QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from .transition_manager import transition_manager
-
-
-class PreloaderThread(QThread):
-    """Background thread to preload application components"""
-    
-    preload_complete = Signal(object)  # Emits the preloaded MainWindow
-    
-    def __init__(self):
-        super().__init__()
-        self.main_window = None
-    
-    def run(self):
-        """Preload imports only - widget creation must happen in main thread"""
-        try:
-            # Import heavy modules to warm up the import cache
-            print("Preloading imports...")
-            
-            # DO NOT create MainWindow instance here!
-            # Just importing saves time
-            print("Imports preloaded successfully")
-            
-            # Emit None since we can't create widgets in thread
-            self.preload_complete.emit(None)
-            
-        except Exception as e:
-            print(f"Error during import preloading: {e}")
-            self.preload_complete.emit(None)
+from .preloader import PreloaderThread, PreloadedComponents
 
 
 class SplashScreen(QWidget):
     """Professional splash screen with video or fallback animation"""
     
     finished = Signal()
-    preloaded_window = Signal(object)  # Emits preloaded MainWindow
+    preloaded_components_signal = Signal(object)  # Emits preloaded components
     ready_for_transition = Signal()  # Emits when ready to transition
     
     # Match mode selector dialog size
@@ -53,11 +27,13 @@ class SplashScreen(QWidget):
         super().__init__()
         self.video_path = video_path
         self.duration_ms = duration_ms
-        self.preloaded_main_window = None
+        self.preloaded_components = None
         self.preloader_thread = None
         self.is_closing = False  # Prevent multiple close attempts
         self.video_ended = False  # Track if video has ended
         self.static_content_widget = None  # For seamless transition
+        self.preload_ready = False  # Track if preloading is done
+        self.video_ready = False  # Track if video/timer is done
         self.setup_window_icon()  # Set icon before UI setup
         self.setup_ui()
         self.start_preloading()
@@ -161,7 +137,7 @@ class SplashScreen(QWidget):
             self.media_player.play()
             
             # Also set a timer to prepare transition after duration_ms in case video doesn't report end
-            QTimer.singleShot(self.duration_ms, self.prepare_transition)
+            QTimer.singleShot(self.duration_ms, self.on_video_ready)
             
         except Exception as e:
             print(f"Error setting up video player: {e}")
@@ -222,7 +198,7 @@ class SplashScreen(QWidget):
         
         # Start timer for fallback duration (shorter for faster startup)
         fallback_duration = min(self.duration_ms, 2000)  # Max 2 seconds for fallback
-        QTimer.singleShot(fallback_duration, self.prepare_transition)
+        QTimer.singleShot(fallback_duration, self.on_video_ready)
         
     def on_media_status_changed(self, status):
         """Handle media status changes"""
@@ -235,7 +211,7 @@ class SplashScreen(QWidget):
         elif status == QMediaPlayer.EndOfMedia:
             print("Video ended, preparing transition...")
             self.video_ended = True
-            self.prepare_transition()
+            self.on_video_ready()
             
     def on_media_error(self, error):
         """Handle media errors by falling back"""
@@ -299,24 +275,43 @@ class SplashScreen(QWidget):
         self.show_centered()
         
     def start_preloading(self):
-        """Start background preloading of MainWindow"""
+        """Start background preloading of application components"""
         self.preloader_thread = PreloaderThread()
+        self.preloader_thread.progress.connect(self.on_preload_progress)
         self.preloader_thread.preload_complete.connect(self.on_preload_complete)
         self.preloader_thread.start()
     
-    def on_preload_complete(self, main_window):
+    def on_preload_progress(self, message: str, percentage: int):
+        """Handle preloading progress updates"""
+        print(f"Preloading: {message} ({percentage}%)")
+    
+    def on_preload_complete(self, components: PreloadedComponents):
         """Handle completion of preloading"""
-        self.preloaded_main_window = main_window
-        self.preloaded_window.emit(main_window)
-        print("Import preloading completed")
+        self.preloaded_components = components
+        self.preloaded_components_signal.emit(components)
+        print("Component preloading completed")
+        
+        # Mark preload as ready and check if we can transition
+        self.preload_ready = True
+        self.check_ready_for_transition()
+    
+    def on_video_ready(self):
+        """Called when video ends or timer expires"""
+        self.video_ready = True
+        self.check_ready_for_transition()
+    
+    def check_ready_for_transition(self):
+        """Check if both video and preloading are done"""
+        if self.preload_ready and self.video_ready:
+            self.prepare_transition()
     
     def on_position_changed(self, position):
         """Handle video position changes for optimization"""
         # Ensure minimum splash duration even if video is short
     
-    def get_preloaded_window(self):
-        """Get the preloaded MainWindow instance"""
-        return self.preloaded_main_window
+    def get_preloaded_components(self):
+        """Get the preloaded components"""
+        return self.preloaded_components
     
     def prepare_transition(self):
         """Prepare for seamless transition to next window"""
