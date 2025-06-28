@@ -1,0 +1,32 @@
+{
+  "description": "Product Delta - SS3 Pro Balanced",
+
+  "tests": {
+    "pressure": true,
+    "power": true,
+    "brightness": true,
+    "color": true
+  },
+
+  "configuration": {
+    "backlight_type": "single",
+    "relay_mapping": {
+      "main": 2,
+      "backlight_1": 3
+    }
+  },
+
+  "limits": {
+    "mainbeam_current_a": {"min": 1.8, "max": 2.3},
+    "mainbeam_voltage_v": {"min": 11.5, "max": 13.0},
+    "mainbeam_brightness_lux": {"min": 3000, "max": 3600},
+    "mainbeam_color_x": {"target": 0.440, "tolerance": 0.013},
+    "mainbeam_color_y": {"target": 0.405, "tolerance": 0.013},
+
+    "backlight_current_a": {"min": 0.12, "max": 0.18},
+    "backlight_voltage_v": {"min": 11.5, "max": 13.0},
+    "backlight_brightness_lux": {"min": 120, "max": 180},
+    "backlight_color_x": {"target": 0.580, "tolerance": 0.020},
+    "backlight_color_y": {"target": 0.390, "tolerance": 0.020}
+  }
+}

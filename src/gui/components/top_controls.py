@@ -63,7 +63,7 @@ class TopControlsWidget(QWidget):
         
         # Configure combo box
         self.sku_combo.setMaxVisibleItems(10)
-        self.sku_combo.setFocusPolicy(Qt.StrongFocus)
+        self.sku_combo.setFocusPolicy(Qt.ClickFocus)
         
         # Don't modify the popup window flags - let QComboBox handle it internally
         # This was causing the popup to stay open after selection
@@ -76,7 +76,7 @@ class TopControlsWidget(QWidget):
         self.apply_simple_combo_style()
         
         # Connect signals
-        self.sku_combo.item_selected.connect(self.sku_changed.emit)
+        self.sku_combo.item_selected.connect(self._on_sku_selected)
         
         sku_layout.addWidget(self.sku_combo)
         
@@ -114,6 +114,7 @@ class TopControlsWidget(QWidget):
                 border: 1px solid #666666;
                 border-radius: 3px;
                 padding: 4px 8px;
+                padding-right: 30px; /* Make room for dropdown arrow */
                 min-height: 25px;
             }
             SearchableComboBox:hover, QComboBox:hover {
@@ -123,7 +124,22 @@ class TopControlsWidget(QWidget):
                 border: 2px solid #0078d4;
             }
             SearchableComboBox::drop-down, QComboBox::drop-down {
-                border: none;
+                subcontrol-origin: padding;
+                subcontrol-position: top right;
+                width: 20px;
+                border-left: 1px solid #666666;
+                background-color: #444444;
+            }
+            SearchableComboBox::drop-down:hover, QComboBox::drop-down:hover {
+                background-color: #555555;
+            }
+            SearchableComboBox::down-arrow, QComboBox::down-arrow {
+                image: none;
+                width: 0;
+                height: 0;
+                border-left: 5px solid transparent;
+                border-right: 5px solid transparent;
+                border-top: 5px solid white;
             }
             SearchableComboBox QAbstractItemView, QComboBox QAbstractItemView {
                 background-color: #555555;
@@ -202,17 +218,41 @@ class TopControlsWidget(QWidget):
     def set_available_skus(self, skus: List[str]):
         """Update the available SKUs in the combo box"""
         current_sku = self.sku_combo.currentText()
+        logger.info(f"Setting available SKUs. Count: {len(skus)}, Current: '{current_sku}'")
+        
+        # Set initialization flag to prevent signals during setup
+        self.sku_combo._is_initializing = True
+        
+        # Block signals during population to prevent unwanted selections
+        self.sku_combo.blockSignals(True)
         
         self.sku_combo.clear()
         self.sku_combo.addItem("-- Select SKU --")
         self.sku_combo.addItems(skus)
         
         # Try to restore previous selection if still available
-        if current_sku in skus:
+        if current_sku and current_sku != "-- Select SKU --" and current_sku in skus:
+            logger.info(f"Restoring previous SKU selection: '{current_sku}'")
             self.sku_combo.setCurrentText(current_sku)
         else:
             # No previous selection or it's not available, select placeholder
+            logger.info("Setting combo box to placeholder")
             self.sku_combo.setCurrentIndex(0)
+            # Ensure the text is set to the placeholder
+            self.sku_combo.setCurrentText("-- Select SKU --")
+            # Force update the line edit to show placeholder
+            if self.sku_combo.lineEdit():
+                self.sku_combo.lineEdit().setText("-- Select SKU --")
+        
+        # Clear initialization flag
+        self.sku_combo._is_initializing = False
+        
+        # Re-enable signals
+        self.sku_combo.blockSignals(False)
+        
+        # Log final selection
+        final_selection = self.sku_combo.currentText()
+        logger.info(f"Final SKU selection after update: '{final_selection}'")
     
     def get_current_sku(self) -> str:
         """Get the currently selected SKU"""
@@ -276,5 +316,10 @@ class TopControlsWidget(QWidget):
             QEvent.Close: "Close"
         }
         return event_names.get(event_type, f"Unknown({event_type})")
+    
+    def _on_sku_selected(self, sku: str):
+        """Handle SKU selection from combo box"""
+        logger.info(f"SKU selected from combo box: '{sku}'")
+        self.sku_changed.emit(sku)
     
     

@@ -30,8 +30,9 @@ class SMTArduinoController:
         self.connection: Optional[serial.Serial] = None
         self.port: Optional[str] = None
         
-        # Button callback
+        # Callbacks
         self.button_callback: Optional[Callable[[str], None]] = None
+        self.error_callback: Optional[Callable[[str, str], None]] = None  # error_type, message
         
         # Reading thread for button events
         self.is_reading = False
@@ -48,6 +49,10 @@ class SMTArduinoController:
         self.command_timeout = 2.0
         self.max_retries = 3
         self.retry_delay = 0.1
+        
+        # Protocol reliability
+        self._sequence_number = 0
+        self._enable_checksums = True  # Can be disabled for backward compatibility
 
     def connect(self, port: str) -> bool:
         """Connect to Arduino on specified port"""
@@ -87,6 +92,14 @@ class SMTArduinoController:
             # Start reading thread BEFORE testing communication
             # This is essential for the queue-based command system to work
             self.start_reading()
+            
+            # Reset sequence numbers on both sides
+            reset_response = self._send_command("RESET_SEQ", timeout=0.5)
+            if reset_response and "OK:SEQ_RESET" in reset_response:
+                self.logger.debug("Sequence numbers reset successfully")
+                self._sequence_number = 0  # Reset Python side to match
+            else:
+                self.logger.debug("RESET_SEQ not supported by firmware (legacy compatibility)")
             
             # Test communication
             if self._test_communication():
@@ -184,6 +197,88 @@ class SMTArduinoController:
         # Connection already tested during connect(), so just return connection status
         return self.is_connected()
     
+    def _calculate_checksum(self, data: str) -> int:
+        """Calculate XOR checksum for a string"""
+        checksum = 0
+        for char in data:
+            checksum ^= ord(char)
+        return checksum
+    
+    def _add_protocol_wrapper(self, command: str) -> str:
+        """Add sequence number and checksum to command"""
+        if not self._enable_checksums:
+            return command
+            
+        # Increment sequence number
+        self._sequence_number = (self._sequence_number + 1) % 65536
+        
+        # Add sequence number
+        cmd_with_seq = f"{command}:SEQ={self._sequence_number}"
+        
+        # Calculate and add checksum
+        checksum = self._calculate_checksum(cmd_with_seq)
+        return f"{cmd_with_seq}:CHK={checksum:X}"
+    
+    def _validate_response(self, response: str) -> tuple[bool, str, int]:
+        """Validate response checksum and extract data
+        Returns: (is_valid, clean_response, sequence_number)
+        """
+        if not self._enable_checksums or ":CHK=" not in response:
+            return (True, response, 0)
+        
+        try:
+            # Find the checksum and END marker
+            chk_index = response.rfind(":CHK=")
+            end_index = response.rfind(":END")
+            
+            if chk_index == -1 or end_index == -1 or end_index <= chk_index:
+                self.logger.warning(f"Invalid response format: {response}")
+                return (False, response, 0)
+            
+            # Extract parts
+            data_with_seq = response[:chk_index]
+            checksum_str = response[chk_index+5:end_index]
+            
+            # Calculate expected checksum
+            expected_checksum = self._calculate_checksum(data_with_seq)
+            received_checksum = int(checksum_str, 16)
+            
+            if expected_checksum != received_checksum:
+                self.logger.warning(f"Checksum mismatch: expected {expected_checksum:X}, got {checksum_str}")
+                return (False, response, 0)
+            
+            # Extract sequence number and handle CMDSEQ if present
+            seq_num = 0
+            clean_data = data_with_seq
+            
+            # First, remove CMDSEQ if present (command echo from firmware)
+            cmdseq_index = clean_data.find(":CMDSEQ=")
+            if cmdseq_index > 0:
+                # Find the end of CMDSEQ value
+                cmdseq_end = clean_data.find(":", cmdseq_index + 8)
+                if cmdseq_end == -1:
+                    cmdseq_end = len(clean_data)
+                # Remove the CMDSEQ portion
+                clean_data = clean_data[:cmdseq_index] + clean_data[cmdseq_end:]
+                self.logger.debug(f"Removed CMDSEQ from response")
+            
+            # Now extract SEQ if present
+            seq_index = clean_data.rfind(":SEQ=")
+            if seq_index > 0:
+                # Find the end of SEQ value
+                seq_end = clean_data.find(":", seq_index + 5)
+                if seq_end == -1:
+                    seq_end = len(clean_data)
+                seq_str = clean_data[seq_index+5:seq_end]
+                seq_num = int(seq_str)
+                clean_data = clean_data[:seq_index]
+            
+            return (True, clean_data, seq_num)
+            
+        except Exception as e:
+            self.logger.error(f"Error validating response: {e}")
+            return (False, response, 0)
+
     def get_firmware_type(self) -> str:
         """Get the firmware type of connected Arduino"""
         try:
@@ -200,7 +295,7 @@ class SMTArduinoController:
             return "UNKNOWN"
 
     def _send_command(self, command: str, timeout: float = None) -> Optional[str]:
-        """Send command to Arduino and get response"""
+        """Send command to Arduino and get response with optional checksum validation"""
         if not self.is_connected():
             return None
             
@@ -208,45 +303,74 @@ class SMTArduinoController:
             timeout = self.command_timeout
         
         with self._command_lock:
-            try:
-                # Clear any stale responses
-                while not self._response_queue.empty():
-                    self._response_queue.get_nowait()
-                
-                # Signal that we're expecting a response
-                self._expecting_response = True
-                
-                # Clear input buffer
-                self.connection.reset_input_buffer()
-                
-                # Small delay to ensure serial line is idle
-                time.sleep(0.02)
-                
-                # Send command
-                cmd_bytes = f"{command}\n".encode()
-                self.logger.debug(f"Sending: {command}")
-                self.connection.write(cmd_bytes)
-                self.connection.flush()
-                
-                # Wait for response with timeout
+            # Retry loop for checksum failures
+            for attempt in range(self.max_retries):
                 try:
-                    response = self._response_queue.get(timeout=timeout)
-                    self.logger.debug(f"Received: {response}")
-                    return response
-                except queue.Empty:
-                    self.logger.warning(f"No response to command: {command}")
-                    return None
+                    # Clear any stale responses
+                    while not self._response_queue.empty():
+                        self._response_queue.get_nowait()
                     
-            except Exception as e:
-                self.logger.error(f"Command error: {e}")
-                return None
-            finally:
-                self._expecting_response = False
+                    # Signal that we're expecting a response
+                    self._expecting_response = True
+                    
+                    # Clear input buffer
+                    self.connection.reset_input_buffer()
+                    
+                    # Small delay to ensure serial line is idle
+                    time.sleep(0.02)
+                    
+                    # Add protocol wrapper if enabled
+                    wrapped_command = self._add_protocol_wrapper(command)
+                    
+                    # Send command
+                    cmd_bytes = f"{wrapped_command}\n".encode()
+                    self.logger.debug(f"Sending: {wrapped_command}")
+                    self.connection.write(cmd_bytes)
+                    self.connection.flush()
+                    
+                    # Wait for response with timeout
+                    try:
+                        raw_response = self._response_queue.get(timeout=timeout)
+                        self.logger.debug(f"Received raw: {raw_response}")
+                        
+                        # Validate response
+                        is_valid, clean_response, seq_num = self._validate_response(raw_response)
+                        
+                        if is_valid:
+                            # Check sequence number matches if checksums enabled
+                            if self._enable_checksums and seq_num != self._sequence_number:
+                                self.logger.warning(f"Sequence mismatch: expected {self._sequence_number}, got {seq_num}")
+                                # Continue anyway - sequence mismatch is less critical than checksum
+                            
+                            self.logger.debug(f"Valid response: {clean_response}")
+                            return clean_response
+                        else:
+                            self.logger.warning(f"Invalid response on attempt {attempt + 1}")
+                            if attempt < self.max_retries - 1:
+                                time.sleep(self.retry_delay)
+                                continue
+                            else:
+                                return None
+                                
+                    except queue.Empty:
+                        self.logger.warning(f"No response to command: {command} (attempt {attempt + 1})")
+                        if attempt < self.max_retries - 1:
+                            time.sleep(self.retry_delay)
+                            continue
+                        return None
+                        
+                except Exception as e:
+                    self.logger.error(f"Command error: {e}")
+                    return None
+                finally:
+                    self._expecting_response = False
+                    
+            return None  # All retries failed
 
     def test_panel(self) -> Dict[int, Optional[Dict[str, float]]]:
         """Test entire panel with single command"""
-        # Increased timeout to 3.0 seconds to handle 8 relays
-        response = self._send_command("T", timeout=3.0)
+        # Increased timeout to 3.0 seconds to handle 8-16 relays
+        response = self._send_command("TX:ALL", timeout=3.0)
         
         if not response:
             self.logger.error("No response from panel test - possible power loss or Arduino hang")
@@ -254,42 +378,65 @@ class SMTArduinoController:
             self._send_command("X", timeout=0.5)
             return {}
         
-        if not response.startswith("PANEL:"):
+        # Check for INA260 failure
+        if response == "ERROR:INA260_FAIL":
+            self.logger.error("INA260 sensor failure detected during panel test")
+            # Notify via callback if available
+            if self.error_callback:
+                self.error_callback("INA260_FAIL", "Current sensor failure detected. Check I2C connections.")
+            return {}
+        
+        # Check for other errors
+        if response.startswith("ERROR:"):
+            error_type = response[6:]
+            self.logger.error(f"Arduino error: {error_type}")
+            if self.error_callback:
+                self.error_callback(error_type, f"Arduino reported error: {error_type}")
+            return {}
+        
+        if not response.startswith("PANELX:"):
             self.logger.error(f"Invalid panel test response: {response}")
             return {}
         
         try:
             results = {}
-            data = response[6:]  # Remove "PANEL:"
+            data = response[7:]  # Remove "PANELX:"
             
+            # Parse format: 1=12.5,3.2;2=12.4,3.1;...
             relay_data_list = data.split(";")
-            for i, relay_data in enumerate(relay_data_list):
-                relay_num = i + 1
-                if "," in relay_data:
-                    voltage_str, current_str = relay_data.split(",", 1)
-                    try:
-                        voltage = float(voltage_str)
-                        current = float(current_str)
-                        
-                        # Basic sanity check
-                        if -100 < voltage < 100 and -10 < current < 10:
-                            results[relay_num] = {
-                                'voltage': voltage,
-                                'current': current,
-                                'power': voltage * current
-                            }
-                        else:
-                            self.logger.error(f"Invalid values for relay {relay_num}: {voltage}V, {current}A")
+            for relay_data in relay_data_list:
+                if "=" in relay_data:
+                    relay_str, values = relay_data.split("=", 1)
+                    relay_num = int(relay_str)
+                    
+                    if "," in values:
+                        voltage_str, current_str = values.split(",", 1)
+                        try:
+                            voltage = float(voltage_str)
+                            current = float(current_str)
+                            
+                            # Basic sanity check
+                            if -100 < voltage < 100 and -10 < current < 10:
+                                results[relay_num] = {
+                                    'voltage': voltage,
+                                    'current': current,
+                                    'power': voltage * current
+                                }
+                            else:
+                                self.logger.error(f"Invalid values for relay {relay_num}: {voltage}V, {current}A")
+                                results[relay_num] = None
+                        except ValueError:
+                            self.logger.error(f"Failed to parse relay {relay_num} data: {relay_data}")
                             results[relay_num] = None
-                    except ValueError:
-                        self.logger.error(f"Failed to parse relay {relay_num} data: {relay_data}")
+                    else:
+                        self.logger.error(f"Invalid format for relay {relay_num}: {relay_data}")
                         results[relay_num] = None
                 else:
-                    self.logger.error(f"Invalid format for relay {relay_num}: {relay_data}")
-                    results[relay_num] = None
+                    self.logger.error(f"Invalid relay data format: {relay_data}")
             
             successful = len([r for r in results.values() if r])
-            self.logger.info(f"Panel test complete: {successful}/8 relays measured")
+            total_relays = len(results)
+            self.logger.info(f"Panel test complete: {successful}/{total_relays} relays measured")
             return results
             
         except Exception as e:
@@ -434,6 +581,11 @@ class SMTArduinoController:
     def set_button_callback(self, callback: Optional[Callable[[str], None]]):
         """Set callback for button events"""
         self.button_callback = callback
+    
+    def set_checksum_enabled(self, enabled: bool):
+        """Enable or disable checksum protocol for backward compatibility"""
+        self._enable_checksums = enabled
+        self.logger.info(f"Checksum protocol {'enabled' if enabled else 'disabled'}")
 
     def start_reading(self):
         """Start background thread for button events"""
@@ -477,7 +629,7 @@ class SMTArduinoController:
                             if message:
                                 # Route the message appropriately
                                 if message.startswith("EVENT:"):
-                                    # Handle events
+                                    # Handle events - these don't have checksums
                                     event_type = message[6:]
                                     if event_type.startswith("BUTTON_") and self.button_callback:
                                         self.logger.info(f"Button event: {event_type}")
@@ -485,15 +637,27 @@ class SMTArduinoController:
                                         state = event_type.replace("BUTTON_", "")
                                         self.button_callback(state)
                                 elif self._expecting_response:
-                                    # This is a response to a command
+                                    # This is a response to a command - put raw message with checksum
                                     self._response_queue.put(message)
                                 else:
                                     # Unexpected message - could be a delayed response
-                                    # Common responses we can safely ignore
-                                    if message in ["OK:ALL_OFF", "PANEL_COMPLETE"] or message.startswith(("VOLTAGE:", "RELAY:", "PANEL:", "ID:")):
-                                        self.logger.debug(f"Ignoring delayed response: {message}")
+                                    # For messages with checksums, validate before ignoring
+                                    if ":CHK=" in message and self._enable_checksums:
+                                        is_valid, clean_msg, _ = self._validate_response(message)
+                                        if is_valid:
+                                            # Common responses we can safely ignore
+                                            if clean_msg in ["OK:ALL_OFF", "PANEL_COMPLETE"] or clean_msg.startswith(("VOLTAGE:", "RELAY:", "PANEL:", "PANELX:", "ID:")):
+                                                self.logger.debug(f"Ignoring delayed response: {clean_msg}")
+                                            else:
+                                                self.logger.debug(f"Unexpected message: {clean_msg}")
+                                        else:
+                                            self.logger.debug(f"Ignoring corrupted message")
                                     else:
-                                        self.logger.debug(f"Unexpected message: {message}")
+                                        # Legacy format or checksums disabled
+                                        if message in ["OK:ALL_OFF", "PANEL_COMPLETE"] or message.startswith(("VOLTAGE:", "RELAY:", "PANEL:", "ID:")):
+                                            self.logger.debug(f"Ignoring delayed response: {message}")
+                                        else:
+                                            self.logger.debug(f"Unexpected message: {message}")
                     finally:
                         self.connection.timeout = old_timeout
             except Exception as e:
@@ -542,6 +706,10 @@ class SMTArduinoController:
     def send_command(self, command: str, timeout: float = None) -> Optional[str]:
         """Public wrapper for _send_command for compatibility"""
         return self._send_command(command, timeout)
+    
+    def set_error_callback(self, callback: Callable[[str, str], None]):
+        """Set callback for error events (error_type, message)"""
+        self.error_callback = callback
     
     # Legacy method stubs for backward compatibility
     def measure_relay(self, relay_num: int):

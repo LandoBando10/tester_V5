@@ -108,12 +108,11 @@ class BoardCell(QFrame):
     # ------------------- data population ----------------------
     def update_measurements(
         self,
-        main_current: Optional[float],
-        back_currents: Dict[str, float],
+        functions: Dict[str, float],
         passed: bool,
     ) -> None:
-        """Refresh measurement lines and colour‑code the cell."""
-        print(f"[CELL COLOR DEBUG] Board {self.board_idx}: updating with passed={passed}, main_current={main_current}, back_currents={back_currents}")
+        """Update measurement display with function names and current values."""
+        print(f"[CELL COLOR DEBUG] Board {self.board_idx}: updating with passed={passed}, functions={functions}")
         
         # purge old
         for lbl in self.measure_labels.values():
@@ -131,14 +130,13 @@ class BoardCell(QFrame):
             self.layout.insertWidget(self.layout.count() - 1, lbl)
             self.measure_labels[text] = lbl
 
-        if main_current is not None:
-            _add_line(f"Mainbeam Current: {main_current:.2f} A")
-
-        for variant, cur in sorted(back_currents.items()):
-            _add_line(f"{_variant_to_label(variant)} Current: {cur:.2f} A")
+        # Display all functions generically
+        for func_name, current in sorted(functions.items()):
+            formatted_name = func_name.replace("_", " ").title()
+            _add_line(f"{formatted_name}: {current:.2f} A")
 
         # Apply color based on pass/fail, but only if we have actual measurement data
-        if main_current is not None or back_currents:
+        if functions:
             if passed:
                 print(f"[CELL COLOR DEBUG] Board {self.board_idx}: Setting color to PASS (green)")
                 self.set_pass()
@@ -147,7 +145,7 @@ class BoardCell(QFrame):
                 self.set_fail()
         else:
             # No data yet, keep grey
-            print(f"[CELL COLOR DEBUG] Board {self.board_idx}: No measurement data, keeping IDLE (grey)")
+            print(f"[CELL COLOR DEBUG] Board {self.board_idx}: No measurement data, keeping grey")
             self.set_idle()
 
 
@@ -218,10 +216,10 @@ class PCBPanelWidget(QWidget):
         # reset visuals
         for cell in self.cells.values():
             cell.set_idle()
-            cell.update_measurements(None, {}, True)
+            cell.update_measurements({}, True)
 
-        main_vals: Dict[int, float] = {}
-        back_vals: Dict[int, Dict[str, float]] = {}
+        # Store all function measurements generically
+        board_functions: Dict[int, Dict[str, float]] = {}
         board_pass: Dict[int, bool] = {}
 
         for name, data in getattr(result, "measurements", {}).items():
@@ -232,7 +230,7 @@ class PCBPanelWidget(QWidget):
             if not name.endswith("_current"):
                 continue
             
-            # Parse board number from names like "mainbeam_board_1_current" or "backlight_board_1_current"
+            # Parse board number from names like "function_board_1_current"
             parts = name.split("_")
             try:
                 board_idx = parts.index("board")
@@ -240,15 +238,12 @@ class PCBPanelWidget(QWidget):
             except (ValueError, IndexError):
                 continue
 
-            # Determine variant (mainbeam or backlight)
-            variant = parts[0]  # First part is usually the variant
+            # Extract function name (everything before "_board_")
+            function_name = "_".join(parts[:board_idx])
             board_pass.setdefault(b_idx, True)
             
-            # Store current values only
-            if variant == "mainbeam":
-                main_vals[b_idx] = data["value"]
-            elif variant == "backlight":
-                back_vals.setdefault(b_idx, {})[variant] = data["value"]
+            # Store all functions generically
+            board_functions.setdefault(b_idx, {})[function_name] = data["value"]
             
             # Check pass/fail
             if not data.get("passed", True):
@@ -258,12 +253,11 @@ class PCBPanelWidget(QWidget):
         
         for idx, cell in self.cells.items():
             passed = board_pass.get(idx, True)
-            # Debug: Updating cell with pass/fail status
-            cell.update_measurements(
-                main_vals.get(idx),
-                back_vals.get(idx, {}),
-                passed,
-            )
+            # Get all functions for this board
+            functions = board_functions.get(idx, {})
+            
+            # Pass all functions to the cell
+            cell.update_measurements(functions, passed)
 
     # ------------------ internal helpers ----------------------
     def _rebuild_grid(self):
@@ -283,14 +277,6 @@ class PCBPanelWidget(QWidget):
 # Helper functions
 # ---------------------------------------------------------------------------
 
-def _variant_to_label(variant: str) -> str:
-    mapping = {
-        "backlight": "Back-light",
-        "backlight1": "Back-light 1",
-        "backlight2": "Back-light 2",
-        "rgbw_backlight": "RGBW Back-light",
-    }
-    return mapping.get(variant, variant.replace("_", " ").title())
 
 
 def _index_to_pos(board_idx: int, rows: int, cols: int) -> Tuple[int, int]:
@@ -640,15 +626,16 @@ def _test_index_mapping():
     print("Index mapping tests passed.")
 
 
-def _test_variant_label():
-    assert _variant_to_label("backlight") == "Back-light"
-    assert _variant_to_label("backlight1") == "Back-light 1"
-    assert _variant_to_label("rgbw_backlight") == "RGBW Back-light"
-    assert _variant_to_label("custom_variant_x") == "Custom Variant X"
-    print("Variant label tests passed.")
+def _test_function_formatting():
+    # Test the generic function name formatting
+    assert "backlight".replace("_", " ").title() == "Backlight"
+    assert "backlight_1".replace("_", " ").title() == "Backlight 1"
+    assert "rgbw_backlight".replace("_", " ").title() == "Rgbw Backlight"
+    assert "custom_function_x".replace("_", " ").title() == "Custom Function X"
+    print("Function name formatting tests passed.")
 
 
 if __name__ == "__main__":
     _test_index_mapping()
-    _test_variant_label()
+    _test_function_formatting()
     print("All self-tests passed.")

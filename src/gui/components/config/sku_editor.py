@@ -48,18 +48,6 @@ class SKUEditor(QWidget):
         self.description_edit.textChanged.connect(lambda: self.data_changed.emit())
         basic_layout.addRow("Description:", self.description_edit)
         
-        # Pod Type Reference
-        self.pod_type_combo = QComboBox()
-        self.pod_type_combo.addItems(["C1", "C2", "SS3"])
-        self.pod_type_combo.currentTextChanged.connect(lambda: self.data_changed.emit())
-        basic_layout.addRow("Pod Type:", self.pod_type_combo)
-        
-        # Power Level Reference
-        self.power_level_combo = QComboBox()
-        self.power_level_combo.addItems(["Sport", "Pro", "Max"])
-        self.power_level_combo.currentTextChanged.connect(lambda: self.data_changed.emit())
-        basic_layout.addRow("Power Level:", self.power_level_combo)
-        
         layout.addWidget(basic_group)
         
         # Backlight Configuration Group
@@ -142,15 +130,6 @@ class SKUEditor(QWidget):
         self.sku_id_edit.setText(sku_data.get('sku', ''))
         self.description_edit.setText(sku_data.get('description', ''))
         
-        # Load pod type and power level
-        pod_type = sku_data.get('pod_type_ref', 'C1')
-        if pod_type in [self.pod_type_combo.itemText(i) for i in range(self.pod_type_combo.count())]:
-            self.pod_type_combo.setCurrentText(pod_type)
-        
-        power_level = sku_data.get('power_level_ref', 'Sport')
-        if power_level in [self.power_level_combo.itemText(i) for i in range(self.power_level_combo.count())]:
-            self.power_level_combo.setCurrentText(power_level)
-        
         # Load backlight configuration
         backlight_config = sku_data.get('backlight_config', {})
         if backlight_config:
@@ -181,8 +160,6 @@ class SKUEditor(QWidget):
         """Save current data to SKU data dictionary"""
         # Save basic information
         sku_data['description'] = self.description_edit.text()
-        sku_data['pod_type_ref'] = self.pod_type_combo.currentText()
-        sku_data['power_level_ref'] = self.power_level_combo.currentText()
         
         # Save backlight configuration
         backlight_config = {

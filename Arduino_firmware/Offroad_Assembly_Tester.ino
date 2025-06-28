@@ -1,6 +1,12 @@
 /* ======================================================================
- * TesterV4_Offroad
- * Version 4.2.0
+ * TesterV4_Offroad - SMT-Style Communication
+ * Version 5.0.0
+ * 
+ * Changes:
+ * - SMT-style short commands (TF, TP, TR, TD)
+ * - Reliability packet format with SEQ, CHK, END
+ * - Structured response formats
+ * - Event-driven button handling
  * =====================================================================*/
 #include <Wire.h>
 #include <avr/pgmspace.h>
@@ -176,7 +182,24 @@ inline bool i2cPing(uint8_t a) {
 inline void relaysOff(){ digitalWrite(PIN_RELAY_MAIN,RELAY_OFF); digitalWrite(PIN_RELAY_B1,RELAY_OFF); digitalWrite(PIN_RELAY_B2,RELAY_OFF); digitalWrite(PIN_VALVE,HIGH); DPRINTLN("All Relays OFF");}
 
 /* --------------------------- Sensor helpers ---------------------------- */
-inline bool readINA(float&v,float&i){ if(!sINA||i2c.rst) {v=NAN;i=NAN; return false;} v=ina.readBusVoltage()/1000.0f; i=ina.readCurrent()/1000.0f; if(!isfinite(v)||!isfinite(i)){v=NAN;i=NAN;return false;} return true;}
+inline bool readINA(float&v,float&i){ 
+    if(!sINA||i2c.rst) {v=NAN;i=NAN; return false;} 
+    
+    v=ina.readBusVoltage()/1000.0f; 
+    i=ina.readCurrent()/1000.0f; 
+    
+    // Check if I2C transaction failed
+    Wire.beginTransmission(0x40);  // INA260 address
+    if (Wire.endTransmission() != 0) {
+        v=NAN; i=NAN;
+        sINA = false;  // Mark sensor as failed
+        DPRINTLN("INA260 I2C failure detected");
+        return false;
+    }
+    
+    if(!isfinite(v)||!isfinite(i)){v=NAN;i=NAN;return false;} 
+    return true;
+}
 inline float readLuxSensor(){ return (sLux&&!i2c.rst)?veml.readLux():NAN; } // Renamed to avoid conflict
 inline bool readXY(float&x,float&y){ if(!sOPT||i2c.rst) {x=NAN;y=NAN; return false;} auto d=opt.readLuxData(); if(opt.getLastError()!=OPT4048::Error::NoError) {x=NAN;y=NAN;return false;} x=d.x; y=d.y; if(!isfinite(x)||!isfinite(y)){x=NAN;y=NAN;return false;} return true; }
 inline float readPSI(){ return (sMPR&&!i2c.rst)?mpr.readPressure()*0.0145038f:NAN; }
@@ -187,6 +210,27 @@ String formatFloat(float val, int prec) {
     if (isnan(val)) return "0.000"; // Or "ERR"
     return String(val, prec);
 }
+
+// Calculate simple checksum for reliability
+uint8_t calculateChecksum(const String& data) {
+    uint8_t checksum = 0;
+    for (size_t i = 0; i < data.length(); i++) {
+        checksum ^= data[i];
+    }
+    return checksum;
+}
+
+// Format checksum as 2-char hex string
+String formatChecksum(uint8_t checksum) {
+    char buf[3];
+    sprintf(buf, "%02X", checksum);
+    return String(buf);
+}
+
+// Global sequence tracking
+uint16_t lastReceivedSeq = 0;
+uint16_t responseSeq = 0;
+uint16_t globalSequenceNumber = 0;  // Auto-incrementing sequence for all responses
 
 Sample averageSamples(const Sample* s_arr, uint8_t count) {
     Sample a = {NAN, NAN, NAN, NAN, NAN}; // Initialize with NAN
@@ -258,8 +302,9 @@ void taskPressure(){
                 digitalWrite(PIN_VALVE,HIGH); // Close valve
                 float pFinalPressure = readPSI();
                 float delta = isnan(pInitialPressure) || isnan(pFinalPressure) ? NAN : pInitialPressure - pFinalPressure;
-                String s="RESULT:INITIAL="+formatFloat(pInitialPressure,3)+",DELTA="+formatFloat(delta,3);
-                sendLine(s);
+                // SMT-style compact format: PRESSURE:initial,delta
+                String result = "PRESSURE:" + formatFloat(pInitialPressure,3) + "," + formatFloat(delta,3);
+                sendReliableResponse(result, responseSeq);
                 sendLine("TEST_COMPLETE:PRESSURE");
                 curTest[0]='\0';
                 pstate=PState::IDLE;
@@ -309,7 +354,16 @@ void taskFunctionTest() {
                 break;
             }
             if (now >= fTestNextSampleTime && mainSampleCount < MAX_SAMPLES) {
-                if(sINA) readINA(sampMain[mainSampleCount].mv, sampMain[mainSampleCount].mi); else {sampMain[mainSampleCount].mv=NAN; sampMain[mainSampleCount].mi=NAN;}
+                if(sINA) {
+                    if (!readINA(sampMain[mainSampleCount].mv, sampMain[mainSampleCount].mi)) {
+                        // INA260 failed during test
+                        sendReliableResponse("ERROR:INA260_FAIL", responseSeq);
+                        relaysOff();
+                        curTest[0] = '\0';
+                        fState = FTestState::IDLE;
+                        return;
+                    }
+                } else {sampMain[mainSampleCount].mv=NAN; sampMain[mainSampleCount].mi=NAN;}
                 if(sLux) sampMain[mainSampleCount].lux = readLuxSensor(); else sampMain[mainSampleCount].lux=NAN;
                 if(sOPT) readXY(sampMain[mainSampleCount].x, sampMain[mainSampleCount].y); else {sampMain[mainSampleCount].x=NAN; sampMain[mainSampleCount].y=NAN;}
                 
@@ -342,7 +396,16 @@ void taskFunctionTest() {
                 break;
             }
             if (now >= fTestNextSampleTime && backSampleCount < MAX_SAMPLES) {
-                if(sINA) readINA(sampBack[backSampleCount].mv, sampBack[backSampleCount].mi); else {sampBack[backSampleCount].mv=NAN; sampBack[backSampleCount].mi=NAN;}
+                if(sINA) {
+                    if (!readINA(sampBack[backSampleCount].mv, sampBack[backSampleCount].mi)) {
+                        // INA260 failed during test
+                        sendReliableResponse("ERROR:INA260_FAIL", responseSeq);
+                        relaysOff();
+                        curTest[0] = '\0';
+                        fState = FTestState::IDLE;
+                        return;
+                    }
+                } else {sampBack[backSampleCount].mv=NAN; sampBack[backSampleCount].mi=NAN;}
                 if(sLux) sampBack[backSampleCount].lux = readLuxSensor(); else sampBack[backSampleCount].lux=NAN;
                 if(sOPT) readXY(sampBack[backSampleCount].x, sampBack[backSampleCount].y); else {sampBack[backSampleCount].x=NAN; sampBack[backSampleCount].y=NAN;}
                 
@@ -373,22 +436,27 @@ void taskFunctionTest() {
                                   ",BACK_SAMPLES=" + String(backSampleCount);
                 sendLine(debugAvg);
                 
-                String result = "RESULT:";
+                // SMT-style compact result format using char buffer
+                char result[256];
                 if (strcmp(fTestType, "POWER") == 0) {
-                    result += "MV_MAIN=" + formatFloat(M.mv, 3) + ",MI_MAIN=" + formatFloat(M.mi, 3) +
-                              ",MV_BACK=" + formatFloat(B.mv, 3) + ",MI_BACK=" + formatFloat(B.mi, 3);
+                    snprintf(result, sizeof(result), "POWER:MAIN=%.3f,%.3f;BACK=%.3f,%.3f",
+                             isnan(M.mv) ? 0.0 : M.mv, isnan(M.mi) ? 0.0 : M.mi,
+                             isnan(B.mv) ? 0.0 : B.mv, isnan(B.mi) ? 0.0 : B.mi);
                 } else if (strcmp(fTestType, "POWER_LUX") == 0) {
-                    result += "LUX_MAIN=" + formatFloat(M.lux, 2) + ",LUX_BACK=" + formatFloat(B.lux, 2);
+                    snprintf(result, sizeof(result), "POWER_LUX:MAIN=%.2f;BACK=%.2f",
+                             isnan(M.lux) ? 0.0 : M.lux, isnan(B.lux) ? 0.0 : B.lux);
                 } else if (strcmp(fTestType, "POWER_COLOR") == 0) {
-                    result += "X_MAIN=" + formatFloat(M.x, 3) + ",Y_MAIN=" + formatFloat(M.y, 3) +
-                              ",X_BACK=" + formatFloat(B.x, 3) + ",Y_BACK=" + formatFloat(B.y, 3);
+                    snprintf(result, sizeof(result), "POWER_COLOR:MAIN=%.3f,%.3f;BACK=%.3f,%.3f",
+                             isnan(M.x) ? 0.0 : M.x, isnan(M.y) ? 0.0 : M.y,
+                             isnan(B.x) ? 0.0 : B.x, isnan(B.y) ? 0.0 : B.y);
                 } else { // FUNCTION_TEST
-                    result += "MV_MAIN=" + formatFloat(M.mv, 3) + ",MI_MAIN=" + formatFloat(M.mi, 3) +
-                              ",LUX_MAIN=" + formatFloat(M.lux, 2) + ",X_MAIN=" + formatFloat(M.x, 3) + ",Y_MAIN=" + formatFloat(M.y, 3);
-                    result += ",MV_BACK=" + formatFloat(B.mv, 3) + ",MI_BACK=" + formatFloat(B.mi, 3) +
-                              ",LUX_BACK=" + formatFloat(B.lux, 2) + ",X_BACK=" + formatFloat(B.x, 3) + ",Y_BACK=" + formatFloat(B.y, 3);
+                    snprintf(result, sizeof(result), "TESTF:MAIN=%.3f,%.3f,%.2f,%.3f,%.3f;BACK=%.3f,%.3f,%.2f,%.3f,%.3f",
+                             isnan(M.mv) ? 0.0 : M.mv, isnan(M.mi) ? 0.0 : M.mi, isnan(M.lux) ? 0.0 : M.lux,
+                             isnan(M.x) ? 0.0 : M.x, isnan(M.y) ? 0.0 : M.y,
+                             isnan(B.mv) ? 0.0 : B.mv, isnan(B.mi) ? 0.0 : B.mi, isnan(B.lux) ? 0.0 : B.lux,
+                             isnan(B.x) ? 0.0 : B.x, isnan(B.y) ? 0.0 : B.y);
                 }
-                sendLine(result);
+                sendReliableResponse(String(result), responseSeq);
                 sendLine(String("TEST_COMPLETE:") + fTestType);
                 curTest[0] = '\0';
                 fState = FTestState::IDLE;
@@ -573,11 +641,16 @@ void taskDualBacklightTest() {
                 relaysOff();
                 Sample B1_avg = averageSamples(sampMain, b1SampleCount);
                 Sample B2_avg = averageSamples(sampBack, b2SampleCount);
-                String result = "RESULT:MV_BACK1=" + formatFloat(B1_avg.mv, 3) + ",MI_BACK1=" + formatFloat(B1_avg.mi, 3) +
-                                ",LUX_BACK1=" + formatFloat(B1_avg.lux, 2) + ",X_BACK1=" + formatFloat(B1_avg.x, 3) + ",Y_BACK1=" + formatFloat(B1_avg.y, 3);
-                result += ",MV_BACK2=" + formatFloat(B2_avg.mv, 3) + ",MI_BACK2=" + formatFloat(B2_avg.mi, 3) +
-                          ",LUX_BACK2=" + formatFloat(B2_avg.lux, 2) + ",X_BACK2=" + formatFloat(B2_avg.x, 3) + ",Y_BACK2=" + formatFloat(B2_avg.y, 3);
-                sendLine(result);
+                // SMT-style compact format using char buffer
+                char result[256];
+                snprintf(result, sizeof(result), "DUAL:B1=%.3f,%.3f,%.2f,%.3f,%.3f;B2=%.3f,%.3f,%.2f,%.3f,%.3f",
+                         isnan(B1_avg.mv) ? 0.0 : B1_avg.mv, isnan(B1_avg.mi) ? 0.0 : B1_avg.mi,
+                         isnan(B1_avg.lux) ? 0.0 : B1_avg.lux, isnan(B1_avg.x) ? 0.0 : B1_avg.x,
+                         isnan(B1_avg.y) ? 0.0 : B1_avg.y,
+                         isnan(B2_avg.mv) ? 0.0 : B2_avg.mv, isnan(B2_avg.mi) ? 0.0 : B2_avg.mi,
+                         isnan(B2_avg.lux) ? 0.0 : B2_avg.lux, isnan(B2_avg.x) ? 0.0 : B2_avg.x,
+                         isnan(B2_avg.y) ? 0.0 : B2_avg.y);
+                sendReliableResponse(String(result), responseSeq);
                 sendLine("TEST_COMPLETE:DUAL_BACKLIGHT");
                 curTest[0] = '\0';
                 dualState = DualState::IDLE;
@@ -601,7 +674,7 @@ void taskButton(){
 
     if(millis()-lastDebounceTime > 30){ // Debounce delay
         if(currentBtnState==BTN_ACTIVE && lastBtnState!=BTN_ACTIVE){ // Falling edge
-            sendLine(String("INFO:BUTTON_PRESSED"));
+            sendLine(String("EVENT:BUTTON_PRESSED")); // SMT-style event
             if(curTest[0] == '\0'){ // No test currently running
                 sendLine(String("TEST_STARTED:") + lastRunTestType);
                 // Call the appropriate begin function based on lastRunTestType
@@ -612,7 +685,7 @@ void taskButton(){
                     beginFunctionTest(String(lastRunTestType));
                 }
             } else {
-                sendLine("INFO:TEST_ALREADY_RUNNING");
+                sendLine("EVENT:TEST_ALREADY_RUNNING");
             }
         }
     }
@@ -661,7 +734,7 @@ void taskStream(){
 }
 
 /* --------------------------- Serial Command ---------------------------- */
-char serialCmdBuffer[128]; uint8_t serialCmdIdx=0; // Renamed to avoid conflict
+char serialCmdBuffer[256]; uint8_t serialCmdIdx=0; // Increased for reliability format
 void handleCmd(const String&);  // fwd
 void serialPoll(){
     while(Serial.available()){
@@ -681,69 +754,251 @@ void serialPoll(){
     }
 }
 
+// Parse command with reliability format
+struct ParsedCommand {
+    String command;
+    uint16_t sequence;
+    uint8_t checksum;
+    bool hasReliability;
+};
+
+ParsedCommand parseReliableCommand(const String& cmdStr) {
+    ParsedCommand parsed;
+    parsed.hasReliability = false;
+    parsed.sequence = 0;
+    parsed.checksum = 0;
+    
+    // Check for reliability format: CMD:SEQ=1234:CHK=A7
+    int seqPos = cmdStr.indexOf(":SEQ=");
+    int chkPos = cmdStr.indexOf(":CHK=");
+    
+    if (seqPos > 0 && chkPos > seqPos) {
+        // Extract command
+        parsed.command = cmdStr.substring(0, seqPos);
+        
+        // Extract sequence
+        int seqEnd = cmdStr.indexOf(':', seqPos + 5);
+        if (seqEnd > 0) {
+            parsed.sequence = cmdStr.substring(seqPos + 5, seqEnd).toInt();
+        }
+        
+        // Extract checksum
+        String chkStr = cmdStr.substring(chkPos + 5, chkPos + 7);
+        parsed.checksum = strtoul(chkStr.c_str(), NULL, 16);
+        
+        parsed.hasReliability = true;
+        
+        // Verify checksum
+        String dataToCheck = cmdStr.substring(0, chkPos);
+        uint8_t calcChecksum = calculateChecksum(dataToCheck);
+        if (calcChecksum != parsed.checksum) {
+            DPRINT("Checksum mismatch: calc=");
+            DVAR("", calcChecksum);
+            DPRINT(" recv=");
+            DVARLN("", parsed.checksum);
+            parsed.hasReliability = false;  // Mark as invalid
+            parsed.command = "";  // Clear command to prevent execution
+        }
+    } else {
+        // Simple command without reliability
+        parsed.command = cmdStr;
+    }
+    
+    return parsed;
+}
+
+// Send response with reliability format
+void sendReliableResponse(const String& data, uint16_t seq) {
+    String response = data;
+    
+    // Always add global sequence number
+    globalSequenceNumber++;
+    response += ":SEQ=" + String(globalSequenceNumber);
+    
+    // Add command sequence if provided
+    if (seq > 0) {
+        response += ":CMDSEQ=" + String(seq);
+    }
+    
+    uint8_t checksum = calculateChecksum(response);
+    response += ":CHK=" + formatChecksum(checksum) + ":END";
+    
+    sendLine(response);
+}
+
 /* --------------------------- Command Implement ------------------------- */
 void sendStatus(){
-    String s="STATUS:SENSORS=";
-    if(sINA) s+="INA260,"; if(sLux) s+="VEML7700,"; if(sOPT) s+="OPT4048,"; if(sMPR) s+="MPRLS";
-    if(s.endsWith(",")) s.remove(s.length()-1); // Remove trailing comma
-    sendLine(s);
-    sendLine(String("STATUS:TEST=")+ (curTest[0]?curTest:"IDLE"));
-    sendLine(String("STATUS:LASTRUN=")+ lastRunTestType);
+    char sensors[64];
+    strcpy(sensors, "STATUS:SENSORS=");
+    bool first = true;
+    if(sINA) { if(!first) strcat(sensors, ","); strcat(sensors, "INA260"); first = false; }
+    if(sLux) { if(!first) strcat(sensors, ","); strcat(sensors, "VEML7700"); first = false; }
+    if(sOPT) { if(!first) strcat(sensors, ","); strcat(sensors, "OPT4048"); first = false; }
+    if(sMPR) { if(!first) strcat(sensors, ","); strcat(sensors, "MPRLS"); first = false; }
+    sendLine(String(sensors));
+    
+    char testStatus[64];
+    snprintf(testStatus, sizeof(testStatus), "STATUS:TEST=%s", curTest[0] ? curTest : "IDLE");
+    sendLine(String(testStatus));
+    
+    char lastRunStatus[64];
+    snprintf(lastRunStatus, sizeof(lastRunStatus), "STATUS:LASTRUN=%s", lastRunTestType);
+    sendLine(String(lastRunStatus));
+}
+
+void sendSupplyVoltage() {
+    float voltage = NAN;
+    if (sINA && !i2c.rst) {
+        voltage = ina.readBusVoltage() / 1000.0f;
+    }
+    String response = "VOLTAGE:" + formatFloat(voltage, 3);
+    sendLine(response);
 }
 
 void handleCmd(const String& cmdStr){
     DPRINT("CMD RX: "); DVARLN("", cmdStr);
-    if(cmdStr.equalsIgnoreCase("ID")||cmdStr.equalsIgnoreCase("PING")){
-        pythonOn=true; sendLine("DIODE_DYNAMICS_TESTER_V4_PH3_REVIEWED"); return;
+    
+    // Parse command with reliability support
+    ParsedCommand parsed = parseReliableCommand(cmdStr);
+    
+    // Check if command was invalidated due to bad checksum
+    if (cmdStr.indexOf(":CHK=") > 0 && parsed.command.isEmpty()) {
+        sendReliableResponse("ERROR:BAD_CHECKSUM", 0);
+        return;
     }
-    if(cmdStr.equalsIgnoreCase("STATUS")){ sendStatus(); return; }
-    if(cmdStr.equalsIgnoreCase("START")){
-        streamOn=true; pythonOn=true; sendLine("STARTED"); return;
+    
+    String cmd = parsed.command;
+    
+    // Update sequence tracking if reliability format used
+    if (parsed.hasReliability) {
+        lastReceivedSeq = parsed.sequence;
+        responseSeq = parsed.sequence; // Echo back same sequence
+    } else {
+        responseSeq = 0; // No sequence for simple commands
     }
-    if(cmdStr.equalsIgnoreCase("STOP")){
+    
+    // SMT-style short commands with backward compatibility
+    if(cmd.equalsIgnoreCase("I") || cmd.equalsIgnoreCase("ID") || cmd.equalsIgnoreCase("PING")){
+        pythonOn=true; 
+        sendReliableResponse("ID:OFFROAD_TESTER_V5_SMT_STYLE", responseSeq);
+        return;
+    }
+    
+    // Voltage reading (SMT style)
+    if(cmd.equalsIgnoreCase("V")) {
+        sendSupplyVoltage();
+        return;
+    }
+    
+    // Button status (SMT style)
+    if(cmd.equalsIgnoreCase("B")) {
+        String state = digitalRead(PIN_BUTTON) == BTN_ACTIVE ? "PRESSED" : "RELEASED";
+        sendReliableResponse("BUTTON:" + state, responseSeq);
+        return;
+    }
+    
+    // All relays off (SMT style)
+    if(cmd.equalsIgnoreCase("X")) {
         relaysOff();
-        curTest[0]='\0'; // Stop current test indication
+        curTest[0]='\0';
         streamOn=false;
         // Reset all test state machines
         pstate=PState::IDLE;
         fState=FTestState::IDLE;
         rgbwState=RGBWState::IDLE;
         dualState=DualState::IDLE;
-        sendLine("STOPPED"); return;
+        sendReliableResponse("OK:ALL_OFF", responseSeq);
+        return;
     }
-    if(cmdStr.startsWith("STREAM:")){
-        String arg = cmdStr.substring(7);
-        streamOn = arg.equalsIgnoreCase("ON");
-        sendLine(String("STREAMING:")+(streamOn?"ON":"OFF")); return;
-    }
-    if(cmdStr.equalsIgnoreCase("SENSOR_CHECK")){
+    
+    // Sensor check (SMT style short)
+    if(cmd.equalsIgnoreCase("S") || cmd.equalsIgnoreCase("SENSOR_CHECK")){
         sINA = i2cPing(0x40) && ina.begin();
         sLux = i2cPing(0x10) && veml.begin();
         sOPT = i2cPing(0x44) && opt.begin();
         sMPR = i2cPing(0x18) && mpr.begin();
         if(sLux){ veml.setGain(VEML7700_GAIN_1); veml.setIntegrationTime(VEML7700_IT_100MS); }
         if(sOPT){ opt.setContinuousMode(); opt.setIntegrationTime(OPT4048::IntegrationTime::Integration_100ms); opt.setChannelEnable(true); }
-        sendLine("SENSOR_CHECK:COMPLETE"); return;
+        sendReliableResponse("OK:SENSOR_CHECK", responseSeq);
+        return;
     }
-    if(cmdStr.startsWith("TEST:")){
-        // Guard already present in individual beginTestX functions
-        String testTypeArg = cmdStr.substring(5);
-        if(testTypeArg.equalsIgnoreCase("PRESSURE")){ beginPressureTest(); return; }
-        if(testTypeArg.equalsIgnoreCase("RGBW_BACKLIGHT")){ beginRGBWTest(); return; }
-        if(testTypeArg.equalsIgnoreCase("DUAL_BACKLIGHT")){ beginDualBacklightTest(); return; }
-        if(testTypeArg.equalsIgnoreCase("FUNCTION_TEST") || testTypeArg.equalsIgnoreCase("POWER") ||
-           testTypeArg.equalsIgnoreCase("POWER_LUX") || testTypeArg.equalsIgnoreCase("POWER_COLOR")){
-            beginFunctionTest(testTypeArg); return;
+    
+    // Monitor/Stream control (SMT style)
+    if(cmd.equalsIgnoreCase("M:1") || cmd.equalsIgnoreCase("STREAM:ON")) {
+        streamOn = true;
+        pythonOn = true;
+        sendReliableResponse("OK:MONITORING_ON", responseSeq);
+        return;
+    }
+    if(cmd.equalsIgnoreCase("M:0") || cmd.equalsIgnoreCase("STREAM:OFF")) {
+        streamOn = false;
+        sendReliableResponse("OK:MONITORING_OFF", responseSeq);
+        return;
+    }
+    
+    // Test commands (SMT style short)
+    if(cmd.equalsIgnoreCase("TF") || cmd.equalsIgnoreCase("TEST:FUNCTION_TEST")) {
+        beginFunctionTest("FUNCTION_TEST");
+        return;
+    }
+    if(cmd.equalsIgnoreCase("TP") || cmd.equalsIgnoreCase("TEST:PRESSURE")) {
+        beginPressureTest();
+        return;
+    }
+    if(cmd.equalsIgnoreCase("TR") || cmd.equalsIgnoreCase("TEST:RGBW_BACKLIGHT")) {
+        beginRGBWTest();
+        return;
+    }
+    if(cmd.equalsIgnoreCase("TD") || cmd.equalsIgnoreCase("TEST:DUAL_BACKLIGHT")) {
+        beginDualBacklightTest();
+        return;
+    }
+    
+    // Legacy test command support
+    if(cmd.startsWith("TEST:")){
+        String testTypeArg = cmd.substring(5);
+        if(testTypeArg.equalsIgnoreCase("POWER") || testTypeArg.equalsIgnoreCase("POWER_LUX") ||
+           testTypeArg.equalsIgnoreCase("POWER_COLOR")){
+            beginFunctionTest(testTypeArg);
+            return;
         }
-        sendLine("ERROR:UNKNOWN_TEST:"+testTypeArg); return;
+        sendReliableResponse("ERROR:UNKNOWN_TEST:" + testTypeArg, responseSeq);
+        return;
     }
-    if(cmdStr.equalsIgnoreCase("RESET")){ NVIC_SystemReset(); }
-    else sendLine("ERROR:UNKNOWN_CMD:"+cmdStr);
+    
+    // Legacy commands
+    if(cmd.equalsIgnoreCase("STATUS")){ sendStatus(); return; }
+    if(cmd.equalsIgnoreCase("START")){
+        streamOn=true; pythonOn=true; sendReliableResponse("OK:STARTED", responseSeq); return;
+    }
+    if(cmd.equalsIgnoreCase("STOP")){
+        relaysOff();
+        curTest[0]='\0';
+        streamOn=false;
+        pstate=PState::IDLE;
+        fState=FTestState::IDLE;
+        rgbwState=RGBWState::IDLE;
+        dualState=DualState::IDLE;
+        sendReliableResponse("OK:STOPPED", responseSeq); return;
+    }
+    if(cmd.equalsIgnoreCase("RESET")){ NVIC_SystemReset(); }
+    
+    if(cmd.equalsIgnoreCase("RESET_SEQ")) {
+        // Reset sequence numbers (unified protocol enhancement)
+        globalSequenceNumber = 0;
+        lastReceivedSeq = 0;
+        responseSeq = 0;
+        sendReliableResponse("OK:SEQ_RESET", responseSeq);
+        return;
+    }
+    
+    sendReliableResponse("ERROR:UNKNOWN_CMD:" + cmd, responseSeq);
 }
 
 /* -------------------------------- Setup -------------------------------- */
 void setup(){
     Serial.begin(SERIAL_BAUD);
+    Serial.setTimeout(25);  // Reduce blocking time to 25ms
     delay(500); // Wait for serial to stabilize
     Wire.begin();
     Wire.setTimeout(I2C_TIMEOUT);
@@ -751,7 +1006,7 @@ void setup(){
     pinMode(PIN_RELAY_MAIN,OUTPUT); pinMode(PIN_RELAY_B1,OUTPUT); pinMode(PIN_RELAY_B2,OUTPUT);
     pinMode(PIN_VALVE,OUTPUT); pinMode(PIN_BUTTON,INPUT_PULLUP);
     relaysOff();
-    sendLine("=== Diode Dynamics Tester V4 Phase-3 Reviewed ===");
+    sendLine("=== Offroad Tester V5 SMT-Style Communication ===");
     // Initial sensor check on boot
     sINA = i2cPing(0x40) && ina.begin();
     sLux = i2cPing(0x10) && veml.begin();

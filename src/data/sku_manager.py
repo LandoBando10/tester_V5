@@ -43,10 +43,19 @@ class SKUManager:
                 # Clear existing data
                 self.skus_data.clear()
                 
-                # Load each JSON file in the directory
-                json_files = list(self.skus_dir.glob("*.json"))
+                # Load JSON files from subdirectories
+                json_files = []
+                # Check for mode-specific subdirectories
+                for subdir in ['offroad', 'smt', 'weight']:
+                    subdir_path = self.skus_dir / subdir
+                    if subdir_path.exists():
+                        json_files.extend(list(subdir_path.glob("*.json")))
+                
+                # Also check root directory for backward compatibility
+                json_files.extend(list(self.skus_dir.glob("*.json")))
+                
                 if not json_files:
-                    self.logger.warning(f"No SKU files found in {self.skus_dir}")
+                    self.logger.warning(f"No SKU files found in {self.skus_dir} or its subdirectories")
                     return False
                 
                 for json_file in json_files:
@@ -54,14 +63,23 @@ class SKUManager:
                         with open(json_file, 'r', encoding='utf-8') as f:
                             sku_data = json.load(f)
                         
-                        # Get SKU identifier from the data
-                        sku = sku_data.get('sku')
-                        if not sku:
-                            self.logger.warning(f"SKU file {json_file} missing 'sku' field")
-                            continue
+                        # Get SKU identifier from the filename (without .json extension)
+                        sku = json_file.stem
                         
-                        self.skus_data[sku] = sku_data
-                        self.logger.info(f"Loaded SKU: {sku} from {json_file.name}")
+                        # Determine mode based on directory
+                        if 'offroad' in json_file.parts:
+                            sku_data['mode'] = 'offroad'
+                        elif 'smt' in json_file.parts:
+                            sku_data['mode'] = 'smt'
+                        elif 'weight' in json_file.parts:
+                            sku_data['mode'] = 'weight'
+                        else:
+                            # For backward compatibility, files in root are assumed to be offroad
+                            sku_data['mode'] = 'offroad'
+                        
+                        mode = sku_data.get('mode', 'unknown')
+                        self.skus_data[f"{mode}:{sku}"] = sku_data
+                        self.logger.info(f"Loaded SKU: {sku} from {json_file.name} (mode: {mode})")
                         
                     except Exception as e:
                         self.logger.error(f"Failed to load SKU file {json_file}: {e}")
@@ -78,7 +96,8 @@ class SKUManager:
                     self.programming_config = {}
                 
                 self._loaded = len(self.skus_data) > 0
-                self.logger.info(f"Loaded {len(self.skus_data)} SKUs successfully")
+                unique_sku_count = len(self.get_all_skus())
+                self.logger.info(f"Loaded {unique_sku_count} unique SKUs ({len(self.skus_data)} total configurations)")
                 return self._loaded
                 
             except Exception as e:
@@ -93,12 +112,21 @@ class SKUManager:
     def get_all_skus(self) -> List[str]:
         """Get list of all available SKUs"""
         with self._lock:
-            return list(self.skus_data.keys())
+            # Extract unique SKU names from composite keys
+            unique_skus = set()
+            for key in self.skus_data.keys():
+                _, sku = key.split(':', 1)
+                unique_skus.add(sku)
+            return sorted(list(unique_skus))
     
     def get_sku(self, sku: str) -> Optional[Dict[str, Any]]:
         """Get complete SKU data"""
         with self._lock:
-            return self.skus_data.get(sku)
+            # Look for any mode:sku combination (return first found)
+            for key in self.skus_data:
+                if key.endswith(f":{sku}"):
+                    return self.skus_data[key]
+            return None
     
     def get_sku_info(self, sku: str) -> Optional[Dict[str, Any]]:
         """Get complete SKU information (alias for get_sku)"""
@@ -106,38 +134,43 @@ class SKUManager:
     
     def get_available_modes(self, sku: str) -> List[str]:
         """Get available test modes for a SKU"""
-        sku_data = self.get_sku(sku)
-        if not sku_data:
-            return []
-        
-        return sku_data.get("available_modes", [])
+        with self._lock:
+            available_modes = []
+            
+            # Check all keys for this SKU
+            for key in self.skus_data:
+                if key.endswith(f":{sku}"):
+                    mode, _ = key.split(':', 1)
+                    # Convert to UI format
+                    mode_map = {
+                        'offroad': 'Offroad',
+                        'smt': 'SMT',
+                        'weight': 'WeightChecking'
+                    }
+                    available_modes.append(mode_map.get(mode, mode))
+            
+            return available_modes
     
     def get_test_parameters(self, sku: str, mode: str) -> Optional[Dict[str, Any]]:
         """Get test parameters for a specific SKU and mode"""
-        sku_data = self.get_sku(sku)
-        if not sku_data:
+        with self._lock:
+            # Convert UI mode to internal format
+            mode_map = {
+                "Offroad": "offroad",
+                "SMT": "smt",
+                "WeightChecking": "weight"
+            }
+            internal_mode = mode_map.get(mode, mode.lower())
+            
+            # Direct composite key lookup
+            composite_key = f"{internal_mode}:{sku}"
+            if composite_key in self.skus_data:
+                sku_data = self.skus_data[composite_key]
+                params = sku_data.copy()
+                params['sku'] = sku
+                return params
+            
             return None
-        
-        # Map modes to parameter keys
-        mode_map = {
-            "Offroad": "offroad_testing",
-            "SMT": "smt_testing",
-            "WeightChecking": "weight_testing"
-        }
-        
-        param_key = mode_map.get(mode)
-        if param_key and param_key in sku_data:
-            params = sku_data[param_key].copy()
-            
-            # Add SKU info to parameters
-            params['sku'] = sku
-            params['description'] = sku_data.get('description', '')
-            params['pod_type'] = sku_data.get('pod_type', '')
-            params['power_level'] = sku_data.get('power_level', '')
-            
-            return params
-        
-        return None
     
     def get_programming_config(self, sku: str) -> Optional[Dict[str, Any]]:
         """Get programming configuration for a specific SKU"""

@@ -1,0 +1,12 @@
+{
+  "description": "Product Beta - SS3 Max High Output (Weight Testing)",
+
+  "limits": {
+    "weight_g": {
+      "min": 210.0,
+      "max": 215.0
+    }
+  },
+
+  "tare_g": 0.5
+}

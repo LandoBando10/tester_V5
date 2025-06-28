@@ -1,0 +1,95 @@
+{
+  "description": "Product Delta - SS3 Pro Balanced (SMT Panel Testing)",
+
+  "panel_layout": {
+    "rows": 1,
+    "columns": 1,
+    "total_boards": 1,
+    "board_positions": {
+      "1": [1, 1]
+    }
+  },
+
+  "relay_mapping": {
+    "1": {
+      "board": 1,
+      "function": "mainbeam"
+    },
+    "2": {
+      "board": 1,
+      "function": "backlight"
+    },
+    "3": {
+      "board": 1,
+      "function": "indicator_left"
+    },
+    "4": {
+      "board": 1,
+      "function": "indicator_right"
+    },
+    "5": null,
+    "6": null,
+    "7": null,
+    "8": null
+  },
+
+  "test_sequence": [
+    {
+      "function": "mainbeam",
+      "limits": {
+        "current_a": {
+          "min": 2.6,
+          "max": 3.2
+        },
+        "voltage_v": {
+          "min": 11.5,
+          "max": 12.5
+        }
+      }
+    },
+    {
+      "function": "backlight",
+      "limits": {
+        "current_a": {
+          "min": 0.015,
+          "max": 0.035
+        },
+        "voltage_v": {
+          "min": 11.5,
+          "max": 12.5
+        }
+      }
+    },
+    {
+      "function": "indicator_left",
+      "limits": {
+        "current_a": {
+          "min": 0.01,
+          "max": 0.05
+        },
+        "voltage_v": {
+          "min": 11.5,
+          "max": 12.5
+        }
+      }
+    },
+    {
+      "function": "indicator_right",
+      "limits": {
+        "current_a": {
+          "min": 0.01,
+          "max": 0.05
+        },
+        "voltage_v": {
+          "min": 11.5,
+          "max": 12.5
+        }
+      }
+    }
+  ],
+
+  "programming": {
+    "enabled": false,
+    "note": "Pre-programmed components - no ISP required"
+  }
+}

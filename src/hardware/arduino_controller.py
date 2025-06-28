@@ -98,6 +98,16 @@ class ArduinoController(ThreadCleanupMixin):
     def connect(self, port: str) -> bool:
         """Connect to Arduino on specified port"""
         if self.serial.connect(port):
+            # Reset sequence numbers on both sides (unified protocol)
+            try:
+                reset_response = self.serial.query("RESET_SEQ", response_timeout=0.5)
+                if reset_response and "OK:SEQ_RESET" in reset_response:
+                    self.logger.debug("Sequence numbers reset successfully")
+                else:
+                    self.logger.debug("RESET_SEQ not supported by firmware (legacy compatibility)")
+            except Exception as e:
+                self.logger.debug(f"RESET_SEQ command failed (legacy firmware): {e}")
+            
             # Test communication
             if self.test_communication():
                 self.logger.info(f"Arduino connected successfully on {port}")

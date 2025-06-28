@@ -37,10 +37,10 @@ const bool RELAY_OFF = HIGH;  // Change to LOW if using active-HIGH relays
 // Pin definitions
 const int RELAY_PINS[] = {
   2, 3, 4, 5, 6, 7, 8, 9,        // Relays 1-8 (original pins)
-  10, 11, 12, 13, 14, 15, 16, 17 // Relays 9-16 (pin 10-13, A0-A3)
+  10, 11, 12, 21, 14, 15, 16, 17 // Relays 9-16 (pin 10-11, 21 (A7), 14-17 (A0-A3))
 };
 const int NUM_RELAYS = 16;
-const int BUTTON_PIN = 18; // A4 (moved from pin 10)
+const int BUTTON_PIN = 20; // A6 (moved from A4 to avoid I2C conflict)
 const int LED_PIN = LED_BUILTIN;
 
 // INA260 sensor
@@ -53,14 +53,41 @@ bool currentButtonPressed = false;  // Current debounced state
 unsigned long lastButtonTime = 0;
 const unsigned long DEBOUNCE_DELAY = 50;
 
+// Global sequence tracking (unified with Offroad firmware)
+uint16_t lastReceivedSeq = 0;      // Last sequence number received from host
+uint16_t responseSeq = 0;          // Sequence to echo back in CMDSEQ
+uint16_t globalSequenceNumber = 0;  // Auto-incrementing sequence for all responses
+
 // Timing constants
 const int RELAY_STABILIZATION_MS = 15;
 const int MEASUREMENT_SAMPLES = 6;
 const int SAMPLE_INTERVAL_MS = 17;
 const int INTER_RELAY_DELAY_MS = 10;  // Delay between relay measurements
 
+// Parse command with reliability format (unified with Offroad)
+struct ParsedCommand {
+    String command;
+    uint16_t sequence;
+    uint8_t checksum;
+    bool hasReliability;
+};
+
+// Function prototypes
+void testPanelSelective(String relayList, unsigned int seq = 0);
+void getSupplyVoltage(unsigned int seq = 0);
+void measureRelayValues(int relayIndex, float &voltage, float &current);
+void allRelaysOff();
+void checkButton();
+bool parseRelayList(String relayList, bool relaysToTest[], int &count);
+byte calculateChecksum(String data);
+String formatChecksum(byte checksum);
+void sendReliableResponse(const String& data, uint16_t seq = 0);
+ParsedCommand parseReliableCommand(const String& cmdStr);
+void processCommand(String command);
+
 void setup() {
   Serial.begin(115200);
+  Serial.setTimeout(25);  // Reduce blocking time to 25ms
   
   // Wait for USB serial port to connect (needed for native USB boards)
   unsigned long t0 = millis();
@@ -94,6 +121,43 @@ void setup() {
   Serial.println("SMT_BATCH_TESTER_V3_READY");
 }
 
+// Calculate XOR checksum for a string
+byte calculateChecksum(String data) {
+  byte checksum = 0;
+  for (int i = 0; i < data.length(); i++) {
+    checksum ^= data[i];
+  }
+  return checksum;
+}
+
+// Send response with sequence number and checksum
+// Format checksum as 2-character uppercase hex (unified with Offroad)
+String formatChecksum(byte checksum) {
+  char buf[3];
+  sprintf(buf, "%02X", checksum);
+  return String(buf);
+}
+
+void sendReliableResponse(const String& data, uint16_t seq) {
+  String response = data;
+  
+  // Always add global sequence number
+  globalSequenceNumber++;
+  response += ":SEQ=" + String(globalSequenceNumber);
+  
+  // Add command sequence if provided
+  if (seq > 0) {
+    response += ":CMDSEQ=" + String(seq);
+  }
+  
+  // Calculate and add checksum (2-char uppercase hex)
+  byte checksum = calculateChecksum(response);
+  response += ":CHK=" + formatChecksum(checksum) + ":END";
+  
+  Serial.println(response);
+  Serial.flush();
+}
+
 void loop() {
   // Check for button events
   checkButton();
@@ -108,36 +172,107 @@ void loop() {
   delay(1); // Small delay to prevent overwhelming the system
 }
 
+// Parse command with reliability format (unified with Offroad)
+ParsedCommand parseReliableCommand(const String& cmdStr) {
+    ParsedCommand parsed;
+    parsed.hasReliability = false;
+    parsed.sequence = 0;
+    parsed.checksum = 0;
+    
+    // Check for reliability format: CMD:SEQ=1234:CHK=A7
+    int seqPos = cmdStr.indexOf(":SEQ=");
+    int chkPos = cmdStr.indexOf(":CHK=");
+    
+    if (seqPos > 0 && chkPos > seqPos) {
+        // Extract command
+        parsed.command = cmdStr.substring(0, seqPos);
+        
+        // Extract sequence
+        int seqEnd = cmdStr.indexOf(':', seqPos + 5);
+        if (seqEnd > 0) {
+            parsed.sequence = cmdStr.substring(seqPos + 5, seqEnd).toInt();
+        }
+        
+        // Extract checksum
+        String chkStr = cmdStr.substring(chkPos + 5, chkPos + 7);
+        parsed.checksum = strtoul(chkStr.c_str(), NULL, 16);
+        
+        parsed.hasReliability = true;
+        
+        // Verify checksum
+        String dataToCheck = cmdStr.substring(0, chkPos);
+        uint8_t calcChecksum = calculateChecksum(dataToCheck);
+        if (calcChecksum != parsed.checksum) {
+            parsed.hasReliability = false;  // Mark as invalid
+            parsed.command = "";  // Clear command to prevent execution
+        }
+    } else {
+        // Simple command without reliability
+        parsed.command = cmdStr;
+    }
+    
+    return parsed;
+}
+
 void processCommand(String command) {
   digitalWrite(LED_PIN, HIGH); // Indicate activity
   
-  if (command.startsWith("TX:")) {
-    // Test specific relays (the only test command)
-    testPanelSelective(command.substring(3));
+  // Parse command with unified approach
+  ParsedCommand parsed = parseReliableCommand(command);
+  
+  // Handle invalid checksum
+  if (command.indexOf(":CHK=") > 0 && parsed.command.isEmpty()) {
+    sendReliableResponse("ERROR:BAD_CHECKSUM", 0);
+    digitalWrite(LED_PIN, LOW);
+    return;
   }
-  else if (command == "X") {
+  
+  // Update sequence tracking
+  if (parsed.hasReliability) {
+    lastReceivedSeq = parsed.sequence;
+    responseSeq = parsed.sequence; // Echo back same sequence
+  } else {
+    responseSeq = 0; // No sequence for simple commands
+  }
+  
+  // Extract base command
+  String baseCommand = parsed.command;
+  }
+  
+  if (baseCommand.startsWith("TX:")) {
+    // Test specific relays (the only test command)
+    testPanelSelective(baseCommand.substring(3), responseSeq);
+  }
+  else if (baseCommand == "X") {
     // Turn all relays off
     allRelaysOff();
-    Serial.println("OK:ALL_OFF");
+    sendReliableResponse("OK:ALL_OFF", responseSeq);
   }
-  else if (command == "I") {
+  else if (baseCommand == "I") {
     // Get board info
-    Serial.println("ID:SMT_BATCH_TESTER_V3.0_16RELAY");
+    sendReliableResponse("ID:SMT_BATCH_TESTER_V3.0_16RELAY", responseSeq);
   }
-  else if (command == "B") {
+  else if (baseCommand == "B") {
     // Get current button status (use debounced state)
     if (currentButtonPressed) {
-      Serial.println("BUTTON:PRESSED");
+      sendReliableResponse("BUTTON:PRESSED", responseSeq);
     } else {
-      Serial.println("BUTTON:RELEASED");
+      sendReliableResponse("BUTTON:RELEASED", responseSeq);
     }
   }
-  else if (command == "V") {
+  else if (baseCommand == "V") {
     // Get supply voltage without turning on any relays
-    getSupplyVoltage();
+    getSupplyVoltage(responseSeq);
+  }
+  else if (baseCommand == "RESET_SEQ") {
+    // Reset sequence numbers (unified protocol enhancement)
+    globalSequenceNumber = 0;
+    lastReceivedSeq = 0;
+    responseSeq = 0;
+    sendReliableResponse("OK:SEQ_RESET", responseSeq);
   }
   else {
-    Serial.println("ERROR:UNKNOWN_COMMAND");
+    sendReliableResponse("ERROR:UNKNOWN_COMMAND", responseSeq);
   }
   
   digitalWrite(LED_PIN, LOW);
@@ -154,10 +289,27 @@ void measureRelayValues(int relayIndex, float &voltage, float &current) {
   // Take multiple samples for accuracy
   float totalVoltage = 0;
   float totalCurrent = 0;
+  bool sensorFailed = false;
   
   for (int i = 0; i < MEASUREMENT_SAMPLES; i++) {
-    totalVoltage += INA_OK ? ina260.readBusVoltage() : 0.0;
-    totalCurrent += INA_OK ? ina260.readCurrent() : 0.0;
+    if (INA_OK) {
+      float v = ina260.readBusVoltage();
+      float c = ina260.readCurrent();
+      
+      // Check if the I2C transaction failed
+      Wire.beginTransmission(0x40);  // INA260 default address
+      if (Wire.endTransmission() != 0) {
+        sensorFailed = true;
+        INA_OK = false;
+        break;
+      }
+      
+      totalVoltage += v;
+      totalCurrent += c;
+    } else {
+      totalVoltage += 0.0;
+      totalCurrent += 0.0;
+    }
     
     if (i < MEASUREMENT_SAMPLES - 1) {
       delay(SAMPLE_INTERVAL_MS);
@@ -168,8 +320,13 @@ void measureRelayValues(int relayIndex, float &voltage, float &current) {
   digitalWrite(RELAY_PINS[relayIndex], RELAY_OFF);
   
   // Calculate averages (convert mV to V and mA to A)
-  voltage = totalVoltage / MEASUREMENT_SAMPLES / 1000.0;
-  current = totalCurrent / MEASUREMENT_SAMPLES / 1000.0;
+  if (!sensorFailed && INA_OK) {
+    voltage = totalVoltage / MEASUREMENT_SAMPLES / 1000.0;
+    current = totalCurrent / MEASUREMENT_SAMPLES / 1000.0;
+  } else {
+    voltage = -1.0;  // Indicate sensor failure
+    current = -1.0;
+  }
 }
 
 
@@ -181,9 +338,9 @@ void allRelaysOff() {
 }
 
 // Get supply voltage without activating any relays
-void getSupplyVoltage() {
+void getSupplyVoltage(unsigned int seq) {
   if (!INA_OK) {
-    Serial.println("VOLTAGE:0.000");
+    sendReliableResponse("VOLTAGE:0.000", seq);
     return;
   }
   
@@ -201,10 +358,9 @@ void getSupplyVoltage() {
   // Calculate average and convert mV to V
   float voltage = totalVoltage / samples / 1000.0;
   
-  // Send result
-  Serial.print("VOLTAGE:");
-  Serial.println(voltage, 3);
-  Serial.flush();  // Ensure complete transmission
+  // Send result with checksum
+  String response = "VOLTAGE:" + String(voltage, 3);
+  sendReliableResponse(response, seq);
   delay(5);  // Small delay to prevent buffer conflicts
 }
 
@@ -228,13 +384,13 @@ void checkButton() {
       }
       lastButtonTime = millis();
     }
-    lastButtonState = currentState;
   }
+  lastButtonState = currentState;
 }
 
 
 // Parse relay list and test specific relays
-void testPanelSelective(String relayList) {
+void testPanelSelective(String relayList, unsigned int seq) {
   // Array to store which relays to test
   bool relaysToTest[NUM_RELAYS] = {false};
   int relayCount = 0;
@@ -248,18 +404,19 @@ void testPanelSelective(String relayList) {
   } else {
     // Parse the relay list
     if (!parseRelayList(relayList, relaysToTest, relayCount)) {
-      Serial.println("ERROR:INVALID_RELAY_LIST");
+      sendReliableResponse("ERROR:INVALID_RELAY_LIST", seq);
       return;
     }
     
     if (relayCount == 0) {
-      Serial.println("ERROR:EMPTY_RELAY_LIST");
+      sendReliableResponse("ERROR:EMPTY_RELAY_LIST", seq);
       return;
     }
   }
   
   // Test selected relays
-  String result = "PANELX:";
+  char result[200];  // Buffer for response (16 relays * ~12 chars each)
+  strcpy(result, "PANELX:");
   bool firstRelay = true;
   
   for (int i = 0; i < NUM_RELAYS; i++) {
@@ -267,9 +424,18 @@ void testPanelSelective(String relayList) {
       float voltage, current;
       measureRelayValues(i, voltage, current);
       
-      // Append to result string with relay number
-      if (!firstRelay) result += ";";
-      result += String(i + 1) + "=" + String(voltage, 3) + "," + String(current, 3);
+      // Check for sensor failure
+      if (voltage < 0 || current < 0) {
+        sendReliableResponse("ERROR:INA260_FAIL", seq);
+        allRelaysOff();  // Ensure all relays are off
+        return;
+      }
+      
+      // Append to result buffer with relay number
+      char relayData[20];
+      if (!firstRelay) strcat(result, ";");
+      snprintf(relayData, sizeof(relayData), "%d=%.3f,%.3f", i + 1, voltage, current);
+      strcat(result, relayData);
       firstRelay = false;
       
       // Small delay between relays
@@ -278,7 +444,7 @@ void testPanelSelective(String relayList) {
     }
   }
   
-  Serial.println(result);
+  sendReliableResponse(String(result), seq);
 }
 
 

@@ -55,6 +55,16 @@ class SMTTest(BaseTest):
         if hasattr(self, 'spec_calculation_callback'):
             self.spec_calculation_callback(sku)
     
+    def _handle_arduino_error(self, error_type: str, message: str):
+        """Handle errors reported by Arduino"""
+        self.logger.error(f"Arduino error - {error_type}: {message}")
+        
+        # Add to failures list for test result
+        if error_type == "INA260_FAIL":
+            self.add_failure("Current Sensor", "INA260 sensor failure - check I2C connections")
+        else:
+            self.add_failure("Arduino Error", f"{error_type}: {message}")
+    
     def _initialize_programmers(self):
         """Initialize configured programmers"""
         if not self.programming_config:
@@ -93,6 +103,10 @@ class SMTTest(BaseTest):
         """Initialize SMT Arduino - simplified setup"""
         try:
             self.update_progress("Setting up SMT test...", 10)
+            
+            # Set up error callback to handle sensor failures
+            if hasattr(self.arduino, 'set_error_callback'):
+                self.arduino.set_error_callback(self._handle_arduino_error)
 
             # Only connect if we own the Arduino instance
             if self.owns_arduino and not self.arduino.is_connected():

@@ -1,0 +1,54 @@
+{
+  "description": "Product Gamma - C2 Sport Economy",
+
+  "tests": {
+    "pressure": true,
+    "power": true,
+    "brightness": true,
+    "color": true
+  },
+
+  "configuration": {
+    "backlight_type": "rgbw",
+    "relay_mapping": {
+      "main": 2,
+      "backlight_1": 3
+    }
+  },
+
+  "limits": {
+    "mainbeam_current_a": {"min": 0.6, "max": 0.9},
+    "mainbeam_voltage_v": {"min": 11.5, "max": 13.0},
+    "mainbeam_brightness_lux": {"min": 1500, "max": 1900},
+    "mainbeam_color_x": {"target": 0.460, "tolerance": 0.020},
+    "mainbeam_color_y": {"target": 0.420, "tolerance": 0.020},
+
+    "backlight_current_a": {"min": 0.04, "max": 0.12},
+    "backlight_voltage_v": {"min": 11.5, "max": 13.0},
+
+    "rgbw_red": {
+      "x": 0.650, 
+      "y": 0.330, 
+      "tolerance": 0.020,
+      "lux": {"min": 80, "max": 150}
+    },
+    "rgbw_green": {
+      "x": 0.300, 
+      "y": 0.600, 
+      "tolerance": 0.020,
+      "lux": {"min": 100, "max": 180}
+    },
+    "rgbw_blue": {
+      "x": 0.150, 
+      "y": 0.060, 
+      "tolerance": 0.020,
+      "lux": {"min": 40, "max": 80}
+    },
+    "rgbw_white": {
+      "x": 0.313, 
+      "y": 0.329, 
+      "tolerance": 0.020,
+      "lux": {"min": 120, "max": 200}
+    }
+  }
+}

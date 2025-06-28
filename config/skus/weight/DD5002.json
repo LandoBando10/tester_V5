@@ -1,0 +1,12 @@
+{
+  "description": "Product Gamma - C2 Sport Economy (Weight Testing)",
+
+  "limits": {
+    "weight_g": {
+      "min": 180.0,
+      "max": 185.0
+    }
+  },
+
+  "tare_g": 0.0
+}

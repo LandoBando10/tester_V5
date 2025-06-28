@@ -153,11 +153,11 @@ class ConnectionDialog(QDialog):
         # Auto-connect flag for startup
         self._auto_connect_enabled = True
         self._startup_scan_done = False
+        
+        # Store preloaded port information
+        self.preloaded_port_info = {}
 
         self.setup_ui()
-        
-        # Load ports initially without UI popup
-        self._load_ports_silently()
 
     def setup_ui(self):
         """Setup the connection dialog UI"""
@@ -288,26 +288,39 @@ class ConnectionDialog(QDialog):
 
         logger.debug("ConnectionDialog UI setup complete.")
 
-    def _load_ports_silently(self):
-        """Load ports initially without showing any dialog"""
+    def set_preloaded_ports(self, port_info: Dict[str, str]):
+        """Set preloaded port information from splash screen scan"""
         try:
-            logger.info("Loading ports silently on startup...")
-            temp_serial = SerialManager()
-            ports = temp_serial.get_available_ports()
+            logger.info(f"Setting preloaded port info: {port_info}")
+            self.preloaded_port_info = port_info
             
-            if not ports:
-                logger.info("No serial ports found during startup")
+            if not port_info:
+                logger.info("No preloaded port info provided")
                 return
+                
+            # Clear existing items
+            self.arduino_port_combo.clear()
+            self.scale_port_combo.clear()
             
-            # Just populate combo boxes with port names for now
-            port_items = [f"{port} (Unknown)" for port in sorted(ports)]
-            self.arduino_port_combo.addItems(port_items)
-            self.scale_port_combo.addItems(port_items)
+            # Populate combo boxes with identified devices
+            for port, device_type in sorted(port_info.items()):
+                display_text = f"{port} ({device_type})"
+                self.arduino_port_combo.addItem(display_text)
+                self.scale_port_combo.addItem(display_text)
             
-            logger.info(f"Loaded {len(ports)} ports into combo boxes")
+            logger.info(f"Populated combo boxes with {len(port_info)} preloaded ports")
+            
+            # Update cache with preloaded info
+            for port, device_type in port_info.items():
+                self._device_cache[port] = DeviceInfo(
+                    port=port,
+                    device_type=device_type,
+                    timestamp=time.time()
+                )
+            self._save_device_cache()
             
         except Exception as e:
-            logger.error(f"Error loading ports silently: {e}")
+            logger.error(f"Error setting preloaded ports: {e}")
     
     def quick_refresh_ports(self):
         """Quick refresh using cached device types"""
@@ -772,10 +785,6 @@ class ConnectionDialog(QDialog):
                 self.arduino_connected = True
                 self.arduino_port = port
                 
-                # Update voltage monitor with Arduino controller if in SMT mode
-                if current_mode == "SMT" and hasattr(self.parent(), 'voltage_monitor'):
-                    logger.info("Setting Arduino controller on voltage monitor")
-                    self.parent().voltage_monitor.set_arduino_controller(arduino)
                 
                 self.arduino_status_label.setText(f"Status: Connected ({port}) - {firmware_type}")
                 self.arduino_status_label.setStyleSheet("color: green; font-weight: bold;")
@@ -800,10 +809,6 @@ class ConnectionDialog(QDialog):
     def disconnect_arduino(self):
         """Disconnect Arduino"""
         try:
-            # Stop voltage monitor if active
-            if hasattr(self.parent(), 'voltage_monitor'):
-                self.parent().voltage_monitor.stop_monitoring()
-                logger.info("Stopped voltage monitoring")
                 
             if self.parent().arduino_controller:
                 # Stop reading loop if running

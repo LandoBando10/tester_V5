@@ -1,0 +1,30 @@
+{
+  "description": "Product Beta - SS3 Max High Output",
+
+  "tests": {
+    "pressure": true,
+    "power": true,
+    "brightness": true,
+    "color": true
+  },
+
+  "configuration": {
+    "backlight_type": "dual",
+    "relay_mapping": {
+      "main": 2,
+      "backlight_1": 3,
+      "backlight_2": 4
+    }
+  },
+
+  "limits": {
+    "mainbeam_current_a": {"min": 2.0, "max": 2.5},
+    "mainbeam_voltage_v": {"min": 11.5, "max": 13.0},
+    "mainbeam_brightness_lux": {"min": 4800, "max": 5800},
+    "mainbeam_color_x": {"target": 0.430, "tolerance": 0.010},
+    "mainbeam_color_y": {"target": 0.400, "tolerance": 0.010},
+
+    "backlight_current_a": {"min": 0.08, "max": 0.18},
+    "backlight_voltage_v": {"min": 11.5, "max": 13.0}
+  }
+}

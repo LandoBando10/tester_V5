@@ -5,11 +5,15 @@ Main entry point for the testing application
 Supports both Offroad and SMT testing modes
 """
 
+print("DEBUG: Python script started, importing modules...")
+
 import sys
 import os
 import logging
 import argparse
 from pathlib import Path
+
+print("DEBUG: Basic imports successful")
 
 # Add the project root to Python path
 project_root = Path(__file__).parent
@@ -436,6 +440,7 @@ def run_smt_setup(port: str):
 
 def main():
     """Main application entry point"""
+    print("DEBUG: Entered main() function")
     # Parse command line arguments
     parser = argparse.ArgumentParser(
         description="Diode Dynamics Production Test System",
@@ -519,6 +524,7 @@ def main():
     
     args = parser.parse_args()
     
+    print("DEBUG: Arguments parsed successfully")
     print("Diode Dynamics Production Test System")
     print("=" * 40)
 
@@ -595,6 +601,7 @@ def main():
         sys.exit(1)
 
 if __name__ == "__main__":
+    print("DEBUG: Script started, entering main block")
     try:
         main()
     except Exception as e:
@@ -602,4 +609,6 @@ if __name__ == "__main__":
         # If logging is not set up yet (e.g., error in setup_logging itself), this won't be logged to file.
         logging.critical(f"Unhandled exception at the very top level: {e}", exc_info=True)
         print(f"CRITICAL UNHANDLED EXCEPTION: {e}")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
