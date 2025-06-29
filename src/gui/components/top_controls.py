@@ -223,8 +223,9 @@ class TopControlsWidget(QWidget):
         # Set initialization flag to prevent signals during setup
         self.sku_combo._is_initializing = True
         
-        # Block signals during population to prevent unwanted selections
+        # Block both Qt signals and custom signals during population
         self.sku_combo.blockSignals(True)
+        self.sku_combo.blockCustomSignals(True)
         
         self.sku_combo.clear()
         self.sku_combo.addItem("-- Select SKU --")
@@ -247,8 +248,9 @@ class TopControlsWidget(QWidget):
         # Clear initialization flag
         self.sku_combo._is_initializing = False
         
-        # Re-enable signals
+        # Re-enable both Qt signals and custom signals
         self.sku_combo.blockSignals(False)
+        self.sku_combo.blockCustomSignals(False)
         
         # Log final selection
         final_selection = self.sku_combo.currentText()

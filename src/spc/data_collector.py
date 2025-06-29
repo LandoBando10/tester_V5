@@ -19,7 +19,7 @@ import threading
 import numpy as np
 
 from src.spc.spc_calculator import SPCCalculator, ControlLimits
-from spc.spc_config import (
+from config.spc.spc_config import (
     SUBGROUP_SIZE,
     BASELINE_SUBGROUPS,
     MAX_HISTORICAL_SUBGROUPS,
@@ -29,7 +29,7 @@ from spc.spc_config import (
     LIMITS_FILE_PATTERN,
     SPECS_FILE_PATTERN
 )
-from spc.spec_deriver import SpecDeriver, DerivedSpecs
+from config.spc.spec_deriver import SpecDeriver, DerivedSpecs
 
 
 class SPCDataCollector:

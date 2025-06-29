@@ -37,7 +37,8 @@
       "Bash(for file in *.json)",
       "Bash(do echo \"Validating $file...\")",
       "Bash(for file in config/skus/*.json)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(time:*)"
     ],
     "deny": []
   }

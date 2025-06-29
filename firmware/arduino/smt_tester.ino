@@ -1,29 +1,31 @@
 /*
- * SMT Simple Tester - 16-relay Arduino firmware for SMT board testing
- * Version: 3.0.0
+ * SMT Tester - Arduino firmware for Surface Mount Technology (SMT) board testing
+ * Version: 1.0.0
  * 
- * Commands:
- * - TX:1,2,5,6: Test specific relays (supports comma-separated and ranges)
- * - TX:ALL: Test all 16 relays
- * - X: Turn all relays off
- * - I: Get board ID/info
- * - B: Get button status
- * - V: Get supply voltage (no relay activation)
+ * Description:
+ * This firmware controls a 16-relay test fixture for SMT board validation.
+ * It measures voltage and current through each relay circuit using an INA260
+ * power monitor to verify proper board assembly and component functionality.
  * 
- * Events (sent automatically):
- * - EVENT:BUTTON_PRESSED - Sent when button is pressed
- * - EVENT:BUTTON_RELEASED - Sent when button is released
+ * Hardware Requirements:
+ * - Arduino board with 16 digital outputs for relay control
+ * - INA260 I2C power monitor for voltage/current measurements
+ * - Button input on pin A6 for manual test triggering
+ * - 16 relay modules (active-LOW configuration)
  * 
- * Response format:
- * - TX command: PANELX:1=v1,i1;2=v2,i2;...
+ * Communication Protocol:
+ * - Serial: 115200 baud
+ * - Commands include sequence numbers and checksums for reliability
+ * - Responses echo command sequence for synchronization
  * 
- * Examples:
- * - TX:1,2,5,6 - Test relays 1, 2, 5, and 6
- * - TX:1-4,9-12 - Test relays 1-4 and 9-12
- * - TX:1-8 - Test relays 1-8 (replaces old T command)
- * - TX:ALL - Test all 16 relays
- * 
- * v3.0.0: 16-relay support only, no backward compatibility
+ * Main Commands:
+ * - TX:1,2,5,6  Test specific relays (comma-separated or ranges)
+ * - TX:ALL      Test all 16 relays in sequence
+ * - X           Turn all relays off
+ * - I           Get firmware identification
+ * - B           Get button status (PRESSED/RELEASED)
+ * - V           Get supply voltage without relay activation
+ * - RESET_SEQ   Reset sequence numbers for synchronization
  */
 
 #include <Wire.h>
@@ -237,7 +239,6 @@ void processCommand(String command) {
   
   // Extract base command
   String baseCommand = parsed.command;
-  }
   
   if (baseCommand.startsWith("TX:")) {
     // Test specific relays (the only test command)

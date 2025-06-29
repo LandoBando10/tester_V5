@@ -21,6 +21,7 @@ class SearchableComboBox(QComboBox):
         # Store the full list of items
         self._all_items = []
         self._is_initializing = False
+        self._custom_signals_blocked = False
         
         # Disable the default completer first
         self.setCompleter(None)
@@ -71,8 +72,8 @@ class SearchableComboBox(QComboBox):
         
     def _on_text_changed(self, text):
         """Handle text changes"""
-        # Skip during initialization
-        if self._is_initializing:
+        # Skip during initialization or if custom signals are blocked
+        if self._is_initializing or self._custom_signals_blocked:
             return
             
         # Only emit item_selected if the text is a valid item and not the placeholder
@@ -81,3 +82,7 @@ class SearchableComboBox(QComboBox):
             self.item_selected.emit(text)
         elif text == "-- Select SKU --":
             logger.debug("SearchableComboBox: Placeholder selected, not emitting signal")
+    
+    def blockCustomSignals(self, block):
+        """Block or unblock custom signals (item_selected)"""
+        self._custom_signals_blocked = block

@@ -439,7 +439,7 @@ class SMTHandler(QObject, ThreadCleanupMixin):
             
             # Get enabled tests and connection status
             enabled_tests = self.main_window.top_controls.get_enabled_tests()
-            connection_status = self.main_window.connection_dialog.get_connection_status()
+            connection_status = self.main_window.connection_service.get_connection_status()
             
             # Start the test - now safe to show dialogs
             self.start_test(sku, enabled_tests, connection_status, source="PHYSICAL_BUTTON")

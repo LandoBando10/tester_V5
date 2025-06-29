@@ -22,7 +22,7 @@ from PySide6.QtWidgets import QMessageBox
 from src.spc.spc_calculator import SPCCalculator, ControlLimits
 from src.spc.data_collector import SPCDataCollector
 from src.gui.components.spec_approval_dialog import SpecApprovalDialog
-from spc.spc_config import MIN_INDIVIDUAL_MEASUREMENTS
+from config.spc.spc_config import MIN_INDIVIDUAL_MEASUREMENTS
 
 
 class SPCIntegration(QObject):

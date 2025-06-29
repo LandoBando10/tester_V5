@@ -116,15 +116,17 @@ class SMTArduinoController:
 
     def disconnect(self):
         """Disconnect from Arduino"""
-        self.stop_reading()
-        
         if self.connection and self.connection.is_open:
             try:
-                # Try to turn off relays, but don't fail if it doesn't work
-                try:
-                    self.all_relays_off()
-                except:
-                    pass
+                # Try to turn off relays BEFORE stopping reading thread
+                if self.is_reading:
+                    try:
+                        self.all_relays_off()
+                    except:
+                        pass
+                
+                # Now stop reading thread
+                self.stop_reading()
                 
                 # Force close the connection
                 self.connection.close()
@@ -133,6 +135,9 @@ class SMTArduinoController:
             except Exception as e:
                 self.logger.error(f"Error during disconnect: {e}")
                 # Force connection to None even if close failed
+        else:
+            # Still need to stop reading thread even if connection is closed
+            self.stop_reading()
         
         self.connection = None
         self.port = None

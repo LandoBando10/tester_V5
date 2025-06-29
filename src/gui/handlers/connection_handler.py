@@ -23,8 +23,8 @@ class ConnectionHandler(QObject, ThreadCleanupMixin):
         """Update the connection status display across all UI components"""
         self.logger.debug("Attempting to update connection status.")
         try:
-            # Get connection status from connection dialog
-            status = self.main_window.connection_dialog.get_connection_status()
+            # Get connection status from connection service
+            status = self.main_window.connection_service.get_connection_status()
             self.logger.debug(f"Retrieved status from connection_dialog: {status}")
             
             # Check weight testing widget connection status if in weight mode
@@ -117,16 +117,16 @@ class ConnectionHandler(QObject, ThreadCleanupMixin):
         try:
             self.logger.info("Starting connection handler cleanup...")
             
-            # Disconnect hardware through connection dialog
-            if hasattr(self.main_window, 'connection_dialog'):
-                if self.main_window.connection_dialog.arduino_connected:
+            # Disconnect hardware through connection service
+            if hasattr(self.main_window, 'connection_service'):
+                if self.main_window.connection_service.is_arduino_connected():
                     self.logger.info("Disconnecting Arduino...")
-                    self.main_window.connection_dialog.disconnect_arduino()
-                if self.main_window.connection_dialog.scale_connected:
+                    self.main_window.connection_service.disconnect_arduino()
+                if self.main_window.connection_service.is_scale_connected():
                     self.logger.info("Disconnecting scale...")
-                    self.main_window.connection_dialog.disconnect_scale()
+                    self.main_window.connection_service.disconnect_scale()
             else:
-                self.logger.warning("main_window.connection_dialog not found during cleanup.")
+                self.logger.warning("main_window.connection_service not found during cleanup.")
             
             # Use resource manager for comprehensive cleanup
             self.cleanup_resources()

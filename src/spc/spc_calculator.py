@@ -19,7 +19,7 @@ import logging
 from pathlib import Path
 
 try:
-    from spc.spc_config import CONTROL_CONSTANTS, CONFIDENCE_LEVEL
+    from config.spc.spc_config import CONTROL_CONSTANTS, CONFIDENCE_LEVEL
 except ImportError:
     # Fallback if running from different location
     CONTROL_CONSTANTS = None

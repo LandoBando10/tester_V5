@@ -139,8 +139,11 @@ class TestAreaWidget(QWidget):
         try:
             if not self.config_widget:
                 from src.gui.components.config_widget import ConfigWidget
-                self.config_widget = ConfigWidget()
-                self.logger.debug("Created new ConfigWidget")
+                # Get SKU manager from main window
+                main_window = self.window()
+                sku_manager = main_window.sku_manager if hasattr(main_window, 'sku_manager') else None
+                self.config_widget = ConfigWidget(sku_manager=sku_manager)
+                self.logger.debug("Created new ConfigWidget with shared SKU manager")
             
             self.main_layout.addWidget(self.config_widget)
             self.logger.info("Configuration area setup complete")

@@ -47,6 +47,12 @@ class BaseTest(ABC):
     def set_progress_callback(self, callback: Callable[[str, int], None]):
         """Set callback for progress updates (message, percentage)"""
         self.progress_callback = callback
+    
+    def add_failure(self, category: str, message: str):
+        """Add a failure to the test result"""
+        failure_msg = f"{category}: {message}"
+        self.result.failures.append(failure_msg)
+        self.logger.warning(failure_msg)
 
     def update_progress(self, message: str, percentage: int):
         """Update progress if callback is set"""

@@ -3,7 +3,7 @@ import sys
 import logging
 from typing import Optional
 from PySide6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QWidget, QStatusBar, QLabel, QPushButton, QDialog, QMessageBox
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QTimer, QTime
 from PySide6.QtGui import QFont
 
 # Import our modules
@@ -20,6 +20,8 @@ from src.gui.handlers.connection_handler import ConnectionHandler
 from src.core.base_test import TestResult
 from src.utils.thread_cleanup import GlobalCleanupManager # Added import
 from src.spc import SPCWidget
+from src.services.connection_service import ConnectionService
+from src.services.device_cache_service import DeviceCacheService
 
 
 class MainWindow(QMainWindow):
@@ -44,6 +46,9 @@ class MainWindow(QMainWindow):
         self.config_loading_dialog = None
         self.config_load_completed = True  # Mark as completed if using preloaded
         
+        # Initialize connection service
+        self.connection_service = ConnectionService()
+        
         # SPC widget (will be initialized after UI setup)
         self.spc_widget = None
         self.spc_dialog = None
@@ -54,27 +59,34 @@ class MainWindow(QMainWindow):
         self._weight_handler = WeightHandler(self)
         self.connection_handler = ConnectionHandler(self)  # Keep this one immediate
 
-        # UI Components - preload connection dialog with cached port info
-        self._connection_dialog = ConnectionDialog(self)
-        if preloaded_components and preloaded_components.port_info:
-            # Convert preloaded port info to the expected format
-            import time
-            from src.gui.components.connection_dialog import DeviceInfo
+        # UI Components - connection dialog now uses connection service
+        self._connection_dialog = ConnectionDialog(self, self.connection_service)
+        
+        # Handle preloaded Arduino connection
+        if preloaded_components and preloaded_components.arduino_controller:
+            # Transfer preloaded Arduino connection to service
+            self.connection_service._arduino_controller = preloaded_components.arduino_controller
+            self.connection_service._arduino_port = preloaded_components.arduino_port
+            self.connection_service._arduino_firmware = 'preloaded'  # Will be determined properly later
             
-            device_cache = {}
-            for port, device_type in preloaded_components.port_info.items():
-                device_cache[port] = DeviceInfo(
-                    port=port,
-                    device_type=device_type,
-                    timestamp=time.time()
-                )
+            # Update cache with preloaded info
+            if preloaded_components.port_info:
+                for port, device_type in preloaded_components.port_info.items():
+                    self.connection_service.cache_service.update_device(port, {
+                        'device_type': device_type,
+                        'description': f'Preloaded {device_type}'
+                    })
             
-            self._connection_dialog._device_cache = device_cache
-            self.logger.info(f"Using preloaded port info: {preloaded_components.port_info}")
-            # Pass preloaded port info to connection dialog
-            self._connection_dialog.set_preloaded_ports(preloaded_components.port_info)
+            # Emit connection changed signal
+            self.connection_service.arduino_connection_changed.emit(
+                True, preloaded_components.arduino_port
+            )
+            
+            self.logger.info(f"Using pre-connected Arduino on {preloaded_components.arduino_port}")
+        
+        # Arduino controller property will be defined after class
+        
         self.test_worker: Optional[TestWorker] = None
-        self.arduino_controller = None  # Persistent Arduino instance
 
         # Current state
         self.current_mode = None  # Will be set by launcher
@@ -84,6 +96,12 @@ class MainWindow(QMainWindow):
         
         # SKU filtering cache to improve performance
         self._sku_filter_cache = {}  # Cache: {mode: [valid_skus]}
+        
+        # Refresh guard to prevent duplicate operations
+        self._last_refresh_time = 0
+        self._refresh_guard_ms = 100  # Minimum milliseconds between refreshes
+        self._last_connection_update_time = 0
+        self._connection_update_guard_ms = 100  # Minimum milliseconds between connection updates
 
         # Setup UI and connections first
         self.setup_logging()
@@ -301,12 +319,64 @@ class MainWindow(QMainWindow):
         """Perform startup scan for Arduino devices and auto-connect"""
         try:
             # Only scan if not already connected
-            if not self.connection_dialog.arduino_connected:
+            if not self.connection_service.is_arduino_connected():
                 self.logger.info("Starting automatic Arduino device scan on startup...")
-                # The quick_refresh_ports will trigger auto-connect if Arduino is found
-                self.connection_dialog.quick_refresh_ports()
+                # TODO: Implement auto-scan in connection dialog UI
+                # self.connection_dialog.quick_refresh_ports()
         except Exception as e:
             self.logger.error(f"Error during startup Arduino scan: {e}")
+    
+    def _configure_preconnected_arduino(self, mode: str):
+        """Configure a pre-connected Arduino for the current mode"""
+        try:
+            if not self.arduino_controller or not self.arduino_controller.is_connected():
+                return
+                
+            self.logger.info(f"Configuring pre-connected Arduino for {mode} mode")
+            
+            # Get firmware type
+            firmware_type = self.arduino_controller.get_firmware_type()
+            self.arduino_controller._firmware_type = firmware_type
+            
+            # Validate firmware matches mode
+            if mode in ["SMT", "Offroad"] and firmware_type != mode.upper() and firmware_type != "UNKNOWN":
+                self.logger.warning(f"Pre-connected Arduino has {firmware_type} firmware but mode is {mode}")
+                return
+            
+            # Configure sensors based on mode
+            from src.hardware.arduino_controller import SensorConfigurations
+            
+            if mode == "SMT":
+                sensor_configs = SensorConfigurations.smt_panel_sensors()
+            elif mode == "Offroad":
+                sensor_configs = SensorConfigurations.offroad_pod_sensors()
+            else:
+                # No sensor configuration needed for other modes
+                return
+            
+            if self.arduino_controller.configure_sensors(sensor_configs):
+                self.arduino_controller._sensors_configured = True
+                self.logger.info(f"Pre-connected Arduino configured for {mode} mode")
+                
+                # For SMT mode, set up button callback and ensure reading thread is running
+                if mode == "SMT":
+                    if hasattr(self, 'smt_handler'):
+                        self.logger.info("Setting up button callback for pre-connected SMT Arduino")
+                        self.arduino_controller.set_button_callback(self.smt_handler.handle_button_event)
+                    
+                    # Start reading thread if not already running
+                    if not self.arduino_controller.is_reading:
+                        self.logger.info("Starting reading thread for pre-connected SMT Arduino")
+                        self.arduino_controller.start_reading()
+                        
+                # Update connection handler
+                if hasattr(self, 'connection_handler'):
+                    self.connection_handler.update_connection_status()
+            else:
+                self.logger.error(f"Failed to configure sensors for pre-connected Arduino in {mode} mode")
+                
+        except Exception as e:
+            self.logger.error(f"Error configuring pre-connected Arduino: {e}")
     
     def set_mode(self, mode: str):
         """Set the current test mode"""
@@ -345,6 +415,9 @@ class MainWindow(QMainWindow):
         
         # Check if Arduino firmware matches new mode
         if hasattr(self, 'arduino_controller') and self.arduino_controller and self.arduino_controller.is_connected():
+            # If this is a pre-connected Arduino that hasn't been configured yet, configure it now
+            if not hasattr(self.arduino_controller, '_sensors_configured'):
+                self._configure_preconnected_arduino(mode)
             firmware_type = getattr(self.arduino_controller, '_firmware_type', 'UNKNOWN')
             
             if mode in ["SMT", "Offroad"] and firmware_type != mode.upper() and firmware_type != "UNKNOWN":
@@ -358,10 +431,9 @@ class MainWindow(QMainWindow):
                 # Clear button callback
                 self.arduino_controller.set_button_callback(None)
                 
-                # Update connection status to show disconnected
-                self.connection_dialog.arduino_connected = False
-                self.connection_dialog.arduino_status_label.setText("Status: Wrong firmware for mode")
-                self.connection_dialog.arduino_status_label.setStyleSheet("color: orange; font-weight: bold;")
+                # Disconnect Arduino due to firmware mismatch
+                self.connection_service.disconnect_arduino()
+                # TODO: Update UI to show firmware mismatch warning
                 
                 QMessageBox.warning(self, "Arduino Firmware Mismatch",
                                    f"The connected Arduino has {firmware_type} firmware, "
@@ -439,7 +511,6 @@ class MainWindow(QMainWindow):
                 
         except Exception as e:
             self.logger.error(f"Fallback loading failed: {e}")
-            self.show_config_error(f"Configuration loading failed: {e}")
             self.show_config_error(f"Configuration loading failed: {e}")
     
     def enable_spec_calculator(self):
@@ -528,17 +599,21 @@ class MainWindow(QMainWindow):
                 self.logger.warning("Attempting to refresh data before config is loaded")
                 return
             
+            # Check refresh guard
+            current_time = QTime.currentTime().msecsSinceStartOfDay()
+            if current_time - self._last_refresh_time < self._refresh_guard_ms:
+                self.logger.debug(f"Refresh blocked by guard (last refresh {current_time - self._last_refresh_time}ms ago)")
+                return
+            self._last_refresh_time = current_time
+            
             # Clear SKU filter cache when data is refreshed
             self._sku_filter_cache.clear()
             self.logger.debug("Cleared SKU filter cache")
             
-            # Load SKUs
-            skus = self.sku_manager.get_all_skus()
-            self.top_controls.set_available_skus(skus)
-
-            # Filter SKUs by current mode
+            # Filter SKUs by current mode (this will also set available SKUs)
             self.filter_skus_by_mode()
             
+            skus = self.sku_manager.get_all_skus()
             self.logger.info(f"UI refreshed with {len(skus)} SKUs")
 
         except Exception as e:
@@ -639,7 +714,7 @@ class MainWindow(QMainWindow):
         """Start the selected test"""
         sku = self.top_controls.get_current_sku()
         enabled_tests = self.top_controls.get_enabled_tests()
-        connection_status = self.connection_dialog.get_connection_status()
+        connection_status = self.connection_service.get_connection_status()
         
         # Use the appropriate handler based on mode
         if self.current_mode == "Offroad":
@@ -660,8 +735,15 @@ class MainWindow(QMainWindow):
 
     def update_connection_status(self):
         """Update the connection status display and propagate to test widgets"""
+        # Check update guard
+        current_time = QTime.currentTime().msecsSinceStartOfDay()
+        if current_time - self._last_connection_update_time < self._connection_update_guard_ms:
+            self.logger.debug(f"Connection update blocked by guard (last update {current_time - self._last_connection_update_time}ms ago)")
+            return
+        self._last_connection_update_time = current_time
+        
         # Get connection status from connection dialog
-        connection_status = self.connection_dialog.get_connection_status()
+        connection_status = self.connection_service.get_connection_status()
         
         # Update main window display
         self.connection_handler.update_connection_status()
@@ -1018,6 +1100,21 @@ class MainWindow(QMainWindow):
             # Continue with empty configuration
             self.config_load_completed = True
             self.top_controls.set_available_skus([])
+    
+    @property
+    def arduino_controller(self):
+        """Get Arduino controller from connection service."""
+        return self.connection_service.get_arduino_controller()
+    
+    @arduino_controller.setter
+    def arduino_controller(self, value):
+        """Set Arduino controller (for backward compatibility)."""
+        if value is None:
+            self.connection_service.disconnect_arduino()
+        else:
+            # This is a hack for backward compatibility
+            # New code should use connection_service directly
+            self.connection_service._arduino_controller = value
 
 
 def main():

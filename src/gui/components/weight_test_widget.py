@@ -427,8 +427,8 @@ class WeightTestWidget(QWidget, ThreadCleanupMixin):
         """Check if connection was already validated through connection dialog."""
         try:
             main_window = self._get_main_window()
-            if main_window and hasattr(main_window, 'connection_dialog'):
-                status = main_window.connection_dialog.get_connection_status()
+            if main_window and hasattr(main_window, 'connection_service'):
+                status = main_window.connection_service.get_connection_status()
                 # If scale is marked as connected on the same port, skip comm test
                 return (status.get('scale_connected', False) and 
                         status.get('scale_port') == port)

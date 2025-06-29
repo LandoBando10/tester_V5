@@ -25,11 +25,11 @@ class ConfigWidget(QWidget):
     
     configuration_changed = Signal()
     
-    def __init__(self, parent=None):
+    def __init__(self, sku_manager=None, parent=None):
         super().__init__(parent)
         
         # Data managers
-        self.sku_manager = None
+        self.sku_manager = sku_manager
         self.programming_config = None
         self.current_sku = None
         self.unsaved_changes = False
@@ -166,7 +166,9 @@ class ConfigWidget(QWidget):
     def load_configurations(self):
         """Load SKU and programming configurations"""
         try:
-            self.sku_manager = create_sku_manager()
+            # Only create SKU manager if not provided
+            if self.sku_manager is None:
+                self.sku_manager = create_sku_manager()
             
             # Load programming config
             project_root = Path(__file__).parent.parent.parent.parent.parent

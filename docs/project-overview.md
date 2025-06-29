@@ -1,5 +1,8 @@
 # Diode Dynamics Tester V5: Project Overview and Architecture
 
+*Last Updated: December 28, 2025*
+*Version: 5.0*
+
 ## 1. Primary Intent
 
 The Diode Dynamics Tester V5 is a comprehensive production-line testing application designed to validate the functionality and quality of Diode Dynamics' LED lighting products. The system automates and standardizes testing processes across various product Stock Keeping Units (SKUs), ensuring products meet defined specifications before shipment. The platform emphasizes reliability, user-friendliness for operators, and configurability to accommodate different product types and testing requirements.
@@ -46,6 +49,11 @@ The system follows a clean, modular architecture with clear separation of concer
 - Thread-safe resource allocation and deallocation
 
 ## 3. Testing Modes and Workflows
+
+Detailed workflow documentation for each testing mode can be found in the `docs/workflows/` directory:
+- [Offroad Testing Workflow](workflows/offroad_workflow_description.md)
+- [SMT Testing Workflow](workflows/smt_workflow_description.md)
+- [Weight Checking Workflow](workflows/weight_checking_workflow_description.md)
 
 ### 3.1 Offroad Mode
 **Purpose**: Final assembly validation for complete "Offroad" products
@@ -110,9 +118,14 @@ The SMT system has been streamlined to focus on core functionality with a clean,
 ## 4. Configuration Management Evolution
 
 ### 4.1 Modern SKU Management
-The system has evolved to support flexible configuration approaches:
+The system uses an organized directory structure for SKU configurations:
 
-**Individual SKU Files**: Self-contained JSON configurations (e.g., `DD5002.json`, `DD5003.json`)
+**SKU Directory Organization**:
+- `config/skus/offroad/` - Offroad product configurations
+- `config/skus/smt/` - SMT panel configurations
+- `config/skus/weight/` - Weight specification files
+
+Each SKU file is a self-contained JSON configuration with:
 - Complete test parameters per SKU
 - Mode-specific configurations embedded
 - Template-based backlight configurations
@@ -121,7 +134,7 @@ The system has evolved to support flexible configuration approaches:
 
 
 ### 4.2 Configuration Structure
-Each SKU configuration includes:(below is an example of a sku that has all 3 tests enabled)
+Each SKU configuration includes mode-specific test parameters. Below is an example of a SKU that has all 3 tests enabled:
 ```json
 {
   "sku": "DD5002",
@@ -275,6 +288,11 @@ All hardware interfaces follow a consistent pattern:
 - Real-time data visualization capabilities
 - Consistent dark theme with high contrast for production environments
 
+### 6.5 Development Support
+- CLAUDE.md configuration file for development workflow
+- Comprehensive testing commands and linting setup
+- Arduino firmware references: `SMT_Simple_Tester.ino` and `Offroad_Assembly_Tester.ino`
+
 ## 7. Development Architecture
 
 ### 7.1 Code Organization
@@ -294,37 +312,18 @@ src/
 - **Asynchronous Operations**: Non-blocking UI with background processing
 - **Consistent Patterns**: Unified interfaces across hardware controllers
 
-## 8. Architecture Evolution: Phase 1 → Phase 2 Simplification
+## 8. Architecture Evolution: SMT Simplification
 
-### 8.1 Migration Overview
-The SMT system underwent a significant architectural simplification to improve maintainability and reliability:
-
-**Phase 1 (Complex)**: Over-engineered approach with:
-- Binary framing protocol with STX/ETX markers (removed)
-- CRC-16 validation for message integrity (removed)
-- Complex threading and command queues
-- Resource management overhead
-- Health monitoring and statistics
-- Command throttling mechanisms
-
-**Phase 2 (Simplified)**: Streamlined architecture focusing on:
+### 8.1 Current SMT Architecture
+The SMT system uses a streamlined architecture focusing on:
 - Simple text-based communication protocol
 - Individual command execution (eliminates buffer overflow)
 - Clean 5-component separation of concerns
 - Minimal but effective command throttling
 - Thread-safe Qt signal-based GUI updates
 
-### 8.2 Technical Debt Cleanup
-The transition involved removing deprecated components while preserving the well-designed core architecture:
-
-**Removed Components**:
-- `src/protocols/binary_protocol.py` - Complex binary messaging
-- `src/protocols/framed_binary_protocol.py` - Frame encoding/decoding
-- `src/protocols/protocol_manager.py` - Protocol abstraction layer
-- Various test frameworks and verification scripts
-- Backup controller implementations
-
-**Preserved Architecture**:
+### 8.2 Core SMT Components
+The SMT architecture consists of 5 clean components:
 - `src/core/smt_controller.py` - Business logic controller
 - `src/core/smt_test.py` - Test orchestration and sequence management
 - `src/gui/handlers/smt_handler.py` - GUI event handling
@@ -340,13 +339,15 @@ The transition involved removing deprecated components while preserving the well
 ## 9. Future Roadmap
 
 ### 9.1 Statistical Process Control (SPC)
-*Planned implementation for continuous process monitoring and quality control*
+*Implementation in progress - see archive/implementation/ for SPC integration guides*
 
 ### 9.2 Enhanced Results Management
 *Development of comprehensive results logging and analysis capabilities*
 
-### 9.3 Configuration Migration Tools
-*Utilities for seamless transition between configuration formats*
+### 9.3 Additional Features
+- 16-relay support for larger SMT panels
+- Enhanced automatic connection features
+- Extended configuration migration tools
 
 ## 10. End Goal
 

@@ -18,6 +18,10 @@ class PreloadedComponents:
         self.ports_scanned = False
         self.port_info = {}
         self.load_errors = []
+        # Fast startup connection
+        self.arduino_controller = None
+        self.arduino_port = None
+        self.remaining_ports_to_scan = []
 
 
 class PreloaderThread(QThread):
@@ -136,40 +140,164 @@ class PreloaderThread(QThread):
             self.components.load_errors.append(f"Handler loading error: {e}")
     
     def _scan_serial_ports(self):
-        """Scan for available serial ports"""
+        """Scan for available serial ports with immediate Arduino connection"""
         try:
-            self.logger.info("Scanning serial ports...")
+            self.logger.info("Scanning serial ports with fast startup...")
             
             from src.hardware.serial_manager import SerialManager
-            import concurrent.futures
+            import json
+            from pathlib import Path
             
             # Get available ports
             serial_manager = SerialManager()
             ports = serial_manager.get_available_ports()
             self.logger.info(f"Found {len(ports)} serial ports")
             
-            # Quick probe to identify device types
-            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-                future_to_port = {
-                    executor.submit(self._probe_port, port): port 
-                    for port in ports
-                }
-                
-                for future in concurrent.futures.as_completed(future_to_port):
-                    port = future_to_port[future]
-                    try:
-                        device_type = future.result()
-                        self.components.port_info[port] = device_type
-                    except Exception as e:
-                        self.logger.debug(f"Error probing {port}: {e}")
-                        self.components.port_info[port] = "Unknown"
+            # Load device cache to get last Arduino port
+            last_arduino_port = None
+            cache_file = Path("config") / ".device_cache.json"
+            if cache_file.exists():
+                try:
+                    with open(cache_file, 'r') as f:
+                        cache_data = json.load(f)
+                        last_arduino_port = cache_data.get("last_arduino_port")
+                        if last_arduino_port and last_arduino_port in ports:
+                            # Move last Arduino port to front of list
+                            ports.remove(last_arduino_port)
+                            ports.insert(0, last_arduino_port)
+                            self.logger.info(f"Trying last Arduino port first: {last_arduino_port}")
+                except Exception as e:
+                    self.logger.debug(f"Could not load device cache: {e}")
+            
+            # Sequential scan for first Arduino with immediate connection
+            arduino_found = False
+            for port in ports:
+                result = self._probe_and_connect_arduino(port)
+                if result['connected']:
+                    # Arduino found and connected!
+                    arduino_found = True
+                    self.components.arduino_controller = result['controller']
+                    self.components.arduino_port = port
+                    self.components.port_info[port] = result['device_type']
+                    self.logger.info(f"Connected to {result['device_type']} on {port}")
+                    
+                    # Store remaining ports for background scanning
+                    remaining_ports = [p for p in ports if p != port]
+                    self.components.remaining_ports_to_scan = remaining_ports
+                    break
+                else:
+                    # Not an Arduino or failed to connect
+                    self.components.port_info[port] = result['device_type']
+            
+            # If no Arduino found, scan remaining ports normally
+            if not arduino_found and ports:
+                self.logger.info("No Arduino found during fast scan, scanning all ports...")
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+                    remaining_ports = [p for p in ports if p not in self.components.port_info]
+                    future_to_port = {
+                        executor.submit(self._probe_port, port): port 
+                        for port in remaining_ports
+                    }
+                    
+                    for future in concurrent.futures.as_completed(future_to_port):
+                        port = future_to_port[future]
+                        try:
+                            device_type = future.result()
+                            self.components.port_info[port] = device_type
+                        except Exception as e:
+                            self.logger.debug(f"Error probing {port}: {e}")
+                            self.components.port_info[port] = "Unknown"
             
             self.components.ports_scanned = True
-            self.logger.info(f"Port scan complete: {self.components.port_info}")
+            self.logger.info(f"Initial port scan complete: {self.components.port_info}")
             
         except Exception as e:
             self.logger.error(f"Error scanning ports: {e}")
             self.components.load_errors.append(f"Port scanning error: {e}")
+    
+    def _probe_and_connect_arduino(self, port: str) -> Dict[str, Any]:
+        """Probe port and if Arduino, keep connection open"""
+        result = {
+            'connected': False,
+            'controller': None,
+            'device_type': 'Unknown'
+        }
+        
+        try:
+            from src.hardware.serial_manager import SerialManager
+            from src.hardware.controller_factory import ArduinoControllerFactory
+            
+            # Try Arduino connection
+            temp_serial = SerialManager(baud_rate=115200, timeout=0.1)
+            
+            if temp_serial.connect(port):
+                try:
+                    temp_serial.flush_buffers()
+                    
+                    # Try identification commands
+                    response = temp_serial.query("I", response_timeout=0.1)
+                    if not response or "ERROR" in response.upper():
+                        response = temp_serial.query("ID", response_timeout=0.1)
+                    
+                    if response:
+                        response_upper = response.upper()
+                        # Determine Arduino type and mode
+                        mode = None
+                        if "SMT" in response_upper:
+                            result['device_type'] = "SMT Arduino"
+                            mode = "SMT"
+                        elif "OFFROAD" in response_upper:
+                            result['device_type'] = "Offroad Arduino"
+                            mode = "Offroad"
+                        elif "ARDUINO" in response_upper or "DIODE" in response_upper:
+                            result['device_type'] = "Arduino"
+                            # Default to Offroad mode if not specified
+                            mode = "Offroad"
+                        
+                        if mode:
+                            # Arduino detected - disconnect temp connection and create proper controller
+                            temp_serial.disconnect()
+                            
+                            # Create appropriate controller
+                            controller = ArduinoControllerFactory.create_controller(mode, baud_rate=115200)
+                            
+                            # Connect with full initialization
+                            if controller.connect(port):
+                                result['connected'] = True
+                                result['controller'] = controller
+                                self.logger.info(f"Successfully connected to {result['device_type']} on {port}")
+                            else:
+                                self.logger.warning(f"Failed to fully connect to {result['device_type']} on {port}")
+                    else:
+                        # No response - not an Arduino
+                        temp_serial.disconnect()
+                        
+                except Exception as e:
+                    self.logger.debug(f"Error during Arduino probe on {port}: {e}")
+                    if temp_serial.is_connected():
+                        temp_serial.disconnect()
+            
+            # If not connected as Arduino, check for scale
+            if not result['connected'] and result['device_type'] == 'Unknown':
+                temp_serial = SerialManager(baud_rate=9600, timeout=0.05)
+                if temp_serial.connect(port):
+                    try:
+                        import time
+                        time.sleep(0.05)
+                        if temp_serial.connection.in_waiting > 0:
+                            line = temp_serial.read_line(timeout=0.05)
+                            if line and ('g' in line or 'GS' in line):
+                                result['device_type'] = "Scale"
+                    except Exception:
+                        pass
+                    finally:
+                        temp_serial.disconnect()
+        
+        except Exception as e:
+            self.logger.debug(f"Error probing/connecting on {port}: {e}")
+        
+        return result
     
     def _probe_port(self, port: str) -> str:
         """Fast port probing to identify device type"""
@@ -186,9 +314,9 @@ class PreloaderThread(QThread):
                     temp_serial.flush_buffers()
                     
                     # Try identification commands
-                    response = temp_serial.query("I", response_timeout=0.3)
+                    response = temp_serial.query("I", response_timeout=0.1)
                     if not response or "ERROR" in response.upper():
-                        response = temp_serial.query("ID", response_timeout=0.3)
+                        response = temp_serial.query("ID", response_timeout=0.1)
                     
                     if response:
                         response_upper = response.upper()
@@ -205,6 +333,7 @@ class PreloaderThread(QThread):
                     temp_serial.disconnect()
             
             # If not Arduino, check for scale
+            # Skip scale check if we already found an Arduino to save time
             if device_type == "Unknown":
                 temp_serial = SerialManager(baud_rate=9600, timeout=0.05)
                 if temp_serial.connect(port):
@@ -239,9 +368,14 @@ class PreloaderThread(QThread):
                         "timestamp": time.time(),
                         "devices": self.components.port_info
                     }
+                    
+                    # Add last Arduino port if connected
+                    if self.components.arduino_port:
+                        cache_data["last_arduino_port"] = self.components.arduino_port
+                    
                     cache_file.parent.mkdir(exist_ok=True)
                     with open(cache_file, 'w') as f:
-                        json.dump(cache_data, f)
+                        json.dump(cache_data, f, indent=2)
                     self.logger.info("Device cache updated")
                 except Exception as e:
                     self.logger.debug(f"Could not update device cache: {e}")
