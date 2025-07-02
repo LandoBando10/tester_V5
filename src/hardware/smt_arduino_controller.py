@@ -18,7 +18,8 @@ import logging
 import serial
 import threading
 import queue
-from typing import Dict, Optional, Callable
+from typing import Dict, Optional, Callable, List
+from src.services.port_registry import port_registry
 
 class SMTArduinoController:
     """Simplified Arduino controller for SMT panel testing - batch only"""
@@ -57,21 +58,36 @@ class SMTArduinoController:
     def connect(self, port: str) -> bool:
         """Connect to Arduino on specified port"""
         try:
-            # Configure serial connection
-            self.connection = serial.Serial(
-                port=port,
-                baudrate=self.baud_rate,
-                timeout=self.command_timeout,
-                write_timeout=1.0,
-                bytesize=serial.EIGHTBITS,
-                parity=serial.PARITY_NONE,
-                stopbits=serial.STOPBITS_ONE,
-                xonxoff=False,
-                rtscts=False,
-                dsrdtr=False
-            )
-            self.port = port
-            self.logger.info(f"Connected to {port}")
+            # Check if port is already in use
+            if port_registry.is_port_in_use(port):
+                self.logger.warning(f"Port {port} is already in use by another component")
+                return False
+            
+            # Try to acquire the port exclusively
+            if not port_registry.acquire_port(port):
+                self.logger.error(f"Failed to acquire port {port}")
+                return False
+            
+            try:
+                # Configure serial connection
+                self.connection = serial.Serial(
+                    port=port,
+                    baudrate=self.baud_rate,
+                    timeout=self.command_timeout,
+                    write_timeout=1.0,
+                    bytesize=serial.EIGHTBITS,
+                    parity=serial.PARITY_NONE,
+                    stopbits=serial.STOPBITS_ONE,
+                    xonxoff=False,
+                    rtscts=False,
+                    dsrdtr=False
+                )
+                self.port = port
+                self.logger.info(f"Connected to {port}")
+            except Exception as e:
+                # If connection fails, release the port
+                port_registry.release_port(port)
+                raise
             
             # Set DTR if supported
             try:
@@ -94,6 +110,7 @@ class SMTArduinoController:
             self.start_reading()
             
             # Reset sequence numbers on both sides
+            # NOTE: Arduino firmware v1.0.x has sequence sync issues, v1.1.0+ fixes this
             reset_response = self._send_command("RESET_SEQ", timeout=0.5)
             if reset_response and "OK:SEQ_RESET" in reset_response:
                 self.logger.debug("Sequence numbers reset successfully")
@@ -112,6 +129,9 @@ class SMTArduinoController:
                 
         except Exception as e:
             self.logger.error(f"Failed to connect to {port}: {e}")
+            # Make sure to release port if we acquired it
+            if port_registry.is_port_in_use(port):
+                port_registry.release_port(port)
             return False
 
     def disconnect(self):
@@ -138,6 +158,11 @@ class SMTArduinoController:
         else:
             # Still need to stop reading thread even if connection is closed
             self.stop_reading()
+        
+        # Release the port in the registry
+        if self.port:
+            port_registry.release_port(self.port)
+            self.logger.debug(f"Released port {self.port} from registry")
         
         self.connection = None
         self.port = None
@@ -172,7 +197,7 @@ class SMTArduinoController:
 
     def _read_startup_messages(self):
         """Read and log any startup messages"""
-        deadline = time.time() + 0.5
+        deadline = time.time() + 0.2  # Reduced from 0.5s
         messages = []
         
         while time.time() < deadline:
@@ -344,7 +369,14 @@ class SMTArduinoController:
                         if is_valid:
                             # Check sequence number matches if checksums enabled
                             if self._enable_checksums and seq_num != self._sequence_number:
-                                self.logger.warning(f"Sequence mismatch: expected {self._sequence_number}, got {seq_num}")
+                                # TEMPORARY: Accept Arduino's seq or seq+1 due to firmware counting behavior
+                                # TODO: Remove this workaround after Arduino firmware v1.1.0 is deployed
+                                expected_plus_one = (self._sequence_number + 1) % 65536
+                                if seq_num != expected_plus_one:
+                                    self.logger.warning(f"Sequence mismatch: expected {self._sequence_number} or {expected_plus_one}, got {seq_num}")
+                                else:
+                                    # Log at debug level when we get the expected+1 pattern
+                                    self.logger.debug(f"Sequence offset detected: expected {self._sequence_number}, got {seq_num} (firmware v1.0.x behavior)")
                                 # Continue anyway - sequence mismatch is less critical than checksum
                             
                             self.logger.debug(f"Valid response: {clean_response}")
@@ -372,10 +404,22 @@ class SMTArduinoController:
                     
             return None  # All retries failed
 
-    def test_panel(self) -> Dict[int, Optional[Dict[str, float]]]:
-        """Test entire panel with single command"""
+    def test_panel(self, relay_list: Optional[List[int]] = None) -> Dict[int, Optional[Dict[str, float]]]:
+        """Test entire panel with single command
+        
+        Args:
+            relay_list: Optional list of relay numbers to test. If None, tests all relays.
+        """
+        # Build command based on relay list
+        if relay_list:
+            # Sort and format relay list (e.g., [1,2,3,4] -> "TX:1,2,3,4")
+            relay_str = ",".join(str(r) for r in sorted(relay_list))
+            command = f"TX:{relay_str}"
+        else:
+            command = "TX:ALL"
+            
         # Increased timeout to 3.0 seconds to handle 8-16 relays
-        response = self._send_command("TX:ALL", timeout=3.0)
+        response = self._send_command(command, timeout=3.0)
         
         if not response:
             self.logger.error("No response from panel test - possible power loss or Arduino hang")

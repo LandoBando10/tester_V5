@@ -57,12 +57,12 @@ class TopControlsWidget(QWidget):
         
         self.sku_combo = SearchableComboBox()
         self.sku_combo.setMinimumHeight(25)
-        self.sku_combo.setMinimumWidth(150)
-        self.sku_combo.setMaximumWidth(300)
+        self.sku_combo.setMinimumWidth(200)
+        self.sku_combo.setMaximumWidth(500)
         self.sku_combo.setFont(QFont("Arial", 10))
         
         # Configure combo box
-        self.sku_combo.setMaxVisibleItems(10)
+        self.sku_combo.setMaxVisibleItems(20)
         self.sku_combo.setFocusPolicy(Qt.ClickFocus)
         
         # Don't modify the popup window flags - let QComboBox handle it internally

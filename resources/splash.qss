@@ -1,0 +1,112 @@
+/* Unified Splash Screen Stylesheet - Professional Dark Theme */
+
+/* Root window */
+#UnifiedSplashScreen {
+    background-color: #1A1A1A;
+    border: 2px solid #2A2A2A;
+    border-radius: 18px;
+}
+
+/* Company name label */
+#CompanyLabel {
+    color: #FFFFFF;
+    font-size: 36px;
+    font-weight: 300;
+    letter-spacing: 4px;
+}
+
+/* Subtitle label */
+#SubtitleLabel {
+    color: #4a90a4;
+    font-size: 16px;
+    font-weight: 500;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+}
+
+/* Loading label */
+#LoadingLabel {
+    color: #A0A0A0;
+    font-size: 14px;
+    font-weight: 400;
+}
+
+/* Version label */
+#VersionLabel {
+    color: #666666;
+    font-size: 12px;
+    font-weight: 300;
+}
+
+/* Mode selection header */
+#ModeHeader {
+    color: #FFFFFF;
+    font-size: 28px;
+    font-weight: 300;
+    letter-spacing: 1px;
+}
+
+/* Mode selection subtitle */
+#ModeSubtitle {
+    color: #B0B0B0;
+    font-size: 15px;
+    font-weight: 400;
+}
+
+/* Progress bar */
+QProgressBar {
+    background-color: #2A2A2A;
+    border: none;
+    border-radius: 3px;
+    height: 6px;
+}
+
+QProgressBar::chunk {
+    background-color: #4a90a4;
+    border-radius: 3px;
+}
+
+/* Mode button - Using object name selector */
+#ModeButton {
+    background: #212121;
+    border: 2px solid #2E2E2E;
+    border-radius: 14px;
+    color: #FFFFFF;
+}
+
+#ModeButton:hover {
+    border: 2px solid #4a90a4;
+    background: #252525;
+}
+
+#ModeButton:pressed {
+    background: #1C1C1C;
+    border: 2px solid #4a90a4;
+}
+
+/* Exit button */
+#ExitButton {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    color: #A0A0A0;
+    font-size: 14px;
+    font-weight: 500;
+    padding: 8px 20px;
+}
+
+#ExitButton:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: #FFFFFF;
+    border-color: rgba(255, 255, 255, 0.2);
+}
+
+/* General QLabel styling */
+QLabel {
+    font-family: "Segoe UI", "Roboto", sans-serif;
+}
+
+/* General QPushButton styling */
+QPushButton {
+    font-family: "Segoe UI", "Roboto", sans-serif;
+}

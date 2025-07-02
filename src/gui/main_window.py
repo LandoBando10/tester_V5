@@ -22,6 +22,7 @@ from src.utils.thread_cleanup import GlobalCleanupManager # Added import
 from src.spc import SPCWidget
 from src.services.connection_service import ConnectionService
 from src.services.device_cache_service import DeviceCacheService
+from src.services.port_scanner_service import PortScannerService
 
 
 class MainWindow(QMainWindow):
@@ -69,6 +70,12 @@ class MainWindow(QMainWindow):
             self.connection_service._arduino_port = preloaded_components.arduino_port
             self.connection_service._arduino_firmware = 'preloaded'  # Will be determined properly later
             
+            # Ensure port is registered as in use
+            from src.services.port_registry import port_registry
+            if preloaded_components.arduino_port and not port_registry.is_port_in_use(preloaded_components.arduino_port):
+                port_registry.acquire_port(preloaded_components.arduino_port)
+                self.logger.info(f"Registered preloaded Arduino port {preloaded_components.arduino_port} in registry")
+            
             # Update cache with preloaded info
             if preloaded_components.port_info:
                 for port, device_type in preloaded_components.port_info.items():
@@ -83,6 +90,25 @@ class MainWindow(QMainWindow):
             )
             
             self.logger.info(f"Using pre-connected Arduino on {preloaded_components.arduino_port}")
+        
+        # Handle preloaded Scale connection
+        if preloaded_components and preloaded_components.scale_controller:
+            # Transfer preloaded Scale connection to service
+            self.connection_service._scale_controller = preloaded_components.scale_controller
+            self.connection_service._scale_port = preloaded_components.scale_port
+            
+            # Ensure port is registered as in use
+            from src.services.port_registry import port_registry
+            if preloaded_components.scale_port and not port_registry.is_port_in_use(preloaded_components.scale_port):
+                port_registry.acquire_port(preloaded_components.scale_port)
+                self.logger.info(f"Registered preloaded Scale port {preloaded_components.scale_port} in registry")
+            
+            # Emit connection changed signal
+            self.connection_service.scale_connection_changed.emit(
+                True, preloaded_components.scale_port
+            )
+            
+            self.logger.info(f"Using pre-connected Scale on {preloaded_components.scale_port}")
         
         # Arduino controller property will be defined after class
         
@@ -127,6 +153,11 @@ class MainWindow(QMainWindow):
         # Trigger auto-scan for Arduino devices after a short delay
         # If we have preloaded port info, this will be faster
         QTimer.singleShot(500, self._startup_arduino_scan)
+        
+        # Start background port scanning if we have remaining ports from preloader
+        if preloaded_components and hasattr(preloaded_components, 'remaining_ports_to_scan') and preloaded_components.remaining_ports_to_scan:
+            self.logger.info(f"Starting background scan for {len(preloaded_components.remaining_ports_to_scan)} remaining ports")
+            QTimer.singleShot(1000, lambda: self._start_background_port_scan(preloaded_components.remaining_ports_to_scan))
 
     @property
     def offroad_handler(self):
@@ -325,6 +356,57 @@ class MainWindow(QMainWindow):
                 # self.connection_dialog.quick_refresh_ports()
         except Exception as e:
             self.logger.error(f"Error during startup Arduino scan: {e}")
+    
+    def _start_background_port_scan(self, ports_to_scan):
+        """Start background scanning of remaining ports after Arduino connection"""
+        try:
+            self.logger.info(f"Starting background port scan for {len(ports_to_scan)} ports")
+            
+            # Create port scanner service
+            port_scanner = PortScannerService()
+            
+            # Start async scan of remaining ports
+            self.background_scan_worker = port_scanner.scan_ports_async(ports_to_scan)
+            
+            # Connect signals
+            self.background_scan_worker.device_found.connect(self._on_background_device_found)
+            self.background_scan_worker.scan_complete.connect(self._on_background_scan_complete)
+            self.background_scan_worker.progress.connect(
+                lambda msg: self.logger.debug(f"Background scan: {msg}")
+            )
+            
+            # Start the scan
+            self.background_scan_worker.start()
+            
+        except Exception as e:
+            self.logger.error(f"Error starting background port scan: {e}")
+    
+    def _on_background_device_found(self, device_info):
+        """Handle device found during background scan"""
+        try:
+            self.logger.info(f"Background scan found {device_info.device_type} on {device_info.port}")
+            
+            # Update the device cache
+            self.connection_service.cache_service.update_device(device_info.port, {
+                'device_type': device_info.device_type,
+                'description': device_info.description
+            })
+            
+        except Exception as e:
+            self.logger.error(f"Error handling background device found: {e}")
+    
+    def _on_background_scan_complete(self, devices):
+        """Handle completion of background port scan"""
+        try:
+            self.logger.info(f"Background port scan complete. Found {len(devices)} devices")
+            
+            # Clean up the worker
+            if hasattr(self, 'background_scan_worker'):
+                self.background_scan_worker.deleteLater()
+                delattr(self, 'background_scan_worker')
+                
+        except Exception as e:
+            self.logger.error(f"Error handling background scan completion: {e}")
     
     def _configure_preconnected_arduino(self, mode: str):
         """Configure a pre-connected Arduino for the current mode"""
@@ -951,47 +1033,54 @@ class MainWindow(QMainWindow):
         self.centralWidget().setFocus()
         
     def closeEvent(self, event):
-        """Handle application closing"""
+        """Handle application closing with optimized cleanup"""
         try:
-            # Stop any running test
-            if self.test_worker and self.test_worker.isRunning():
-                self.test_worker.terminate()
-                self.test_worker.wait(3000)
-
-            # Cleanup handlers (only if they were created)
-            if self._offroad_handler is not None:
-                self._offroad_handler.cleanup()
-            if self._smt_handler is not None:
-                self._smt_handler.cleanup()
-            if self._weight_handler is not None:
-                self._weight_handler.cleanup()
-            self.connection_handler.cleanup()
-
+            import concurrent.futures
+            from datetime import datetime
+            start_time = datetime.now()
             
-            # Cleanup test area
+            # Stop any running test first
+            if self.test_worker and self.test_worker.isRunning():
+                self.test_worker.quit()
+                if not self.test_worker.wait(1000):
+                    self.test_worker.terminate()
+                    self.test_worker.wait(500)
+
+            # Parallel cleanup of handlers
+            handlers_to_cleanup = []
+            if self._offroad_handler is not None:
+                handlers_to_cleanup.append(('Offroad', self._offroad_handler))
+            if self._smt_handler is not None:
+                handlers_to_cleanup.append(('SMT', self._smt_handler))
+            if self._weight_handler is not None:
+                handlers_to_cleanup.append(('Weight', self._weight_handler))
+            handlers_to_cleanup.append(('Connection', self.connection_handler))
+            
+            # Execute handler cleanups in parallel
+            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+                futures = {}
+                for name, handler in handlers_to_cleanup:
+                    futures[executor.submit(handler.cleanup)] = name
+                
+                # Wait for all cleanups to complete with timeout
+                for future in concurrent.futures.as_completed(futures, timeout=2.0):
+                    name = futures[future]
+                    try:
+                        future.result()
+                        self.logger.debug(f"{name} handler cleanup completed")
+                    except Exception as e:
+                        self.logger.error(f"Error cleaning up {name} handler: {e}")
+            
+            # Quick cleanup of remaining components
             self.test_area.cleanup()
             
-            # Cleanup persistent Arduino connection
-            if hasattr(self, 'arduino_controller') and self.arduino_controller:
-                try:
-                    if self.arduino_controller.is_connected():
-                        self.arduino_controller.disconnect()
-                    self.arduino_controller = None
-                except Exception as e:
-                    self.logger.error(f"Error disconnecting Arduino: {e}")
-            
-            # Cleanup SKU manager
             if hasattr(self, 'sku_manager'):
                 self.sku_manager.cleanup()
-
-            # Perform comprehensive resource cleanup
-            try:
-                cleanup_manager = GlobalCleanupManager()
-                cleanup_manager.cleanup_all()
-                self.logger.info("All resources cleaned up via GlobalCleanupManager.")
-            except Exception as rm_error:
-                self.logger.error(f"Error during GlobalCleanupManager cleanup: {rm_error}")
-
+            
+            # Log cleanup time
+            elapsed = (datetime.now() - start_time).total_seconds()
+            self.logger.info(f"Application cleanup completed in {elapsed:.2f} seconds")
+            
             event.accept()
 
         except Exception as e:

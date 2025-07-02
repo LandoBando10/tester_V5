@@ -78,6 +78,7 @@ class ConnectionDialog(QDialog):
         layout.addWidget(QLabel("Port:"), 0, 0)
         self.arduino_combo = QComboBox()
         self.arduino_combo.setMinimumWidth(200)
+        self.arduino_combo.currentIndexChanged.connect(self._on_arduino_port_changed)
         layout.addWidget(self.arduino_combo, 0, 1)
         
         # Refresh button
@@ -116,6 +117,7 @@ class ConnectionDialog(QDialog):
         layout.addWidget(QLabel("Port:"), 0, 0)
         self.scale_combo = QComboBox()
         self.scale_combo.setMinimumWidth(200)
+        self.scale_combo.currentIndexChanged.connect(self._on_scale_port_changed)
         layout.addWidget(self.scale_combo, 0, 1)
         
         # Status
@@ -151,6 +153,10 @@ class ConnectionDialog(QDialog):
         # Get current connection status
         status = self.connection_service.get_connection_status()
         
+        # Immediately populate dropdowns with all available ports
+        # Do this BEFORE updating connection status UI
+        self._populate_all_ports()
+        
         # Update UI based on current state
         if status['arduino_connected']:
             self._on_arduino_connection_changed(True, status['arduino_port'])
@@ -158,34 +164,168 @@ class ConnectionDialog(QDialog):
         if status['scale_connected']:
             self._on_scale_connection_changed(True, status['scale_port'])
         
-        # Load available ports
+        # Then do async device identification
         self._refresh_ports()
+    
+    def _populate_all_ports(self):
+        """Immediately populate dropdowns with all available ports."""
+        logger.info("Populating all available ports...")
+        
+        # Get all available ports
+        all_ports = self.port_scanner.get_available_ports()
+        logger.info(f"Found {len(all_ports)} total ports for immediate display: {all_ports}")
+        
+        # Get current connection status
+        status = self.connection_service.get_connection_status()
+        connected_arduino = status.get('arduino_port') if status.get('arduino_connected') else None
+        connected_scale = status.get('scale_port') if status.get('scale_connected') else None
+        
+        # Clear and populate combos immediately with ALL ports
+        self.arduino_combo.clear()
+        self.scale_combo.clear()
+        
+        # Add placeholder
+        self.arduino_combo.addItem("-- Select Port --", None)
+        self.scale_combo.addItem("-- Select Port --", None)
+        
+        # Add all ports to both combos immediately
+        for port in all_ports:
+            # For Arduino combo
+            if port == connected_arduino:
+                self.arduino_combo.addItem(f"{port} - Arduino (Connected)", port)
+            else:
+                self.arduino_combo.addItem(f"{port} - Unknown Device", port)
+            
+            # For scale combo
+            if port == connected_scale:
+                self.scale_combo.addItem(f"{port} - Scale (Connected)", port)
+            else:
+                self.scale_combo.addItem(f"{port} - Unknown Device", port)
+        
+        # Select currently connected ports if any
+        if connected_arduino:
+            index = self.arduino_combo.findData(connected_arduino)
+            if index >= 0:
+                self.arduino_combo.setCurrentIndex(index)
+                logger.info(f"Selected connected Arduino on {connected_arduino} at index {index}")
+            else:
+                logger.warning(f"Connected Arduino port {connected_arduino} not found in combo box")
+        else:
+            # No connected Arduino, ensure placeholder is selected
+            self.arduino_combo.setCurrentIndex(0)  # "-- Select Port --"
+        
+        if connected_scale:
+            index = self.scale_combo.findData(connected_scale)
+            if index >= 0:
+                self.scale_combo.setCurrentIndex(index)
+                logger.info(f"Selected connected Scale on {connected_scale} at index {index}")
+            else:
+                logger.warning(f"Connected Scale port {connected_scale} not found in combo box")
+        else:
+            # No connected scale, ensure placeholder is selected
+            self.scale_combo.setCurrentIndex(0)  # "-- Select Port --"
+        
+        logger.info(f"Populated dropdowns with {len(all_ports)} ports")
     
     @Slot()
     def _refresh_ports(self):
-        """Refresh available ports."""
-        # Show progress dialog
-        progress = QProgressDialog("Scanning ports...", "Cancel", 0, 0, self)
-        progress.setWindowModality(Qt.WindowModal)
-        progress.setMinimumDuration(500)
-        progress.show()
+        """Refresh port device identification (async)."""
+        logger.info("Starting async port device identification...")
         
-        # Start async port scan
-        worker = self.port_scanner.scan_ports_async()
+        # Get all available ports
+        all_ports = self.port_scanner.get_available_ports()
+        logger.info(f"Found {len(all_ports)} total ports: {all_ports}")
+        
+        # Get current connection status for reference
+        status = self.connection_service.get_connection_status()
+        connected_arduino_port = status.get('arduino_port') if status.get('arduino_connected') else None
+        connected_scale_port = status.get('scale_port') if status.get('scale_connected') else None
+        logger.info(f"Connected Arduino: {connected_arduino_port}, Connected Scale: {connected_scale_port}")
+        
+        # Don't exclude any ports - we want to identify all devices
+        # The port scanner will skip ports that are in use anyway
+        logger.info(f"Starting async scan of all {len(all_ports)} ports for device identification")
+        worker = self.port_scanner.scan_ports_async(all_ports)
         
         def on_progress(msg: str):
-            progress.setLabelText(msg)
+            logger.debug(f"Port scan progress: {msg}")
         
         def on_complete(devices):
-            progress.close()
-            self._update_port_combos(devices)
+            logger.info(f"Device identification complete. Identified {len(devices)} devices")
+            
+            # For any connected ports that weren't in the scan results, 
+            # do a special check to get their info
+            if connected_arduino_port and not any(d.port == connected_arduino_port for d in devices):
+                logger.info(f"Connected Arduino port {connected_arduino_port} not in scan results, checking with cache")
+                device_info = self.port_scanner.probe_port(connected_arduino_port, check_in_use=True)
+                if device_info:
+                    devices.append(device_info)
+            
+            if connected_scale_port and not any(d.port == connected_scale_port for d in devices):
+                logger.info(f"Connected Scale port {connected_scale_port} not in scan results, checking with cache")
+                device_info = self.port_scanner.probe_port(connected_scale_port, check_in_use=True)
+                if device_info:
+                    devices.append(device_info)
+            
+            # Update combo descriptions with identified devices
+            self._update_device_descriptions(devices)
         
         worker.progress.connect(on_progress)
         worker.scan_complete.connect(on_complete)
         worker.start()
     
+    def _update_device_descriptions(self, devices):
+        """Update device descriptions in combo boxes without clearing them."""
+        logger.info(f"Updating device descriptions for {len(devices)} identified devices")
+        
+        # Get current connection status
+        status = self.connection_service.get_connection_status()
+        connected_arduino = status.get('arduino_port') if status.get('arduino_connected') else None
+        connected_scale = status.get('scale_port') if status.get('scale_connected') else None
+        
+        # Create a map of port to device info
+        device_map = {device.port: device for device in devices}
+        
+        # Update Arduino combo descriptions
+        for i in range(self.arduino_combo.count()):
+            port = self.arduino_combo.itemData(i)
+            if port and port in device_map:
+                device = device_map[port]
+                if port == connected_arduino:
+                    text = f"{port} - {device.description} (Connected)"
+                else:
+                    text = f"{port} - {device.description}"
+                self.arduino_combo.setItemText(i, text)
+            elif port == connected_arduino:
+                # Connected but not identified in scan (might be in use)
+                text = f"{port} - Arduino (Connected)"
+                self.arduino_combo.setItemText(i, text)
+        
+        # Update Scale combo descriptions
+        for i in range(self.scale_combo.count()):
+            port = self.scale_combo.itemData(i)
+            if port and port in device_map:
+                device = device_map[port]
+                if port == connected_scale:
+                    text = f"{port} - {device.description} (Connected)"
+                else:
+                    text = f"{port} - {device.description}"
+                self.scale_combo.setItemText(i, text)
+            elif port == connected_scale:
+                # Connected but not identified in scan (might be in use)
+                text = f"{port} - Scale (Connected)"
+                self.scale_combo.setItemText(i, text)
+        
+        logger.info("Device descriptions updated")
+    
     def _update_port_combos(self, devices):
-        """Update port combo boxes with discovered devices."""
+        """Legacy method - redirects to new update method."""
+        # This method might be called from other places
+        # Redirect to the new non-destructive update method
+        self._update_device_descriptions(devices)
+        return
+        
+        # OLD CODE BELOW (kept for reference but not executed)
         # Clear existing items
         self.arduino_combo.clear()
         self.scale_combo.clear()
@@ -209,10 +349,12 @@ class ConnectionDialog(QDialog):
         
         # Add Arduino devices first
         for device in arduino_devices:
-            self.arduino_combo.addItem(
-                f"{device.port} - {device.description}",
-                device.port
-            )
+            # Check if this is the currently connected port
+            is_connected = device.port == self.connection_service.get_connection_status().get('arduino_port')
+            display_text = f"{device.port} - {device.description}"
+            if is_connected and "(Connected)" not in device.description:
+                display_text += " (Connected)"
+            self.arduino_combo.addItem(display_text, device.port)
         
         # Add unknown devices to Arduino list
         for device in unknown_devices:
@@ -235,6 +377,18 @@ class ConnectionDialog(QDialog):
                     f"{device.port} - {device.description}",
                     device.port
                 )
+        
+        # Select currently connected ports
+        status = self.connection_service.get_connection_status()
+        if status.get('arduino_connected'):
+            index = self.arduino_combo.findData(status.get('arduino_port'))
+            if index >= 0:
+                self.arduino_combo.setCurrentIndex(index)
+        
+        if status.get('scale_connected'):
+            index = self.scale_combo.findData(status.get('scale_port'))
+            if index >= 0:
+                self.scale_combo.setCurrentIndex(index)
     
     @Slot()
     def _connect_arduino(self):
@@ -295,6 +449,12 @@ class ConnectionDialog(QDialog):
             self.arduino_status.setText(f"Connected to {firmware} on {port}")
             self.arduino_connect_btn.setEnabled(False)
             self.arduino_disconnect_btn.setEnabled(True)
+            
+            # Ensure the connected port is selected in the combo
+            index = self.arduino_combo.findData(port)
+            if index >= 0 and self.arduino_combo.currentIndex() != index:
+                self.arduino_combo.setCurrentIndex(index)
+                logger.debug(f"Updated Arduino combo to show connected port {port}")
         else:
             self.arduino_status.setText("Not connected")
             self.arduino_connect_btn.setEnabled(True)
@@ -310,6 +470,12 @@ class ConnectionDialog(QDialog):
             self.scale_status.setText(f"Connected on {port}")
             self.scale_connect_btn.setEnabled(False)
             self.scale_disconnect_btn.setEnabled(True)
+            
+            # Ensure the connected port is selected in the combo
+            index = self.scale_combo.findData(port)
+            if index >= 0 and self.scale_combo.currentIndex() != index:
+                self.scale_combo.setCurrentIndex(index)
+                logger.debug(f"Updated Scale combo to show connected port {port}")
         else:
             self.scale_status.setText("Not connected")
             self.scale_connect_btn.setEnabled(True)
@@ -331,6 +497,46 @@ class ConnectionDialog(QDialog):
             Dictionary with connection information
         """
         return self.connection_service.get_connection_status()
+    
+    @Slot()
+    def _on_arduino_port_changed(self):
+        """Handle Arduino port selection change."""
+        port = self.arduino_combo.currentData()
+        logger.debug(f"Arduino port selection changed to: {port}")
+        
+        if port:
+            # Check if this port is already connected
+            status = self.connection_service.get_connection_status()
+            is_connected = (status.get('arduino_connected') and 
+                          status.get('arduino_port') == port)
+            
+            # Update button states
+            self.arduino_connect_btn.setEnabled(not is_connected)
+            self.arduino_disconnect_btn.setEnabled(is_connected)
+        else:
+            # No port selected (placeholder)
+            self.arduino_connect_btn.setEnabled(False)
+            self.arduino_disconnect_btn.setEnabled(False)
+    
+    @Slot()
+    def _on_scale_port_changed(self):
+        """Handle scale port selection change."""
+        port = self.scale_combo.currentData()
+        logger.debug(f"Scale port selection changed to: {port}")
+        
+        if port:
+            # Check if this port is already connected
+            status = self.connection_service.get_connection_status()
+            is_connected = (status.get('scale_connected') and 
+                          status.get('scale_port') == port)
+            
+            # Update button states
+            self.scale_connect_btn.setEnabled(not is_connected)
+            self.scale_disconnect_btn.setEnabled(is_connected)
+        else:
+            # No port selected (placeholder)
+            self.scale_connect_btn.setEnabled(False)
+            self.scale_disconnect_btn.setEnabled(False)
     
     def closeEvent(self, event):
         """Handle dialog close event."""

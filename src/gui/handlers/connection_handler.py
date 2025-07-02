@@ -113,7 +113,7 @@ class ConnectionHandler(QObject, ThreadCleanupMixin):
             self.logger.error(f"Error updating connection status: {e}", exc_info=True)
     
     def cleanup(self):
-        """Cleanup connection handler with comprehensive resource management"""
+        """Cleanup connection handler efficiently"""
         try:
             self.logger.info("Starting connection handler cleanup...")
             
@@ -125,11 +125,6 @@ class ConnectionHandler(QObject, ThreadCleanupMixin):
                 if self.main_window.connection_service.is_scale_connected():
                     self.logger.info("Disconnecting scale...")
                     self.main_window.connection_service.disconnect_scale()
-            else:
-                self.logger.warning("main_window.connection_service not found during cleanup.")
-            
-            # Use resource manager for comprehensive cleanup
-            self.cleanup_resources()
             
             self.logger.info("Connection handler cleanup completed")
             

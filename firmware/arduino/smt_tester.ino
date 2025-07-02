@@ -1,6 +1,6 @@
 /*
  * SMT Tester - Arduino firmware for Surface Mount Technology (SMT) board testing
- * Version: 1.0.0
+ * Version: 1.1.0
  * 
  * Description:
  * This firmware controls a 16-relay test fixture for SMT board validation.
@@ -8,9 +8,9 @@
  * power monitor to verify proper board assembly and component functionality.
  * 
  * Hardware Requirements:
- * - Arduino board with 16 digital outputs for relay control
- * - INA260 I2C power monitor for voltage/current measurements
- * - Button input on pin A6 for manual test triggering
+ * - Arduino R4 Minima with 16 digital outputs for relay control
+ * - INA260 I2C power monitor for voltage/current measurements (SDA/SCL pins)
+ * - Button input on pin A0 for manual test triggering
  * - 16 relay modules (active-LOW configuration)
  * 
  * Communication Protocol:
@@ -39,10 +39,10 @@ const bool RELAY_OFF = HIGH;  // Change to LOW if using active-HIGH relays
 // Pin definitions
 const int RELAY_PINS[] = {
   2, 3, 4, 5, 6, 7, 8, 9,        // Relays 1-8 (original pins)
-  10, 11, 12, 21, 14, 15, 16, 17 // Relays 9-16 (pin 10-11, 21 (A7), 14-17 (A0-A3))
+  10, 11, 12, 13, 14, 15, 16, 17 // Relays 9-16 (using digital pins available on R4 Minima)
 };
 const int NUM_RELAYS = 16;
-const int BUTTON_PIN = 20; // A6 (moved from A4 to avoid I2C conflict)
+const int BUTTON_PIN = A0; // Using A0 on R4 Minima since A6 doesn't exist (A4/A5 are I2C)
 const int LED_PIN = LED_BUILTIN;
 
 // INA260 sensor
@@ -61,10 +61,12 @@ uint16_t responseSeq = 0;          // Sequence to echo back in CMDSEQ
 uint16_t globalSequenceNumber = 0;  // Auto-incrementing sequence for all responses
 
 // Timing constants
-const int RELAY_STABILIZATION_MS = 15;
+const int RELAY_STABILIZATION_MS = 50;  // Increased from 15ms for better stability
 const int MEASUREMENT_SAMPLES = 6;
 const int SAMPLE_INTERVAL_MS = 17;
-const int INTER_RELAY_DELAY_MS = 10;  // Delay between relay measurements
+const int INTER_RELAY_DELAY_MS = 20;  // Increased from 10ms for better stability
+const int I2C_RETRY_DELAY_MS = 5;  // Delay between I2C retry attempts
+const int MAX_I2C_RETRIES = 3;  // Maximum I2C retry attempts
 
 // Parse command with reliability format (unified with Offroad)
 struct ParsedCommand {
@@ -86,6 +88,7 @@ String formatChecksum(byte checksum);
 void sendReliableResponse(const String& data, uint16_t seq = 0);
 ParsedCommand parseReliableCommand(const String& cmdStr);
 void processCommand(String command);
+bool recoverI2C();
 
 void setup() {
   Serial.begin(115200);
@@ -143,13 +146,15 @@ String formatChecksum(byte checksum) {
 void sendReliableResponse(const String& data, uint16_t seq) {
   String response = data;
   
-  // Always add global sequence number
-  globalSequenceNumber++;
-  response += ":SEQ=" + String(globalSequenceNumber);
-  
-  // Add command sequence if provided
+  // Use received sequence number for commands, auto-increment only for events
   if (seq > 0) {
-    response += ":CMDSEQ=" + String(seq);
+    // This is a response to a command - use the command's sequence
+    response += ":SEQ=" + String(seq);
+    response += ":CMDSEQ=" + String(seq);  // Keep for backward compatibility
+  } else {
+    // This is an event (button press, etc) - use auto-incrementing sequence
+    globalSequenceNumber++;
+    response += ":SEQ=" + String(globalSequenceNumber);
   }
   
   // Calculate and add checksum (2-char uppercase hex)
@@ -157,7 +162,7 @@ void sendReliableResponse(const String& data, uint16_t seq) {
   response += ":CHK=" + formatChecksum(checksum) + ":END";
   
   Serial.println(response);
-  Serial.flush();
+  // Serial.flush() removed - can cause R4 Minima to hang
 }
 
 void loop() {
@@ -269,7 +274,7 @@ void processCommand(String command) {
     // Reset sequence numbers (unified protocol enhancement)
     globalSequenceNumber = 0;
     lastReceivedSeq = 0;
-    responseSeq = 0;
+    responseSeq = parsed.hasReliability ? parsed.sequence : 0;  // Use received seq for response
     sendReliableResponse("OK:SEQ_RESET", responseSeq);
   }
   else {
@@ -279,37 +284,97 @@ void processCommand(String command) {
   digitalWrite(LED_PIN, LOW);
 }
 
+// Attempt to recover I2C communication
+bool recoverI2C() {
+  // Try to reinitialize the INA260
+  for (int attempt = 0; attempt < MAX_I2C_RETRIES; attempt++) {
+    delay(I2C_RETRY_DELAY_MS);
+    
+    // Check if device responds
+    Wire.beginTransmission(0x40);
+    if (Wire.endTransmission() == 0) {
+      // Device is responding, try to reinitialize
+      INA_OK = ina260.begin();
+      if (INA_OK) {
+        // Reconfigure settings
+        ina260.setMode(INA260_MODE_CONTINUOUS);
+        ina260.setCurrentConversionTime(INA260_TIME_140_us);
+        ina260.setVoltageConversionTime(INA260_TIME_140_us);
+        ina260.setAveragingCount(INA260_COUNT_1);
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 // Measure relay and return values (for internal use)
 void measureRelayValues(int relayIndex, float &voltage, float &current) {
   // Turn on the specific relay
   digitalWrite(RELAY_PINS[relayIndex], RELAY_ON);
   
-  // Wait for relay to stabilize
+  // Wait for relay to stabilize (increased delay)
   delay(RELAY_STABILIZATION_MS);
   
   // Take multiple samples for accuracy
   float totalVoltage = 0;
   float totalCurrent = 0;
   bool sensorFailed = false;
+  int validSamples = 0;
+  
+  // If sensor was marked as failed, try to recover it first
+  if (!INA_OK) {
+    if (recoverI2C()) {
+      INA_OK = true;
+    }
+  }
   
   for (int i = 0; i < MEASUREMENT_SAMPLES; i++) {
     if (INA_OK) {
-      float v = ina260.readBusVoltage();
-      float c = ina260.readCurrent();
+      // Try to read with retry logic
+      bool readSuccess = false;
+      for (int retry = 0; retry < MAX_I2C_RETRIES; retry++) {
+        // Check I2C FIRST before attempting to read
+        Wire.beginTransmission(0x40);  // INA260 default address
+        byte i2cError = Wire.endTransmission();
+        
+        if (i2cError == 0) {
+          // I2C is working, now safe to read
+          float v = ina260.readBusVoltage();
+          float c = ina260.readCurrent();
+          
+          // Validate readings
+          if (!isnan(v) && !isnan(c) && v >= 0) {
+            // Success - add to totals
+            totalVoltage += v;
+            totalCurrent += c;
+            validSamples++;
+            readSuccess = true;
+            
+            break;
+          }
+        }
+        
+        // If we're here, either I2C failed or readings were invalid
+        if (retry < MAX_I2C_RETRIES - 1) {
+          // Failed - try to recover
+          delay(I2C_RETRY_DELAY_MS);
+          if (recoverI2C()) {
+            continue;
+          }
+        }
+      }
       
-      // Check if the I2C transaction failed
-      Wire.beginTransmission(0x40);  // INA260 default address
-      if (Wire.endTransmission() != 0) {
+      if (!readSuccess) {
+        // All retries failed
         sensorFailed = true;
         INA_OK = false;
         break;
       }
-      
-      totalVoltage += v;
-      totalCurrent += c;
     } else {
-      totalVoltage += 0.0;
-      totalCurrent += 0.0;
+      // INA260 not available
+      sensorFailed = true;
+      break;
     }
     
     if (i < MEASUREMENT_SAMPLES - 1) {
@@ -320,11 +385,16 @@ void measureRelayValues(int relayIndex, float &voltage, float &current) {
   // Turn off the relay
   digitalWrite(RELAY_PINS[relayIndex], RELAY_OFF);
   
+  // Small delay after turning off relay
+  delay(5);
+  
   // Calculate averages (convert mV to V and mA to A)
-  if (!sensorFailed && INA_OK) {
-    voltage = totalVoltage / MEASUREMENT_SAMPLES / 1000.0;
-    current = totalCurrent / MEASUREMENT_SAMPLES / 1000.0;
+  if (validSamples > 0) {
+    // We got at least some valid readings
+    voltage = totalVoltage / validSamples / 1000.0;
+    current = totalCurrent / validSamples / 1000.0;
   } else {
+    // No valid readings at all
     voltage = -1.0;  // Indicate sensor failure
     current = -1.0;
   }
@@ -376,12 +446,12 @@ void checkButton() {
         currentButtonPressed = true;
         // Send event immediately for responsiveness
         Serial.println("EVENT:BUTTON_PRESSED");
-        Serial.flush();  // Ensure immediate transmission
+        // Serial.flush() removed - can cause R4 Minima to hang
       } else if (currentState == HIGH && lastButtonState == LOW) {
         // Button was released
         currentButtonPressed = false;
         Serial.println("EVENT:BUTTON_RELEASED");
-        Serial.flush();  // Ensure immediate transmission
+        // Serial.flush() removed - can cause R4 Minima to hang
       }
       lastButtonTime = millis();
     }

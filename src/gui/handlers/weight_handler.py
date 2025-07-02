@@ -167,11 +167,12 @@ class WeightHandler(QObject, ThreadCleanupMixin):
         try:
             if self.current_test_worker and self.current_test_worker.isRunning():
                 self.logger.info("Cleaning up: stopping running test worker...")
-                self.current_test_worker.terminate()
-                self.current_test_worker.wait(3000)
+                self.current_test_worker.quit()
+                if not self.current_test_worker.wait(1000):
+                    self.current_test_worker.terminate()
+                    self.current_test_worker.wait(500)
             
             self.current_test_worker = None
-            self.cleanup_resources()
             self.logger.info("Weight handler cleanup completed.")
                 
         except Exception as e:

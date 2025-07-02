@@ -78,6 +78,17 @@ class DeviceCacheService:
             logger.error(f"Failed to save device cache: {e}")
             return False
     
+    def get_device(self, port: str) -> Optional[Dict[str, Any]]:
+        """Get cached information for a specific port (alias for get_cached_device).
+        
+        Args:
+            port: Port name to look up
+            
+        Returns:
+            Device information if found and valid, None otherwise
+        """
+        return self.get_cached_device(port)
+    
     def get_cached_device(self, port: str) -> Optional[Dict[str, Any]]:
         """Get cached information for a specific port.
         

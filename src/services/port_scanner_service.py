@@ -10,6 +10,7 @@ from typing import List, Dict, Optional, Callable, Tuple
 from PySide6.QtCore import QObject, Signal, QThread
 
 from src.hardware.serial_manager import SerialManager
+from src.services.port_registry import port_registry
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +82,7 @@ class PortScannerService(QObject):
     }
     
     # Default timeout for port probing
-    PROBE_TIMEOUT = 0.2
+    PROBE_TIMEOUT = 0.05
     
     def __init__(self):
         super().__init__()
@@ -93,29 +94,74 @@ class PortScannerService(QObject):
         Returns:
             List of port names
         """
-        return SerialManager.list_available_ports()
+        serial_manager = SerialManager()
+        return serial_manager.get_available_ports()
     
-    def probe_port(self, port: str, timeout: float = None) -> Optional[DeviceInfo]:
+    def probe_port(self, port: str, timeout: float = None, check_in_use: bool = False) -> Optional[DeviceInfo]:
         """Probe a single port to identify the connected device.
         
         Args:
             port: Port name to probe
             timeout: Optional custom timeout
+            check_in_use: If True, probe ports that are already in use (read-only check)
             
         Returns:
             DeviceInfo if device identified, None otherwise
         """
+        # Check if port is in use
+        is_in_use = port_registry.is_port_in_use(port)
+        
+        if is_in_use and not check_in_use:
+            # Skip ports that are already in use (default behavior)
+            logger.info(f"Skipping port {port} - already in use")
+            return None
+        
+        if is_in_use and check_in_use:
+            logger.info(f"Checking port {port} even though it's in use (read-only mode)")
+            
         timeout = timeout or self.PROBE_TIMEOUT
         start_time = time.time()
         
         try:
+            # If port is in use, we need to be extra careful
+            if is_in_use and check_in_use:
+                # For in-use ports, try to get cached info first
+                from src.services.device_cache_service import DeviceCacheService
+                cache = DeviceCacheService()
+                cached_info = cache.get_device(port)
+                if cached_info:
+                    logger.info(f"Using cached info for in-use port {port}")
+                    return DeviceInfo(
+                        port=port,
+                        device_type=cached_info.get('device_type', 'Unknown'),
+                        description=cached_info.get('description', 'Unknown Device'),
+                        response=cached_info.get('response', ''),
+                        probe_time=0.0
+                    )
+                else:
+                    # No cached info, can't probe an in-use port safely
+                    logger.warning(f"No cached info for in-use port {port}")
+                    return DeviceInfo(
+                        port=port,
+                        device_type='Unknown',
+                        description='Device in use',
+                        response='',
+                        probe_time=0.0
+                    )
+            
+            # Normal probing for ports not in use
             # Try Arduino first (most common)
-            serial_manager = SerialManager(port, baudrate=115200, timeout=timeout)
-            if serial_manager.connect():
-                # Send identification command
-                serial_manager.write("ID\n")
-                response = serial_manager.read()
-                serial_manager.disconnect()
+            serial_manager = SerialManager(baud_rate=115200, timeout=timeout)
+            if serial_manager.connect(port):
+                try:
+                    # Clear buffers first
+                    serial_manager.flush_buffers()
+                    # Send identification command - use "I" which works reliably
+                    response = serial_manager.query("I", response_timeout=timeout)
+                except Exception:
+                    response = None
+                finally:
+                    serial_manager.disconnect()
                 
                 if response:
                     device_type = self._identify_device_type(response)
@@ -130,11 +176,19 @@ class PortScannerService(QObject):
                         )
             
             # Try scale baudrate
-            serial_manager = SerialManager(port, baudrate=9600, timeout=timeout)
-            if serial_manager.connect():
-                # Scales often send data continuously
-                response = serial_manager.read()
-                serial_manager.disconnect()
+            serial_manager = SerialManager(baud_rate=9600, timeout=timeout)
+            if serial_manager.connect(port):
+                try:
+                    # Scales often send data continuously
+                    time.sleep(0.05)
+                    if serial_manager.connection.in_waiting > 0:
+                        response = serial_manager.read_line(timeout=timeout)
+                    else:
+                        response = None
+                except Exception:
+                    response = None
+                finally:
+                    serial_manager.disconnect()
                 
                 if response:
                     device_type = self._identify_device_type(response)
@@ -201,6 +255,35 @@ class PortScannerService(QObject):
         
         self._scan_worker = PortScanWorker(ports, self)
         return self._scan_worker
+    
+    def identify_port_safe(self, port: str) -> Optional[DeviceInfo]:
+        """Safely identify a port without disrupting existing connections.
+        
+        This method first checks cache, then tries probe_port with check_in_use=True.
+        
+        Args:
+            port: Port to identify
+            
+        Returns:
+            DeviceInfo if identified, None otherwise
+        """
+        # First check cache
+        from src.services.device_cache_service import DeviceCacheService
+        cache = DeviceCacheService()
+        cached_info = cache.get_device(port)
+        
+        if cached_info:
+            logger.info(f"Found cached info for port {port}")
+            return DeviceInfo(
+                port=port,
+                device_type=cached_info.get('device_type', 'Unknown'),
+                description=cached_info.get('description', 'Unknown Device'),
+                response=cached_info.get('response', ''),
+                probe_time=0.0
+            )
+        
+        # Try to probe with check_in_use=True
+        return self.probe_port(port, check_in_use=True)
     
     def find_arduino_quickly(self, cached_port: Optional[str] = None) -> Optional[DeviceInfo]:
         """Try to find Arduino quickly by checking cached port first.

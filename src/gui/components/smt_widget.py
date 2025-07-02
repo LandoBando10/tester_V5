@@ -49,7 +49,7 @@ class BoardCell(QFrame):
     PASS_COLOR = QColor("#2d5a2d")
     FAIL_COLOR = QColor("#5a2d2d")
     IDLE_COLOR = QColor("#3a3a3a")
-    TEXT_STYLE = "font-size: 11px;"
+    TEXT_STYLE = "font-size: 16px;"
 
     def __init__(self, board_idx: int, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -60,17 +60,18 @@ class BoardCell(QFrame):
     # ------------------------ UI setup ------------------------
     def _setup_ui(self):
         self.setFrameShape(QFrame.StyledPanel)
-        self.setLineWidth(2)
-        self.setStyleSheet("border: 2px solid #555555; border-radius: 4px;")
+        self.setLineWidth(3)
+        self.setStyleSheet("border: 3px solid #555555; border-radius: 6px;")
         self.setAutoFillBackground(True)
+        self.setMinimumSize(200, 150)  # Set minimum size for cells
 
         self.layout = QVBoxLayout(self)
-        self.layout.setContentsMargins(8, 8, 8, 8)
-        self.layout.setSpacing(2)
+        self.layout.setContentsMargins(15, 15, 15, 15)
+        self.layout.setSpacing(8)
 
         self.label_board = QLabel(f"Board {self.board_idx}")
         self.label_board.setAlignment(Qt.AlignCenter)
-        self.label_board.setStyleSheet(self.TEXT_STYLE + "font-weight: bold;")
+        self.label_board.setStyleSheet(self.TEXT_STYLE + "font-weight: bold; font-size: 20px;")
         self.layout.addWidget(self.label_board)
 
         # dynamic measurement labels live here
@@ -83,13 +84,13 @@ class BoardCell(QFrame):
         print(f"[CELL COLOR DEBUG] Board {self.board_idx}: Applying background color {color.name()}")
         
         # Use style sheet instead of palette to avoid conflicts
-        border_style = "border: 2px solid #555555; border-radius: 4px;"
+        border_style = "border: 3px solid #555555; border-radius: 6px;"
         bg_style = f"background-color: {color.name()};"
         self.setStyleSheet(f"{border_style} {bg_style}")
         
         # Update text color based on background brightness
         txt_color = QColor("white") if color.lightness() < 128 else QColor("black")
-        text_style = self.TEXT_STYLE + f"color: {txt_color.name()};" + "font-weight: bold;"
+        text_style = f"color: {txt_color.name()}; font-weight: bold; font-size: 20px;"
         self.label_board.setStyleSheet(text_style)
         
         # Update existing labels
@@ -130,10 +131,34 @@ class BoardCell(QFrame):
             self.layout.insertWidget(self.layout.count() - 1, lbl)
             self.measure_labels[text] = lbl
 
-        # Display all functions generically
-        for func_name, current in sorted(functions.items()):
+        # Group measurements by function
+        function_groups = {}
+        for key, value in sorted(functions.items()):
+            # Split key into function and measurement type
+            parts = key.rsplit("_", 1)
+            if len(parts) == 2:
+                function_name, measurement_type = parts
+                if function_name not in function_groups:
+                    function_groups[function_name] = {}
+                function_groups[function_name][measurement_type] = value
+            else:
+                # Fallback for unexpected format
+                _add_line(f"{key}: {value:.2f}")
+        
+        # Display grouped measurements
+        for func_name in sorted(function_groups.keys(), reverse=True):
+            measurements = function_groups[func_name]
             formatted_name = func_name.replace("_", " ").title()
-            _add_line(f"{formatted_name}: {current:.2f} A")
+            
+            # Build measurement string with both current and voltage if available
+            parts = []
+            if "current" in measurements:
+                parts.append(f"{measurements['current']:.3f}A")
+            if "voltage" in measurements:
+                parts.append(f"{measurements['voltage']:.3f}V")
+            
+            if parts:
+                _add_line(f"{formatted_name}: {' / '.join(parts)}")
 
         # Apply color based on pass/fail, but only if we have actual measurement data
         if functions:
@@ -162,7 +187,7 @@ class PCBPanelWidget(QWidget):
         self.rows = 0
         self.cols = 0
         self.grid = QGridLayout(self)
-        self.grid.setSpacing(10)
+        self.grid.setSpacing(20)
         self.cells: Dict[int, BoardCell] = {}
 
     # ---------------------- public API ------------------------
@@ -184,6 +209,8 @@ class PCBPanelWidget(QWidget):
 
     def update_from_test_result(self, result):
         """Populate each cell based on a `TestResult`‑like object."""
+        
+        print(f"[SMT DEBUG] update_from_test_result called with measurements: {list(getattr(result, 'measurements', {}).keys())}")
         
         # if layout unknown, try to infer from result meta or board count
         if self.rows == 0 or self.cols == 0:
@@ -221,16 +248,17 @@ class PCBPanelWidget(QWidget):
         # Store all function measurements generically
         board_functions: Dict[int, Dict[str, float]] = {}
         board_pass: Dict[int, bool] = {}
+        
+        # Debug: Print what measurements we received
+        measurements = getattr(result, "measurements", {})
+        print(f"[SMT DEBUG] PCBPanelWidget.update_from_test_result - measurements keys: {list(measurements.keys())}")
+        print(f"[SMT DEBUG] PCBPanelWidget.update_from_test_result - result type: {type(result)}")
 
-        for name, data in getattr(result, "measurements", {}).items():
+        for name, data in measurements.items():
             if "_board_" not in name:
                 continue
             
-            # Only process current measurements, not voltage
-            if not name.endswith("_current"):
-                continue
-            
-            # Parse board number from names like "function_board_1_current"
+            # Parse board number from names like "function_board_1_current" or "function_board_1_voltage"
             parts = name.split("_")
             try:
                 board_idx = parts.index("board")
@@ -240,16 +268,26 @@ class PCBPanelWidget(QWidget):
 
             # Extract function name (everything before "_board_")
             function_name = "_".join(parts[:board_idx])
+            
+            # Extract measurement type (current or voltage)
+            measurement_type = parts[-1]  # "current" or "voltage"
+            
             board_pass.setdefault(b_idx, True)
             
-            # Store all functions generically
-            board_functions.setdefault(b_idx, {})[function_name] = data["value"]
+            # Store measurements with their type
+            board_functions.setdefault(b_idx, {})
+            
+            # Create a key that includes both function and measurement type
+            key = f"{function_name}_{measurement_type}"
+            board_functions[b_idx][key] = data["value"]
             
             # Check pass/fail
             if not data.get("passed", True):
                 board_pass[b_idx] = False
 
         # Debug: Final board pass/fail status determined
+        print(f"[SMT DEBUG] Board functions collected: {board_functions}")
+        print(f"[SMT DEBUG] Board pass status: {board_pass}")
         
         for idx, cell in self.cells.items():
             passed = board_pass.get(idx, True)
@@ -413,8 +451,11 @@ class SMTWidget(QWidget):
         self.splitter.addWidget(self.programming_group)
         self.splitter.addWidget(self.power_group)
         
-        # Set initial sizes (30% programming, 70% power)
-        self.splitter.setSizes([200, 600])
+        # Hide programming group by default (programming_enabled starts as False)
+        self.programming_group.setVisible(False)
+        
+        # Set initial sizes (0% programming since hidden, 100% power)
+        self.splitter.setSizes([0, 800])
         
         layout.addWidget(self.splitter)
 
@@ -460,12 +501,21 @@ class SMTWidget(QWidget):
     def set_programming_enabled(self, enabled: bool):
         """Enable/disable programming display"""
         self.programming_enabled = enabled
+        
+        # Show/hide the entire programming group based on enabled state
+        self.programming_group.setVisible(enabled)
+        
+        # Adjust splitter sizes based on programming visibility
         if enabled:
             self.programming_status.setText("Programming enabled - Waiting to start...")
             self.programming_status.setStyleSheet("color: #4a90a4; font-style: italic; padding: 5px;")
+            # Set initial sizes (30% programming, 70% power)
+            self.splitter.setSizes([200, 600])
         else:
             self.programming_status.setText("Programming not enabled")
             self.programming_status.setStyleSheet("color: #888888; font-style: italic; padding: 5px;")
+            # Give all space to power section when programming is hidden
+            self.splitter.setSizes([0, 800])
 
     def set_testing_state(self, testing: bool):
         """Set the testing state of the widget."""
@@ -569,6 +619,7 @@ class SMTWidget(QWidget):
     
     def display_results(self, result):
         """Display test results - alias for update_from_test_result for compatibility."""
+        print(f"[SMT DEBUG] display_results called with result.measurements keys: {list(getattr(result, 'measurements', {}).keys())}")
         self.update_from_test_result(result)
         
         # Update programming results if available

@@ -3,9 +3,9 @@ Splash screen with video playback for professional startup experience
 """
 import sys
 from pathlib import Path
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QApplication
-from PySide6.QtCore import Qt, QTimer, Signal, QThread, QUrl, QPropertyAnimation
-from PySide6.QtGui import QPixmap, QGuiApplication, QIcon
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QApplication, QGraphicsDropShadowEffect, QProgressBar
+from PySide6.QtCore import Qt, QTimer, Signal, QThread, QUrl, QPropertyAnimation, QEasingCurve
+from PySide6.QtGui import QPixmap, QGuiApplication, QIcon, QLinearGradient, QPalette, QBrush
 from PySide6.QtMultimedia import QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from .transition_manager import transition_manager
@@ -74,10 +74,11 @@ class SplashScreen(QWidget):
         # Set size to match mode selector
         self.setFixedSize(self.SPLASH_WIDTH, self.SPLASH_HEIGHT)
         
-        # Set black background with rounded corners to match mode selector
+        # Set gradient background with rounded corners for professional look
         self.setStyleSheet("""
             QWidget {
-                background-color: #1a1a1a;
+                background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 1,
+                    stop: 0 #1a1a1a, stop: 0.5 #2d2d2d, stop: 1 #1a1a1a);
                 border: 1px solid #404040;
                 border-radius: 15px;
             }
@@ -144,10 +145,31 @@ class SplashScreen(QWidget):
             self.setup_fallback_splash(layout)
             
     def setup_fallback_splash(self, layout):
-        """Setup fallback splash screen with logo"""
-        # Create centered label
+        """Setup professional fallback splash screen with enhanced visuals"""
+        # Create container for vertical centering
+        container = QWidget()
+        container_layout = QVBoxLayout(container)
+        container_layout.setAlignment(Qt.AlignCenter)
+        container_layout.setSpacing(20)
+        
+        # Add top spacer
+        container_layout.addStretch(2)
+        
+        # Create logo container with shadow effect
+        logo_container = QWidget()
+        logo_layout = QVBoxLayout(logo_container)
+        logo_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Create centered label for logo
         self.logo_label = QLabel()
         self.logo_label.setAlignment(Qt.AlignCenter)
+        
+        # Add drop shadow effect to logo
+        shadow = QGraphicsDropShadowEffect()
+        shadow.setBlurRadius(30)
+        shadow.setColor(Qt.black)
+        shadow.setOffset(0, 5)
+        self.logo_label.setGraphicsEffect(shadow)
         
         # Try to load company logo
         logo_paths = [
@@ -161,8 +183,8 @@ class SplashScreen(QWidget):
                 pixmap = QPixmap(str(logo_path))
                 # Scale logo to fit nicely in the window
                 scaled_pixmap = pixmap.scaled(
-                    int(self.SPLASH_WIDTH * 0.6), 
-                    int(self.SPLASH_HEIGHT * 0.5), 
+                    int(self.SPLASH_WIDTH * 0.4), 
+                    int(self.SPLASH_HEIGHT * 0.35), 
                     Qt.KeepAspectRatio, 
                     Qt.SmoothTransformation
                 )
@@ -172,32 +194,105 @@ class SplashScreen(QWidget):
         
         if not logo_loaded:
             # Fallback text
-            self.logo_label.setText("DIODE DYNAMICS")
+            self.logo_label.setText("DD")
             self.logo_label.setStyleSheet("""
                 color: white;
-                font-size: 48px;
+                font-size: 72px;
                 font-weight: bold;
                 font-family: Arial;
             """)
-            
-        layout.addWidget(self.logo_label)
+        
+        logo_layout.addWidget(self.logo_label)
+        container_layout.addWidget(logo_container)
+        
+        # Add company name
+        company_name = QLabel("DIODE DYNAMICS")
+        company_name.setAlignment(Qt.AlignCenter)
+        company_name.setStyleSheet("""
+            color: #ffffff;
+            font-size: 32px;
+            font-weight: bold;
+            font-family: 'Segoe UI', Arial, sans-serif;
+            letter-spacing: 3px;
+        """)
+        container_layout.addWidget(company_name)
         
         # Add subtitle
         subtitle = QLabel("Production Test System")
         subtitle.setAlignment(Qt.AlignCenter)
         subtitle.setStyleSheet("""
-            color: #888888;
-            font-size: 24px;
-            font-family: Arial;
-            margin-top: 20px;
+            color: #cccccc;
+            font-size: 18px;
+            font-family: 'Segoe UI', Arial, sans-serif;
+            margin-top: 5px;
         """)
-        layout.addWidget(subtitle)
+        container_layout.addWidget(subtitle)
+        
+        # Add spacing
+        container_layout.addSpacing(30)
+        
+        # Add progress bar for loading indication
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setTextVisible(False)
+        self.progress_bar.setMaximumHeight(4)
+        self.progress_bar.setStyleSheet("""
+            QProgressBar {
+                background-color: #333333;
+                border: none;
+                border-radius: 2px;
+            }
+            QProgressBar::chunk {
+                background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 0,
+                    stop: 0 #4a90a4, stop: 1 #67b7d1);
+                border-radius: 2px;
+            }
+        """)
+        self.progress_bar.setMaximumWidth(300)
+        
+        # Center the progress bar
+        progress_container = QWidget()
+        progress_layout = QVBoxLayout(progress_container)
+        progress_layout.setAlignment(Qt.AlignCenter)
+        progress_layout.addWidget(self.progress_bar)
+        container_layout.addWidget(progress_container)
+        
+        # Add loading text
+        self.loading_label = QLabel("Initializing...")
+        self.loading_label.setAlignment(Qt.AlignCenter)
+        self.loading_label.setStyleSheet("""
+            color: #888888;
+            font-size: 14px;
+            font-family: 'Segoe UI', Arial, sans-serif;
+            margin-top: 10px;
+        """)
+        container_layout.addWidget(self.loading_label)
+        
+        # Add bottom spacer
+        container_layout.addStretch(3)
+        
+        # Add version info at bottom
+        version_label = QLabel("Version 5.0")
+        version_label.setAlignment(Qt.AlignCenter)
+        version_label.setStyleSheet("""
+            color: #666666;
+            font-size: 12px;
+            font-family: 'Segoe UI', Arial, sans-serif;
+        """)
+        container_layout.addWidget(version_label)
+        
+        layout.addWidget(container)
         
         # Store reference to static content for transitions
         self.static_content_widget = layout.parentWidget()
         
-        # Start timer for fallback duration (shorter for faster startup)
-        fallback_duration = min(self.duration_ms, 2000)  # Max 2 seconds for fallback
+        # Start progress animation
+        self.start_progress_animation()
+        
+        # Animate logo with subtle scale effect
+        self.animate_logo()
+        
+        # Start timer for fallback duration
+        fallback_duration = min(self.duration_ms, 3000)
         QTimer.singleShot(fallback_duration, self.on_video_ready)
         
     def on_media_status_changed(self, status):
@@ -284,6 +379,11 @@ class SplashScreen(QWidget):
     def on_preload_progress(self, message: str, percentage: int):
         """Handle preloading progress updates"""
         print(f"Preloading: {message} ({percentage}%)")
+        # Update progress bar if in fallback mode
+        if hasattr(self, 'progress_bar'):
+            self.progress_bar.setValue(percentage)
+        if hasattr(self, 'loading_label'):
+            self.loading_label.setText(message)
     
     def on_preload_complete(self, components: PreloadedComponents):
         """Handle completion of preloading"""
@@ -327,6 +427,29 @@ class SplashScreen(QWidget):
         
         # Signal that we're ready for transition
         self.ready_for_transition.emit()
+    
+    def start_progress_animation(self):
+        """Start animated progress bar"""
+        if hasattr(self, 'progress_bar'):
+            # Create smooth progress animation
+            self.progress_animation = QPropertyAnimation(self.progress_bar, b"value")
+            self.progress_animation.setDuration(self.duration_ms - 500)  # Leave some time at 100%
+            self.progress_animation.setStartValue(0)
+            self.progress_animation.setEndValue(100)
+            self.progress_animation.setEasingCurve(QEasingCurve.InOutQuad)
+            self.progress_animation.start()
+    
+    def animate_logo(self):
+        """Animate logo with subtle fade effect"""
+        if hasattr(self, 'logo_label'):
+            # Create fade-in animation for logo
+            self.logo_label.setWindowOpacity(0.0)
+            self.logo_fade = QPropertyAnimation(self.logo_label, b"windowOpacity")
+            self.logo_fade.setDuration(800)
+            self.logo_fade.setStartValue(0.0)
+            self.logo_fade.setEndValue(1.0)
+            self.logo_fade.setEasingCurve(QEasingCurve.InOutQuad)
+            self.logo_fade.start()
     
     def close_splash(self):
         """Close splash screen with fade out for seamless transition"""

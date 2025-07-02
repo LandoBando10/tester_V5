@@ -72,8 +72,19 @@ class ConnectionService(QObject):
             self.disconnect_arduino()
         
         try:
-            # First probe the port to get device info
-            device_info = self.port_scanner.probe_port(port)
+            # First check if this port is already in use by us
+            from src.services.port_registry import port_registry
+            is_our_port = (self._arduino_port == port and 
+                          port_registry.is_port_in_use(port))
+            
+            # Probe the port to get device info
+            # Use check_in_use=True if it's our current port
+            device_info = self.port_scanner.probe_port(port, check_in_use=is_our_port)
+            
+            if not device_info:
+                # Try with check_in_use=True as fallback
+                device_info = self.port_scanner.probe_port(port, check_in_use=True)
+                
             if not device_info or device_info.device_type != 'Arduino':
                 return ConnectionResult(
                     success=False,
@@ -105,11 +116,12 @@ class ConnectionService(QObject):
             self._arduino_port = port
             self._arduino_firmware = firmware_type
             
-            # Update cache
+            # Update cache with full device info including response
             self.cache_service.update_device(port, {
                 'device_type': 'Arduino',
                 'firmware_type': firmware_type,
-                'description': device_info.description
+                'description': device_info.description,
+                'response': device_info.response  # Important for re-identification
             })
             
             # Start health monitoring
@@ -143,6 +155,13 @@ class ConnectionService(QObject):
                 self._arduino_controller.disconnect()
             except Exception as e:
                 logger.error(f"Error disconnecting Arduino: {e}")
+            
+            # Ensure port is released from registry (in case controller didn't do it)
+            if self._arduino_port:
+                from src.services.port_registry import port_registry
+                if port_registry.is_port_in_use(self._arduino_port):
+                    port_registry.release_port(self._arduino_port)
+                    logger.debug(f"Released Arduino port {self._arduino_port} from registry")
             
             self._arduino_controller = None
             self._arduino_port = None
@@ -228,6 +247,13 @@ class ConnectionService(QObject):
                 self._scale_controller.disconnect()
             except Exception as e:
                 logger.error(f"Error disconnecting scale: {e}")
+            
+            # Ensure port is released from registry (in case controller didn't do it)
+            if self._scale_port:
+                from src.services.port_registry import port_registry
+                if port_registry.is_port_in_use(self._scale_port):
+                    port_registry.release_port(self._scale_port)
+                    logger.debug(f"Released scale port {self._scale_port} from registry")
             
             self._scale_controller = None
             self._scale_port = None

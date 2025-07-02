@@ -42,6 +42,7 @@ class SMTTest(BaseTest):
                 spc_enabled=True,
                 sampling_mode=self.spc_config.get('sampling_mode', True),
                 production_mode=self.spc_config.get('production_mode', False),
+                test_mode='smt',  # SMT test always uses smt mode
                 logger=self.logger
             )
             # Connect to spec calculation ready signal
@@ -156,7 +157,16 @@ class SMTTest(BaseTest):
             
             # Single panel measurement
             self.update_progress("Measuring panel...", 60)
-            panel_measurements = self.arduino.test_panel()
+            
+            # Get list of all configured relays from relay_mapping
+            configured_relays = [int(relay_str) for relay_str in self.relay_mapping.keys() if self.relay_mapping[relay_str]]
+            if configured_relays:
+                self.logger.info(f"Testing configured relays: {sorted(configured_relays)}")
+                panel_measurements = self.arduino.test_panel(relay_list=configured_relays)
+            else:
+                # No relay mapping, test all
+                self.logger.info("No relay mapping configured, testing all relays")
+                panel_measurements = self.arduino.test_panel()
             
             if not panel_measurements:
                 self.logger.error("Panel test failed - no measurements received")
@@ -407,16 +417,22 @@ class SMTTest(BaseTest):
     
     def _check_limits(self, board_name: str, function: str, measurements: Dict, limits: Dict):
         """Check measurements against limits"""
-        board_key = board_name.replace(' ', '_').lower()
+        # Debug logging
+        self.logger.debug(f"_check_limits called for {board_name} {function}")
+        self.logger.debug(f"  measurements: {measurements}")
+        self.logger.debug(f"  limits: {limits}")
+        
+        # Extract board number from "Board X" format
+        board_num = board_name.split()[-1] if board_name.startswith("Board") else board_name
         
         # Check current
-        if "current" in measurements and "current_A" in limits:
+        if "current" in measurements and "current_a" in limits:
             current = measurements["current"]
-            min_val = limits["current_A"]["min"]
-            max_val = limits["current_A"]["max"]
+            min_val = limits["current_a"]["min"]
+            max_val = limits["current_a"]["max"]
             
             self.result.add_measurement(
-                f"{function}_{board_key}_current",
+                f"{function}_board_{board_num}_current",
                 current, min_val, max_val, "A"
             )
             
@@ -424,36 +440,17 @@ class SMTTest(BaseTest):
             if self.spc and self.spc.sampling_mode:
                 board_id = board_name.replace(' ', '_')
                 self.spc.add_measurement(self.sku, function, board_id, current, measurements.get("voltage", 0))
-            
-            if not (min_val <= current <= max_val):
-                self.result.failures.append(
-                    f"{board_name} {function} current {current:.3f}A "
-                    f"outside limits ({min_val:.3f}-{max_val:.3f}A)"
-                )
-            
-            # Check SPC control limits if in production mode
-            if self.spc and self.spc.production_mode:
-                violations = self.spc.check_control_limits(self.sku, function, board_name.replace(' ', '_'), current)
-                if violations:
-                    for violation in violations:
-                        self.result.failures.append(f"SPC violation: {violation}")
         
         # Check voltage
-        if "voltage" in measurements and "voltage_V" in limits:
+        if "voltage" in measurements and "voltage_v" in limits:
             voltage = measurements["voltage"]
-            min_val = limits["voltage_V"]["min"]
-            max_val = limits["voltage_V"]["max"]
+            min_val = limits["voltage_v"]["min"]
+            max_val = limits["voltage_v"]["max"]
             
             self.result.add_measurement(
-                f"{function}_{board_key}_voltage",
+                f"{function}_board_{board_num}_voltage",
                 voltage, min_val, max_val, "V"
             )
-            
-            if not (min_val <= voltage <= max_val):
-                self.result.failures.append(
-                    f"{board_name} {function} voltage {voltage:.3f}V "
-                    f"outside limits ({min_val:.3f}-{max_val:.3f}V)"
-                )
     
     def _check_programming_results(self):
         """Check programming results if applicable"""

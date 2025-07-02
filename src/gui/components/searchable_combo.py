@@ -57,6 +57,9 @@ class SearchableComboBox(QComboBox):
         # Update completer model
         self._completer.setModel(QStringListModel(self._all_items))
         
+        # Adjust combo box width to fit content
+        self._adjustSizeToContents()
+        
     def clear(self):
         """Clear items"""
         self._all_items = []
@@ -86,3 +89,29 @@ class SearchableComboBox(QComboBox):
     def blockCustomSignals(self, block):
         """Block or unblock custom signals (item_selected)"""
         self._custom_signals_blocked = block
+    
+    def _adjustSizeToContents(self):
+        """Adjust the combo box width to fit the longest item"""
+        if not self._all_items:
+            return
+            
+        # Get font metrics
+        fm = self.fontMetrics()
+        
+        # Find the width of the longest item
+        max_width = 0
+        for item in self._all_items:
+            item_width = fm.horizontalAdvance(item) if hasattr(fm, 'horizontalAdvance') else fm.width(item)
+            max_width = max(max_width, item_width)
+        
+        # Add padding for the dropdown arrow and some extra space
+        padding = 50  # Space for dropdown arrow and margins
+        desired_width = max_width + padding
+        
+        # Respect minimum and maximum widths
+        min_width = self.minimumWidth()
+        max_width = self.maximumWidth()
+        
+        # Set the width within bounds
+        new_width = max(min_width, min(desired_width, max_width))
+        self.setFixedWidth(new_width)

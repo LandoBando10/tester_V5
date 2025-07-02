@@ -21,6 +21,8 @@ class PreloadedComponents:
         # Fast startup connection
         self.arduino_controller = None
         self.arduino_port = None
+        self.scale_controller = None
+        self.scale_port = None
         self.remaining_ports_to_scan = []
 
 
@@ -79,16 +81,23 @@ class PreloaderThread(QThread):
         """Preload heavy imports to warm up Python's import cache"""
         try:
             self.logger.info("Preloading imports...")
+            self.progress.emit("Loading core modules...", 10)
             
-            # Import heavy modules
+            # Import heavy modules with progress updates
             import src.gui.main_window
+            self.progress.emit("Loading GUI components...", 20)
+            
             import src.gui.handlers.offroad_handler
             import src.gui.handlers.smt_handler
             import src.gui.handlers.weight_handler
+            self.progress.emit("Loading handlers...", 30)
+            
             import src.gui.components.connection_dialog
             import src.gui.components.test_area
             import src.gui.components.top_controls
             import src.gui.components.menu_bar
+            self.progress.emit("Loading hardware modules...", 40)
+            
             import src.hardware.arduino_controller
             import src.hardware.serial_manager
             import src.core.offroad_test
@@ -106,6 +115,7 @@ class PreloaderThread(QThread):
         """Load SKU manager and all SKU data"""
         try:
             self.logger.info("Loading SKU manager...")
+            self.progress.emit("Loading SKU configurations...", 50)
             
             from src.data.sku_manager import SKUManager
             
@@ -116,6 +126,7 @@ class PreloaderThread(QThread):
             
             sku_count = len(self.components.sku_manager.get_all_skus())
             self.logger.info(f"Loaded {sku_count} SKUs in {load_time:.0f}ms")
+            self.progress.emit(f"Loaded {sku_count} SKUs", 60)
             
         except Exception as e:
             self.logger.error(f"Error loading SKU manager: {e}")
@@ -153,41 +164,92 @@ class PreloaderThread(QThread):
             ports = serial_manager.get_available_ports()
             self.logger.info(f"Found {len(ports)} serial ports")
             
-            # Load device cache to get last Arduino port
+            # Load device cache to get last Arduino/Scale ports and known non-Arduino ports
             last_arduino_port = None
+            last_scale_port = None
+            known_non_arduino = set()
+            devices = {}  # Store device cache for preserving types
             cache_file = Path("config") / ".device_cache.json"
             if cache_file.exists():
                 try:
                     with open(cache_file, 'r') as f:
                         cache_data = json.load(f)
                         last_arduino_port = cache_data.get("last_arduino_port")
+                        last_scale_port = cache_data.get("last_scale_port")
+                        
+                        # Get known non-Arduino ports to skip
+                        devices = cache_data.get("devices", {})
+                        for port, device_type in devices.items():
+                            # Only skip truly unknown ports, not Arduino variants
+                            if device_type == "Unknown":
+                                known_non_arduino.add(port)
+                        
+                        # Prioritize last known ports
                         if last_arduino_port and last_arduino_port in ports:
-                            # Move last Arduino port to front of list
                             ports.remove(last_arduino_port)
                             ports.insert(0, last_arduino_port)
                             self.logger.info(f"Trying last Arduino port first: {last_arduino_port}")
+                        
+                        if last_scale_port and last_scale_port in ports:
+                            # Move scale port near front but after Arduino
+                            if last_scale_port in ports:
+                                ports.remove(last_scale_port)
+                                ports.insert(1 if last_arduino_port else 0, last_scale_port)
+                                self.logger.info(f"Trying last scale port: {last_scale_port}")
                 except Exception as e:
                     self.logger.debug(f"Could not load device cache: {e}")
             
-            # Sequential scan for first Arduino with immediate connection
+            # Sequential scan for Arduino and Scale with immediate connection
             arduino_found = False
+            scale_found = False
+            
             for port in ports:
-                result = self._probe_and_connect_arduino(port)
-                if result['connected']:
-                    # Arduino found and connected!
-                    arduino_found = True
-                    self.components.arduino_controller = result['controller']
-                    self.components.arduino_port = port
-                    self.components.port_info[port] = result['device_type']
-                    self.logger.info(f"Connected to {result['device_type']} on {port}")
-                    
-                    # Store remaining ports for background scanning
-                    remaining_ports = [p for p in ports if p != port]
+                # Skip known non-Arduino ports for faster startup
+                if port in known_non_arduino and port != last_arduino_port and port != last_scale_port:
+                    self.logger.info(f"Skipping known non-Arduino port: {port}")
+                    # Preserve the existing device type from cache
+                    self.components.port_info[port] = devices.get(port, "Unknown")
+                    continue
+                
+                # If we haven't found Arduino yet, try Arduino connection
+                if not arduino_found:
+                    result = self._probe_and_connect_arduino(port)
+                    if result['connected']:
+                        # Arduino found and connected!
+                        arduino_found = True
+                        self.components.arduino_controller = result['controller']
+                        self.components.arduino_port = port
+                        self.components.port_info[port] = result['device_type']
+                        self.logger.info(f"Connected to {result['device_type']} on {port}")
+                        continue  # Continue to look for scale
+                    else:
+                        # Not an Arduino or failed to connect
+                        self.components.port_info[port] = result['device_type']
+                        
+                        # If it's a scale and we haven't found one yet, connect to it
+                        if result['device_type'] == 'Scale' and not scale_found:
+                            scale_result = self._probe_and_connect_scale(port)
+                            if scale_result['connected']:
+                                scale_found = True
+                                self.components.scale_controller = scale_result['controller']
+                                self.components.scale_port = port
+                                self.logger.info(f"Connected to Scale on {port}")
+                
+                # If it's marked as scale from probe but not connected yet
+                elif self.components.port_info.get(port) == 'Scale' and not scale_found:
+                    scale_result = self._probe_and_connect_scale(port)
+                    if scale_result['connected']:
+                        scale_found = True
+                        self.components.scale_controller = scale_result['controller']
+                        self.components.scale_port = port
+                        self.logger.info(f"Connected to Scale on {port}")
+                
+                # Stop early if we found both devices
+                if arduino_found and scale_found:
+                    self.logger.info("Both Arduino and Scale connected during fast startup")
+                    remaining_ports = [p for p in ports if p not in [self.components.arduino_port, self.components.scale_port]]
                     self.components.remaining_ports_to_scan = remaining_ports
                     break
-                else:
-                    # Not an Arduino or failed to connect
-                    self.components.port_info[port] = result['device_type']
             
             # If no Arduino found, scan remaining ports normally
             if not arduino_found and ports:
@@ -229,16 +291,14 @@ class PreloaderThread(QThread):
             from src.hardware.controller_factory import ArduinoControllerFactory
             
             # Try Arduino connection
-            temp_serial = SerialManager(baud_rate=115200, timeout=0.1)
+            temp_serial = SerialManager(baud_rate=115200, timeout=0.05)
             
             if temp_serial.connect(port):
                 try:
                     temp_serial.flush_buffers()
                     
-                    # Try identification commands
-                    response = temp_serial.query("I", response_timeout=0.1)
-                    if not response or "ERROR" in response.upper():
-                        response = temp_serial.query("ID", response_timeout=0.1)
+                    # Try identification command - "I" works reliably
+                    response = temp_serial.query("I", response_timeout=0.05)
                     
                     if response:
                         response_upper = response.upper()
@@ -299,6 +359,54 @@ class PreloaderThread(QThread):
         
         return result
     
+    def _probe_and_connect_scale(self, port: str) -> Dict[str, Any]:
+        """Probe port and if Scale, keep connection open"""
+        result = {
+            'connected': False,
+            'controller': None,
+            'device_type': 'Unknown'
+        }
+        
+        try:
+            from src.hardware.serial_manager import SerialManager
+            from src.hardware.scale_controller import ScaleController
+            
+            # Try scale connection
+            temp_serial = SerialManager(baud_rate=9600, timeout=0.05)
+            
+            if temp_serial.connect(port):
+                try:
+                    time.sleep(0.05)
+                    if temp_serial.connection.in_waiting > 0:
+                        line = temp_serial.read_line(timeout=0.05)
+                        if line and ('g' in line or 'GS' in line):
+                            result['device_type'] = "Scale"
+                            # Scale detected - disconnect temp connection and create proper controller
+                            temp_serial.disconnect()
+                            
+                            # Create scale controller
+                            controller = ScaleController()
+                            
+                            # Connect with full initialization
+                            if controller.connect(port, skip_comm_test=True):
+                                result['connected'] = True
+                                result['controller'] = controller
+                                self.logger.info(f"Successfully connected to Scale on {port}")
+                            else:
+                                self.logger.warning(f"Failed to fully connect to Scale on {port}")
+                    else:
+                        temp_serial.disconnect()
+                        
+                except Exception as e:
+                    self.logger.debug(f"Error during scale probe on {port}: {e}")
+                    if temp_serial.is_connected():
+                        temp_serial.disconnect()
+        
+        except Exception as e:
+            self.logger.debug(f"Error probing/connecting scale on {port}: {e}")
+        
+        return result
+    
     def _probe_port(self, port: str) -> str:
         """Fast port probing to identify device type"""
         device_type = "Unknown"
@@ -307,16 +415,14 @@ class PreloaderThread(QThread):
             from src.hardware.serial_manager import SerialManager
             
             # Try Arduino first
-            temp_serial = SerialManager(baud_rate=115200, timeout=0.1)
+            temp_serial = SerialManager(baud_rate=115200, timeout=0.05)
             
             if temp_serial.connect(port):
                 try:
                     temp_serial.flush_buffers()
                     
-                    # Try identification commands
-                    response = temp_serial.query("I", response_timeout=0.1)
-                    if not response or "ERROR" in response.upper():
-                        response = temp_serial.query("ID", response_timeout=0.1)
+                    # Try identification command - "I" works reliably
+                    response = temp_serial.query("I", response_timeout=0.05)
                     
                     if response:
                         response_upper = response.upper()
@@ -372,6 +478,10 @@ class PreloaderThread(QThread):
                     # Add last Arduino port if connected
                     if self.components.arduino_port:
                         cache_data["last_arduino_port"] = self.components.arduino_port
+                    
+                    # Add last Scale port if connected
+                    if self.components.scale_port:
+                        cache_data["last_scale_port"] = self.components.scale_port
                     
                     cache_file.parent.mkdir(exist_ok=True)
                     with open(cache_file, 'w') as f:

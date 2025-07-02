@@ -37,6 +37,7 @@ class SPCIntegration(QObject):
                  production_mode: bool = False,
                  data_dir: Optional[Path] = None,
                  logger: Optional[logging.Logger] = None,
+                 test_mode: str = 'smt',
                  parent=None):
         """
         Initialize SPC integration
@@ -52,6 +53,7 @@ class SPCIntegration(QObject):
         self.spc_enabled = spc_enabled
         self.sampling_mode = sampling_mode
         self.production_mode = production_mode
+        self.test_mode = test_mode.lower()  # Store test mode (smt, offroad, weight)
         
         # Track measurements for spec calculation trigger
         self.measurement_counts = {}
@@ -200,7 +202,26 @@ class SPCIntegration(QObject):
         """
         measurements = {}
         
-        # Navigate through the test results structure
+        # Handle the actual test results structure from SMTTest
+        # Results are stored as {function}_readings with board_results inside
+        for key, data in test_results.items():
+            if key.endswith('_readings') and isinstance(data, dict):
+                # Extract function name by removing '_readings' suffix
+                function = key.replace('_readings', '')
+                
+                # Get board results
+                board_results = data.get('board_results', {})
+                
+                # Process each board's measurements
+                for board_name, board_data in board_results.items():
+                    if isinstance(board_data, dict):
+                        board_id = board_name.replace(' ', '_')
+                        measurements[(function, board_id)] = {
+                            'current': board_data.get('current', 0),
+                            'voltage': board_data.get('voltage', 0)
+                        }
+        
+        # Also handle direct measurements format for backward compatibility
         if 'measurements' in test_results:
             for function, boards in test_results['measurements'].items():
                 if isinstance(boards, dict):
@@ -261,17 +282,22 @@ class SPCIntegration(QObject):
         specs = {}
         
         try:
-            # Load SKU configuration
-            sku_file = Path("config/skus") / f"{sku}.json"
+            # Load SKU configuration from mode-specific subdirectory
+            sku_file = Path("config/skus") / self.test_mode / f"{sku}.json"
+            if not sku_file.exists():
+                # Try without mode subdirectory for backward compatibility
+                sku_file = Path("config/skus") / f"{sku}.json"
+                
             if sku_file.exists():
                 with open(sku_file, 'r') as f:
                     sku_data = json.load(f)
                     
-                # Extract limits from test sequences
-                for sequence in sku_data.get('test_sequences', []):
+                # Extract limits from test_sequence (singular, not plural)
+                for sequence in sku_data.get('test_sequence', []):
                     if 'function' in sequence and 'limits' in sequence:
                         function = sequence['function']
-                        limits = sequence['limits'].get('current_A', {})
+                        # Fix case: current_a instead of current_A
+                        limits = sequence['limits'].get('current_a', {})
                         
                         # Add for each board (simplified - assuming same limits)
                         for i in range(1, 17):  # Max 16 boards
@@ -295,12 +321,18 @@ class SPCIntegration(QObject):
             user_manager = get_user_manager()
             current_user = user_manager.get_current_user() or "unknown"
             
-            # Update SKU configuration with new limits
-            sku_file = Path("config/skus") / f"{sku}.json"
+            # Update SKU configuration with new limits in mode-specific subdirectory
+            sku_file = Path("config/skus") / self.test_mode / f"{sku}.json"
+            if not sku_file.exists():
+                # Try without mode subdirectory for backward compatibility
+                sku_file = Path("config/skus") / f"{sku}.json"
             
-            # Create timestamped backup in archive directory
-            archive_dir = Path("config/skus/archive")
-            archive_dir.mkdir(exist_ok=True)
+            # Create timestamped backup in mode-specific archive directory
+            if self.test_mode in ['smt', 'offroad', 'weight']:
+                archive_dir = Path("config/skus") / self.test_mode / "archive"
+            else:
+                archive_dir = Path("config/skus/archive")
+            archive_dir.mkdir(parents=True, exist_ok=True)
             
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             backup_file = archive_dir / f"{sku}_{timestamp}.json"
@@ -318,23 +350,23 @@ class SPCIntegration(QObject):
                 # Track changes
                 changes = []
                     
-                # Update limits in test sequences
-                for sequence in sku_data.get('test_sequences', []):
+                # Update limits in test_sequence (singular)
+                for sequence in sku_data.get('test_sequence', []):
                     if 'function' in sequence:
                         function = sequence['function']
                         
                         # Find the first board's limits for this function
                         for key, spec in approved_specs.items():
                             if key.startswith(f"{function}_"):
-                                # Track old values
-                                old_limits = sequence.get('limits', {}).get('current_A', {})
+                                # Track old values - fix case: current_a
+                                old_limits = sequence.get('limits', {}).get('current_a', {})
                                 old_min = old_limits.get('min', 'N/A')
                                 old_max = old_limits.get('max', 'N/A')
                                 
-                                # Update limits
+                                # Update limits with correct case
                                 if 'limits' not in sequence:
                                     sequence['limits'] = {}
-                                sequence['limits']['current_A'] = {
+                                sequence['limits']['current_a'] = {
                                     'min': spec['lsl'],
                                     'max': spec['usl']
                                 }

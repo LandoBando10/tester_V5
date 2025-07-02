@@ -72,7 +72,7 @@ class ThreadCleanupMixin:
                     self.logger.debug(f"Terminating QThread: {thread_id}")
                     qthread.terminate()
                     
-                    if not qthread.wait(5000):  # Wait up to 5 seconds
+                    if not qthread.wait(1000):  # Wait up to 1 second
                         self.logger.warning(f"QThread did not terminate gracefully: {thread_id}")
                     else:
                         self.logger.debug(f"QThread terminated successfully: {thread_id}")

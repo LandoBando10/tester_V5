@@ -5,19 +5,41 @@ Main entry point for the testing application
 Supports both Offroad and SMT testing modes
 """
 
-print("DEBUG: Python script started, importing modules...")
-
 import sys
 import os
-import logging
-import argparse
 from pathlib import Path
 
-print("DEBUG: Basic imports successful")
-
-# Add the project root to Python path
+# Add the project root to Python path immediately
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
+
+# Early splash screen initialization for GUI mode
+if len(sys.argv) == 1 or (len(sys.argv) > 1 and sys.argv[1] == "gui"):
+    # Only import minimal Qt requirements for splash
+    from PySide6.QtWidgets import QApplication
+    from PySide6.QtCore import Qt
+    
+    # Create QApplication early
+    app = QApplication(sys.argv)
+    app.setApplicationName("Diode Dynamics Tester V5")
+    app.setOrganizationName("Diode Dynamics")
+    
+    # Import and show splash screen immediately
+    from src.gui.startup import UnifiedSplashScreen
+    splash = UnifiedSplashScreen()
+    splash.show_centered()
+    app.processEvents()  # Force immediate display
+    
+    # Store references for later use
+    _early_app = app
+    _early_splash = splash
+else:
+    _early_app = None
+    _early_splash = None
+
+# Now import other modules while splash is showing
+import logging
+import argparse
 
 
 def setup_directories():
@@ -88,6 +110,107 @@ def check_dependencies():
 
     logger.info("All required dependencies are available.")
     return True
+
+
+def run_unified_gui_mode(args=None):
+    """Run the GUI application with unified splash/mode selection"""
+    logger = logging.getLogger(__name__)
+    
+    # Check for SKU configuration directory
+    skus_directory = Path('config/skus')
+    if not skus_directory.exists():
+        error_msg = f"SKU configuration directory not found: {skus_directory}. Please ensure it exists."
+        logger.critical(error_msg)
+        try:
+            from PySide6.QtWidgets import QApplication, QMessageBox
+            if not QApplication.instance():
+                _ = QApplication(sys.argv)
+            QMessageBox.critical(None, "Configuration Error", error_msg)
+        except Exception as e_gui:
+            logger.error(f"Could not display GUI error message for missing config: {e_gui}")
+            print(f"\\nCRITICAL ERROR: {error_msg}")
+        return False
+
+    try:
+        from PySide6.QtWidgets import QApplication
+        from PySide6.QtCore import Qt
+        from src.gui.startup import UnifiedSplashScreen
+        from src.gui.main_window import MainWindow
+
+        logger.info("Using pre-initialized QApplication...")
+        # Use the pre-created app and splash if available
+        global _early_app, _early_splash
+        if _early_app and _early_splash:
+            app = _early_app
+            splash = _early_splash
+        else:
+            # Fallback if not pre-initialized
+            app = QApplication.instance() or QApplication(sys.argv)
+            app.setApplicationName("Diode Dynamics Tester V5")
+            app.setOrganizationName("Diode Dynamics")
+            splash = UnifiedSplashScreen()
+            splash.show_centered()
+        
+        # Variables to hold windows
+        selected_mode = None
+        main_window = None
+        preloaded_components = None
+        
+        def on_preloaded_components(components):
+            """Handle preloaded components from splash screen"""
+            nonlocal preloaded_components
+            preloaded_components = components
+            logger.info(f"Components preloaded. SKUs loaded: {len(components.sku_manager.get_all_skus()) if components.sku_manager else 0}")
+        
+        def on_mode_selected(mode):
+            """Handle mode selection from unified splash"""
+            nonlocal selected_mode, main_window, preloaded_components
+            selected_mode = mode
+            logger.info(f"User selected mode: {mode}")
+            
+            # Create MainWindow with preloaded components
+            logger.info("Creating MainWindow with preloaded components...")
+            main_window = MainWindow(preloaded_components=preloaded_components)
+            
+            # Set mode
+            main_window.set_mode(selected_mode)
+            
+            # Show maximized
+            main_window.setWindowState(Qt.WindowMaximized)
+            main_window.show()
+            
+            logger.info("Main window created and shown")
+        
+        # Connect to splash screen signals
+        logger.info("Connecting to splash screen...")
+        splash.mode_selected.connect(on_mode_selected)
+        splash.preloaded_components_signal.connect(on_preloaded_components)
+        splash.finished.connect(lambda: logger.info("Unified splash screen closed"))
+        
+        # Run application
+        logger.info("Starting unified GUI application event loop...")
+        app.exec()
+        logger.info("Unified GUI application finished.")
+        return True
+
+    except ImportError as e:
+        error_msg = f"Import error: {e}. This might be due to missing application files or incorrect Python environment."
+        logger.critical(error_msg, exc_info=True)
+        print(f"\\nCRITICAL IMPORT ERROR: {error_msg}")
+        print("Please check that all required application files are in place and the Python environment is correctly set up.")
+        return False
+    except Exception as e:
+        error_msg = f"An unexpected error occurred while trying to run the unified GUI: {e}"
+        logger.critical(error_msg, exc_info=True)
+        print(f"\\nCRITICAL ERROR: {error_msg}")
+        try:
+            from PySide6.QtWidgets import QApplication, QMessageBox
+            if not QApplication.instance():
+                _ = QApplication(sys.argv)
+            QMessageBox.critical(None, "Application Error", f"A critical error occurred: {e}\\n\\nPlease check the logs for more details.")
+        except Exception as e_gui_critical:
+            logger.error(f"Could not display critical GUI error message: {e_gui_critical}")
+        return False
 
 
 def run_professional_gui_mode(args=None):
@@ -446,7 +569,7 @@ def main():
         description="Diode Dynamics Production Test System",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""Examples:
-  # Run GUI mode (default - with professional startup)
+  # Run GUI mode (default - with unified splash/mode selection)
   python main.py
   
   # Run GUI mode without splash screen/mode selection
@@ -517,14 +640,13 @@ def main():
     )
     
     parser.add_argument(
-        "--no-video",
+        "--unified",
         action="store_true",
-        help="Disable video in splash screen (use static logo only)"
+        help="(Deprecated) Unified mode is now the default"
     )
     
     args = parser.parse_args()
     
-    print("DEBUG: Arguments parsed successfully")
     print("Diode Dynamics Production Test System")
     print("=" * 40)
 
@@ -555,11 +677,12 @@ def main():
         success = True
         
         if args.mode == "gui":
-            # Default to professional mode for GUI unless explicitly disabled
+            # Default to unified mode unless explicitly disabled
             if hasattr(args, 'no_professional') and args.no_professional:
                 success = run_gui_mode()
             else:
-                success = run_professional_gui_mode(args)
+                # Use unified mode as default
+                success = run_unified_gui_mode(args)
             
         elif args.mode == "offroad":
             if not args.sku or not args.port:
