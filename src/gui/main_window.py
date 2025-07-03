@@ -53,6 +53,9 @@ class MainWindow(QMainWindow):
         # SPC widget (will be initialized after UI setup)
         self.spc_widget = None
         self.spc_dialog = None
+        
+        # SPC sampling mode flag (controlled by menu)
+        self.spc_sampling_enabled = True  # Default enabled
 
         # Preload all handlers to avoid lag on mode switch
         self._offroad_handler = OffroadHandler(self)

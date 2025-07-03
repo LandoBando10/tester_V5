@@ -5,7 +5,7 @@ from src.core.base_test import BaseTest, TestResult
 from src.core.programmer_controller import ProgrammerController
 from src.core.smt_controller import SMTController
 from src.hardware.smt_arduino_controller import SMTArduinoController
-from src.spc.spc_integration import SPCIntegration
+from src.spc.simple_spc_integration import SimpleSPCIntegration
 
 class SMTTest(BaseTest):
     """SMT panel testing with programming and power validation using dedicated SMT Arduino"""
@@ -34,20 +34,18 @@ class SMTTest(BaseTest):
         # Initialize programmers if configured
         self._initialize_programmers()
         
-        # Initialize SPC if configured
+        # Initialize SPC if configured (simplified - sampling only)
         self.spc_config = spc_config or {}
         self.spc = None
         if self.spc_config.get('enabled', False):
-            self.spc = SPCIntegration(
-                spc_enabled=True,
-                sampling_mode=self.spc_config.get('sampling_mode', True),
-                production_mode=self.spc_config.get('production_mode', False),
+            self.spc = SimpleSPCIntegration(
+                enabled=True,
                 test_mode='smt',  # SMT test always uses smt mode
                 logger=self.logger
             )
             # Connect to spec calculation ready signal
             self.spc.spec_calculation_ready.connect(self._on_spec_calculation_ready)
-            self.logger.info(f"SPC enabled - Sampling: {self.spc_config.get('sampling_mode')}, Production: {self.spc_config.get('production_mode')}")
+            self.logger.info(f"SPC enabled in sampling mode")
 
     def _on_spec_calculation_ready(self, sku: str):
         """Handle when enough measurements collected for spec calculation"""
@@ -437,7 +435,7 @@ class SMTTest(BaseTest):
             )
             
             # Add to SPC if enabled
-            if self.spc and self.spc.sampling_mode:
+            if self.spc and self.spc.enabled:
                 board_id = board_name.replace(' ', '_')
                 self.spc.add_measurement(self.sku, function, board_id, current, measurements.get("voltage", 0))
         

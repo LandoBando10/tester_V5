@@ -193,12 +193,14 @@ class SMTHandler(QObject, ThreadCleanupMixin):
                         return None
                     self.logger.info("User chose to continue without programming config.")
             
-            # SPC configuration - enable in sampling mode by default
+            # SPC configuration - check if sampling mode is enabled in main window
+            spc_enabled = getattr(self.main_window, 'spc_sampling_enabled', True)  # Default True
             spc_config = {
-                'enabled': True,
-                'sampling_mode': True,    # Collect data, don't enforce limits
-                'production_mode': False  # Will be True once you have control limits
+                'enabled': spc_enabled  # Controlled by menu toggle
             }
+            
+            if not spc_enabled:
+                self.logger.info("SPC data collection is disabled by user setting")
             
             # Pass Arduino controller and SPC config to SMT test
             self.logger.info(f"SMTTest instance created with port: {port}, programming_config: {'present' if programming_config else 'absent'}, SPC: {spc_config.get('enabled')}")

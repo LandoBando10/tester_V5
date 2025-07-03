@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QLabel,
     QVBoxLayout,
+    QHBoxLayout,
     QFrame,
     QGroupBox,
     QTableWidget,
@@ -35,8 +36,99 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QSplitter,
 )
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QFont
 from PySide6.QtCore import Qt, Signal
+
+# ---------------------------------------------------------------------------
+# SegmentedMeasurementWidget
+# ---------------------------------------------------------------------------
+
+class SegmentedMeasurementWidget(QWidget):
+    """Widget to display voltage and current in segmented box style"""
+    
+    def __init__(self, voltage: float, current: float, scale_factor: float = 1.0, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.voltage = voltage
+        self.current = current
+        self.scale_factor = scale_factor
+        self._setup_ui()
+    
+    def _setup_ui(self):
+        layout = QHBoxLayout(self)
+        # Minimize margins to maximize space for text
+        layout.setContentsMargins(0, 2, 0, 2)
+        layout.setSpacing(int(10 * self.scale_factor))
+        
+        # Add stretch to center content
+        layout.addStretch()
+        
+        # Calculate scaled font sizes - slightly smaller to fit better
+        value_font_size = max(11, int(16 * self.scale_factor))
+        unit_font_size = max(9, int(14 * self.scale_factor))
+        
+        # Create voltage display (no border)
+        voltage_layout = QHBoxLayout()
+        voltage_layout.setSpacing(3)
+        
+        # Voltage value with Consolas font
+        self.voltage_value = QLabel(f"{self.voltage:.3f}")
+        self.voltage_value.setFont(QFont("Consolas", value_font_size))
+        self.voltage_value.setStyleSheet("color: #ffffff; font-weight: bold; background: transparent;")
+        self.voltage_value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        
+        # Voltage unit (hide if scale is too small)
+        if self.scale_factor > 0.7:
+            voltage_unit = QLabel("V")
+            voltage_unit.setFont(QFont("Consolas", unit_font_size))
+            voltage_unit.setStyleSheet(f"color: #aaaaaa; background: transparent;")
+            voltage_unit.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            voltage_layout.addWidget(self.voltage_value)
+            voltage_layout.addWidget(voltage_unit)
+        else:
+            # Just show value with unit combined for very small scales
+            self.voltage_value.setText(f"{self.voltage:.3f}V")
+            voltage_layout.addWidget(self.voltage_value)
+        
+        # Separator
+        separator = QLabel("|")
+        separator.setFont(QFont("Consolas", value_font_size))
+        separator.setStyleSheet(f"color: #666666; background: transparent;")
+        separator.setAlignment(Qt.AlignCenter)
+        
+        # Create current display (no border)
+        current_layout = QHBoxLayout()
+        current_layout.setSpacing(3)
+        
+        # Current value with Consolas font
+        self.current_value = QLabel(f"{self.current:.3f}")
+        self.current_value.setFont(QFont("Consolas", value_font_size))
+        self.current_value.setStyleSheet("color: #ffffff; font-weight: bold; background: transparent;")
+        self.current_value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        
+        # Current unit (hide if scale is too small)
+        if self.scale_factor > 0.7:
+            current_unit = QLabel("A")
+            current_unit.setFont(QFont("Consolas", unit_font_size))
+            current_unit.setStyleSheet(f"color: #aaaaaa; background: transparent;")
+            current_unit.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            current_layout.addWidget(self.current_value)
+            current_layout.addWidget(current_unit)
+        else:
+            # Just show value with unit combined for very small scales
+            self.current_value.setText(f"{self.current:.3f}A")
+            current_layout.addWidget(self.current_value)
+        
+        # Add to main layout
+        layout.addLayout(voltage_layout)
+        layout.addWidget(separator)
+        layout.addLayout(current_layout)
+        
+        # Add stretch to center content
+        layout.addStretch()
+        
+        # Set minimum height to ensure text isn't cut off
+        min_height = max(30, int(35 * self.scale_factor))
+        self.setMinimumHeight(min_height)
 
 # ---------------------------------------------------------------------------
 # BoardCell
@@ -49,33 +141,44 @@ class BoardCell(QFrame):
     PASS_COLOR = QColor("#2d5a2d")
     FAIL_COLOR = QColor("#5a2d2d")
     IDLE_COLOR = QColor("#3a3a3a")
-    TEXT_STYLE = "font-size: 16px;"
 
-    def __init__(self, board_idx: int, parent: Optional[QWidget] = None):
+    def __init__(self, board_idx: int, scale_factor: float = 1.0, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.board_idx = board_idx
+        self.scale_factor = scale_factor
         self._setup_ui()
         self.set_idle()
 
     # ------------------------ UI setup ------------------------
     def _setup_ui(self):
-        self.setFrameShape(QFrame.StyledPanel)
-        self.setLineWidth(3)
-        self.setStyleSheet("border: 3px solid #555555; border-radius: 6px;")
+        self.setFrameShape(QFrame.Box)
+        self.setLineWidth(2)
+        self.setStyleSheet("""
+            QFrame {
+                border: 2px solid #444444;
+                border-radius: 6px;
+                background-color: #3a3a3a;
+            }
+        """)
         self.setAutoFillBackground(True)
-        self.setMinimumSize(200, 150)  # Set minimum size for cells
 
+        # Minimize margins to maximize space for content
+        margin = max(5, int(8 * self.scale_factor))
+        spacing = max(2, int(3 * self.scale_factor))
+        
         self.layout = QVBoxLayout(self)
-        self.layout.setContentsMargins(15, 15, 15, 15)
-        self.layout.setSpacing(8)
+        self.layout.setContentsMargins(margin, margin, margin, margin)
+        self.layout.setSpacing(spacing)
 
+        # Scale the board label font
+        board_font_size = max(14, int(20 * self.scale_factor))
         self.label_board = QLabel(f"Board {self.board_idx}")
         self.label_board.setAlignment(Qt.AlignCenter)
-        self.label_board.setStyleSheet(self.TEXT_STYLE + "font-weight: bold; font-size: 20px;")
+        self.label_board.setStyleSheet(f"font-weight: bold; font-size: {board_font_size}px; color: white; margin-bottom: {int(10 * self.scale_factor)}px;")
         self.layout.addWidget(self.label_board)
 
-        # dynamic measurement labels live here
-        self.measure_labels: Dict[str, QLabel] = {}
+        # dynamic measurement widgets live here
+        self.measure_widgets: List[QWidget] = []
 
         self.layout.addStretch()
 
@@ -83,19 +186,22 @@ class BoardCell(QFrame):
     def _apply_background(self, color: QColor):
         print(f"[CELL COLOR DEBUG] Board {self.board_idx}: Applying background color {color.name()}")
         
-        # Use style sheet instead of palette to avoid conflicts
-        border_style = "border: 3px solid #555555; border-radius: 6px;"
-        bg_style = f"background-color: {color.name()};"
-        self.setStyleSheet(f"{border_style} {bg_style}")
+        # Use style sheet with QFrame selector to preserve border
+        self.setStyleSheet(f"""
+            QFrame {{
+                border: 2px solid #444444;
+                border-radius: 6px;
+                background-color: {color.name()};
+            }}
+        """)
         
         # Update text color based on background brightness
         txt_color = QColor("white") if color.lightness() < 128 else QColor("black")
-        text_style = f"color: {txt_color.name()}; font-weight: bold; font-size: 20px;"
-        self.label_board.setStyleSheet(text_style)
+        board_font_size = max(14, int(20 * self.scale_factor))
+        self.label_board.setStyleSheet(f"font-weight: bold; font-size: {board_font_size}px; color: {txt_color.name()}; margin-bottom: {int(10 * self.scale_factor)}px;")
         
-        # Update existing labels
-        for lbl in self.measure_labels.values():
-            lbl.setStyleSheet(self.TEXT_STYLE + f"color: {txt_color.name()};")
+        # Update existing widgets - we don't need to update container colors
+        # The text colors in SegmentedMeasurementWidget are already set to white
 
     def set_pass(self):
         self._apply_background(self.PASS_COLOR)
@@ -115,21 +221,11 @@ class BoardCell(QFrame):
         """Update measurement display with function names and current values."""
         print(f"[CELL COLOR DEBUG] Board {self.board_idx}: updating with passed={passed}, functions={functions}")
         
-        # purge old
-        for lbl in self.measure_labels.values():
-            self.layout.removeWidget(lbl)
-            lbl.deleteLater()
-        self.measure_labels.clear()
-
-        # helper
-        def _add_line(text: str):
-            lbl = QLabel(text)
-            lbl.setAlignment(Qt.AlignCenter)
-            lbl.setWordWrap(True)
-            lbl.setStyleSheet(self.TEXT_STYLE)
-            # insert above the stretch (last item)
-            self.layout.insertWidget(self.layout.count() - 1, lbl)
-            self.measure_labels[text] = lbl
+        # purge old widgets
+        for widget in self.measure_widgets:
+            self.layout.removeWidget(widget)
+            widget.deleteLater()
+        self.measure_widgets.clear()
 
         # Group measurements by function
         function_groups = {}
@@ -141,24 +237,61 @@ class BoardCell(QFrame):
                 if function_name not in function_groups:
                     function_groups[function_name] = {}
                 function_groups[function_name][measurement_type] = value
-            else:
-                # Fallback for unexpected format
-                _add_line(f"{key}: {value:.2f}")
         
-        # Display grouped measurements
+        # Display grouped measurements using segmented style - reverse alphabetical order
         for func_name in sorted(function_groups.keys(), reverse=True):
             measurements = function_groups[func_name]
-            formatted_name = func_name.replace("_", " ").title()
             
-            # Build measurement string with both current and voltage if available
-            parts = []
-            if "current" in measurements:
-                parts.append(f"{measurements['current']:.3f}A")
-            if "voltage" in measurements:
-                parts.append(f"{measurements['voltage']:.3f}V")
-            
-            if parts:
-                _add_line(f"{formatted_name}: {' / '.join(parts)}")
+            # Only display if we have both voltage and current
+            if "current" in measurements and "voltage" in measurements:
+                # Create container for this function
+                func_container = QFrame()
+                func_container.setStyleSheet("""
+                    QFrame {
+                        background-color: transparent;
+                        border: none;
+                        margin: 2px 0px;
+                    }
+                """)
+                func_layout = QVBoxLayout(func_container)
+                func_layout.setContentsMargins(0, 2, 0, 2)
+                func_layout.setSpacing(2)
+                
+                # Create function name label
+                display_name = func_name.replace("_", " ").upper()
+                
+                # Truncate long function names for small scales
+                if self.scale_factor < 0.8:
+                    max_chars = 12
+                    if len(display_name) > max_chars:
+                        display_name = display_name[:max_chars-2] + ".."
+                
+                func_label = QLabel(display_name)
+                func_label.setAlignment(Qt.AlignCenter)
+                func_font_size = max(10, int(13 * self.scale_factor))
+                func_label.setStyleSheet(f"""
+                    font-weight: bold;
+                    font-size: {func_font_size}px;
+                    color: #dddddd;
+                    background: transparent;
+                """)
+                
+                # Create segmented measurement widget
+                seg_widget = SegmentedMeasurementWidget(
+                    voltage=measurements['voltage'],
+                    current=measurements['current'],
+                    scale_factor=self.scale_factor
+                )
+                
+                # Add to container
+                func_layout.addWidget(func_label)
+                func_layout.addWidget(seg_widget)
+                
+                # Insert container above the stretch
+                self.layout.insertWidget(self.layout.count() - 1, func_container)
+                
+                # Add to our widget list for cleanup
+                self.measure_widgets.append(func_container)
 
         # Apply color based on pass/fail, but only if we have actual measurement data
         if functions:
@@ -301,12 +434,53 @@ class PCBPanelWidget(QWidget):
     def _rebuild_grid(self):
         if self.rows <= 0 or self.cols <= 0:
             return
+            
+        # Calculate dynamic spacing based on panel size
+        base_spacing = 20
+        spacing_reduction = min(self.rows, self.cols) - 1
+        dynamic_spacing = max(8, base_spacing - (spacing_reduction * 4))
+        self.grid.setSpacing(dynamic_spacing)
+        
+        # Get available space - use full parent size
+        parent_widget = self.parent()
+        if parent_widget:
+            # Use nearly all available space with minimal margin
+            available_width = parent_widget.width() - 10
+            available_height = parent_widget.height() - 10
+        else:
+            available_width = 800
+            available_height = 600
+            
+        # Calculate cell dimensions to fill available space
+        total_h_spacing = (self.cols - 1) * dynamic_spacing if self.cols > 1 else 0
+        total_v_spacing = (self.rows - 1) * dynamic_spacing if self.rows > 1 else 0
+        
+        cell_width = (available_width - total_h_spacing) / self.cols
+        cell_height = (available_height - total_v_spacing) / self.rows
+        
+        # Only apply minimum constraints to prevent text from being unreadable
+        min_cell_width = 140
+        min_cell_height = 120
+        
+        # Use the calculated dimensions, only applying minimums if necessary
+        optimal_width = max(min_cell_width, cell_width)
+        optimal_height = max(min_cell_height, cell_height)
+        
+        # Calculate scale factor for fonts
+        scale_factor = min(optimal_width / 250.0, optimal_height / 200.0)
+        scale_factor = max(0.6, min(1.2, scale_factor))  # Clamp between 0.6 and 1.2
+        
+        # Create cells
         total = self.rows * self.cols
         for board_idx in range(1, total + 1):
             row_idx, col_idx = _index_to_pos(board_idx, self.rows, self.cols)
             qt_row = self.rows - 1 - row_idx  # Qt origin top‑left
             qt_col = col_idx
-            cell = BoardCell(board_idx)
+            
+            cell = BoardCell(board_idx, scale_factor=scale_factor)
+            cell.setMinimumSize(int(optimal_width * 0.9), int(optimal_height * 0.9))
+            cell.setMaximumSize(int(optimal_width * 1.1), int(optimal_height * 1.1))
+            
             self.grid.addWidget(cell, qt_row, qt_col)
             self.cells[board_idx] = cell
 

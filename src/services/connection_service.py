@@ -100,15 +100,28 @@ class ConnectionService(QObject):
                 )
             
             # Create appropriate controller
+            logger.info(f"Creating controller for firmware type: {firmware_type}")
             controller = ArduinoControllerFactory.create_controller(
-                port=port,
-                firmware_type=firmware_type
+                mode=firmware_type,
+                baud_rate=115200
             )
             
             if not controller:
                 return ConnectionResult(
                     success=False,
                     error=f"Failed to create controller for {firmware_type}"
+                )
+            
+            # Connect the controller to the port
+            logger.info(f"Attempting to connect controller to {port}")
+            if not controller.connect(port):
+                logger.error(f"Controller failed to connect to {port}")
+                # Make sure to release the port if connection fails
+                from src.services.port_registry import port_registry
+                port_registry.release_port(port)
+                return ConnectionResult(
+                    success=False,
+                    error=f"Controller created but failed to connect to {port}"
                 )
             
             # Store connection info

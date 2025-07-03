@@ -139,7 +139,6 @@ class TestMenuBar(QMenuBar):
             logs_action.triggered.connect(self.show_logs)
             menu.addAction(logs_action)
             
-            
             logger.info("Tools menu setup complete.") # Added
         except Exception as e: # Added
             logger.error("Failed to set up tools menu: %s", e, exc_info=True) # Added
@@ -221,6 +220,24 @@ class TestMenuBar(QMenuBar):
         """Setup the SPC menu"""
         logger.debug("Setting up SPC menu")
         try:
+            # SPC Sampling Mode Toggle (password protected)
+            self.spc_sampling_action = QAction("Enable SPC Sampling Mode", self)
+            self.spc_sampling_action.setCheckable(True)
+            self.spc_sampling_action.setChecked(True)  # Default enabled
+            self.spc_sampling_action.setStatusTip("Toggle SPC data collection (requires authentication)")
+            self.spc_sampling_action.triggered.connect(self.toggle_spc_sampling)
+            menu.addAction(self.spc_sampling_action)
+            
+            menu.addSeparator()
+            
+            # SPC Status
+            spc_status_action = QAction("View SPC Status...", self)
+            spc_status_action.setStatusTip("View current SPC data collection status")
+            spc_status_action.triggered.connect(self.show_spc_status)
+            menu.addAction(spc_status_action)
+            
+            menu.addSeparator()
+            
             # SPC Control
             spc_action = QAction("SPC Control...", self)
             spc_action.setStatusTip("Open Statistical Process Control panel")
@@ -618,6 +635,83 @@ class TestMenuBar(QMenuBar):
         except Exception as e:
             logger.error(f"Could not open SPC control: {e}", exc_info=True)
             QMessageBox.critical(self, "Error", f"Could not open SPC control: {e}")
+    
+    def toggle_spc_sampling(self, checked):
+        """Toggle SPC sampling mode"""
+        logger.info(f"SPC sampling toggle requested: {checked}")
+        
+        try:
+            # Get main window reference
+            main_window = self.parent()
+            
+            # Update the state directly without authentication
+            main_window.spc_sampling_enabled = checked
+            status = "enabled" if checked else "disabled"
+            
+            # Log the change
+            try:
+                from src.auth.user_manager import get_user_manager
+                user_manager = get_user_manager()
+                current_user = user_manager.get_current_user() or "manual_toggle"
+                user_manager.log_action("spc_sampling_toggle", {
+                    'enabled': checked,
+                    'user': current_user
+                })
+            except:
+                logger.info(f"Could not log SPC toggle action, continuing anyway")
+            
+            # Show confirmation
+            QMessageBox.information(self, "SPC Sampling Mode", 
+                                  f"SPC data collection has been {status}.")
+            logger.info(f"SPC sampling {status}")
+                    
+        except Exception as e:
+            logger.error(f"Error toggling SPC sampling: {e}", exc_info=True)
+            QMessageBox.critical(self, "Error", f"Could not toggle SPC sampling: {e}")
+            # Revert on error
+            if hasattr(main_window, 'spc_sampling_enabled'):
+                self.spc_sampling_action.setChecked(main_window.spc_sampling_enabled)
+    
+    def show_spc_status(self):
+        """Show current SPC status"""
+        logger.info("SPC status requested")
+        try:
+            main_window = self.parent()
+            
+            # Get current sampling mode state
+            sampling_enabled = getattr(main_window, 'spc_sampling_enabled', True)
+            
+            # Get SPC integration status if available
+            status_text = f"SPC Sampling Mode: {'Enabled' if sampling_enabled else 'Disabled'}\n\n"
+            
+            # Check if there's an active SPC integration
+            if hasattr(main_window, 'smt_handler') and main_window.smt_handler:
+                handler = main_window.smt_handler
+                if hasattr(handler, 'spc_integration') and handler.spc_integration:
+                    spc = handler.spc_integration
+                    status = spc.get_status()
+                    
+                    total_measurements = sum(status['measurement_counts'].values())
+                    status_text += f"Active SPC Session:\n"
+                    status_text += f"- Test Mode: {status['test_mode']}\n"
+                    status_text += f"- Total Measurements: {total_measurements}\n"
+                    status_text += f"- SKUs with 30+ samples: {', '.join(status['triggered_skus']) or 'None'}\n\n"
+                    
+                    # Show measurement breakdown if any
+                    if status['measurement_counts']:
+                        status_text += "Measurement Breakdown:\n"
+                        for key, count in sorted(status['measurement_counts'].items()):
+                            status_text += f"  - {key}: {count} samples\n"
+                else:
+                    status_text += "No active SPC data collection session."
+            else:
+                status_text += "No active test handler."
+                
+            QMessageBox.information(self, "SPC Status", status_text)
+            
+        except Exception as e:
+            logger.error(f"Error showing SPC status: {e}", exc_info=True)
+            QMessageBox.critical(self, "Error", f"Could not show SPC status: {e}")
     
     def show_spec_calculator(self):
         """Show spec limit calculator with authentication"""
