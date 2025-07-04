@@ -21,6 +21,8 @@ Fixes & updates
 """
 
 from typing import Dict, Optional, Tuple, List
+import logging
+import os
 
 from PySide6.QtWidgets import (
     QWidget,
@@ -38,6 +40,27 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtCore import Qt, Signal
+
+# Debug helper function
+def _is_debug_enabled() -> bool:
+    """Check if SMT debug logging is enabled via environment variable or configuration
+    
+    Debug logging can be enabled in two ways:
+    1. Environment variable: SMT_DEBUG=1 (or 'true', 'yes')
+    2. Configuration file: Set DEBUG_SETTINGS['smt_debug'] = True in config/settings.py
+    
+    Environment variable takes precedence over configuration file.
+    """
+    # Check environment variable first
+    if os.getenv('SMT_DEBUG', '').lower() in ('1', 'true', 'yes'):
+        return True
+    
+    # Check configuration settings
+    try:
+        from config.settings import DEBUG_SETTINGS
+        return DEBUG_SETTINGS.get('smt_debug', False)
+    except ImportError:
+        return False
 
 # ---------------------------------------------------------------------------
 # SegmentedMeasurementWidget
@@ -146,6 +169,8 @@ class BoardCell(QFrame):
         super().__init__(parent)
         self.board_idx = board_idx
         self.scale_factor = scale_factor
+        self.logger = logging.getLogger(f"{self.__class__.__name__}.Board{board_idx}")
+        self._debug_enabled = _is_debug_enabled()
         self._setup_ui()
         self.set_idle()
 
@@ -184,7 +209,8 @@ class BoardCell(QFrame):
 
     # -------------------- colour helpers ----------------------
     def _apply_background(self, color: QColor):
-        print(f"[CELL COLOR DEBUG] Board {self.board_idx}: Applying background color {color.name()}")
+        if self._debug_enabled:
+            self.logger.debug(f"Board {self.board_idx}: Applying background color {color.name()}")
         
         # Use style sheet with QFrame selector to preserve border
         self.setStyleSheet(f"""
@@ -219,7 +245,8 @@ class BoardCell(QFrame):
         passed: bool,
     ) -> None:
         """Update measurement display with function names and current values."""
-        print(f"[CELL COLOR DEBUG] Board {self.board_idx}: updating with passed={passed}, functions={functions}")
+        if self._debug_enabled and self.logger.isEnabledFor(logging.DEBUG):
+            self.logger.debug(f"Board {self.board_idx}: updating with passed={passed}, functions={functions}")
         
         # purge old widgets
         for widget in self.measure_widgets:
@@ -296,14 +323,17 @@ class BoardCell(QFrame):
         # Apply color based on pass/fail, but only if we have actual measurement data
         if functions:
             if passed:
-                print(f"[CELL COLOR DEBUG] Board {self.board_idx}: Setting color to PASS (green)")
+                if self._debug_enabled:
+                    self.logger.debug(f"Board {self.board_idx}: Setting color to PASS (green)")
                 self.set_pass()
             else:
-                print(f"[CELL COLOR DEBUG] Board {self.board_idx}: Setting color to FAIL (red)")
+                if self._debug_enabled:
+                    self.logger.debug(f"Board {self.board_idx}: Setting color to FAIL (red)")
                 self.set_fail()
         else:
             # No data yet, keep grey
-            print(f"[CELL COLOR DEBUG] Board {self.board_idx}: No measurement data, keeping grey")
+            if self._debug_enabled:
+                self.logger.debug(f"Board {self.board_idx}: No measurement data, keeping grey")
             self.set_idle()
 
 
@@ -322,6 +352,8 @@ class PCBPanelWidget(QWidget):
         self.grid = QGridLayout(self)
         self.grid.setSpacing(20)
         self.cells: Dict[int, BoardCell] = {}
+        self.logger = logging.getLogger(self.__class__.__name__)
+        self._debug_enabled = _is_debug_enabled()
 
     # ---------------------- public API ------------------------
     def set_panel_layout(self, rows: int, cols: int):
@@ -343,7 +375,8 @@ class PCBPanelWidget(QWidget):
     def update_from_test_result(self, result):
         """Populate each cell based on a `TestResult`‑like object."""
         
-        print(f"[SMT DEBUG] update_from_test_result called with measurements: {list(getattr(result, 'measurements', {}).keys())}")
+        if self._debug_enabled and self.logger.isEnabledFor(logging.DEBUG):
+            self.logger.debug(f"update_from_test_result called with measurements: {list(getattr(result, 'measurements', {}).keys())}")
         
         # if layout unknown, try to infer from result meta or board count
         if self.rows == 0 or self.cols == 0:
@@ -376,16 +409,16 @@ class PCBPanelWidget(QWidget):
         # reset visuals
         for cell in self.cells.values():
             cell.set_idle()
-            cell.update_measurements({}, True)
 
         # Store all function measurements generically
         board_functions: Dict[int, Dict[str, float]] = {}
         board_pass: Dict[int, bool] = {}
         
-        # Debug: Print what measurements we received
+        # Debug: Log what measurements we received
         measurements = getattr(result, "measurements", {})
-        print(f"[SMT DEBUG] PCBPanelWidget.update_from_test_result - measurements keys: {list(measurements.keys())}")
-        print(f"[SMT DEBUG] PCBPanelWidget.update_from_test_result - result type: {type(result)}")
+        if self._debug_enabled and self.logger.isEnabledFor(logging.DEBUG):
+            self.logger.debug(f"PCBPanelWidget.update_from_test_result - measurements keys: {list(measurements.keys())}")
+            self.logger.debug(f"PCBPanelWidget.update_from_test_result - result type: {type(result)}")
 
         for name, data in measurements.items():
             if "_board_" not in name:
@@ -419,8 +452,9 @@ class PCBPanelWidget(QWidget):
                 board_pass[b_idx] = False
 
         # Debug: Final board pass/fail status determined
-        print(f"[SMT DEBUG] Board functions collected: {board_functions}")
-        print(f"[SMT DEBUG] Board pass status: {board_pass}")
+        if self._debug_enabled and self.logger.isEnabledFor(logging.DEBUG):
+            self.logger.debug(f"Board functions collected: {board_functions}")
+            self.logger.debug(f"Board pass status: {board_pass}")
         
         for idx, cell in self.cells.items():
             passed = board_pass.get(idx, True)
@@ -530,6 +564,8 @@ class SMTWidget(QWidget):
         self.programming_enabled = False
         self.programming_progress = None
         self.is_testing = False
+        self.logger = logging.getLogger(self.__class__.__name__)
+        self._debug_enabled = _is_debug_enabled()
         self._setup_ui()
 
     def _setup_ui(self):
@@ -793,7 +829,8 @@ class SMTWidget(QWidget):
     
     def display_results(self, result):
         """Display test results - alias for update_from_test_result for compatibility."""
-        print(f"[SMT DEBUG] display_results called with result.measurements keys: {list(getattr(result, 'measurements', {}).keys())}")
+        if self._debug_enabled and self.logger.isEnabledFor(logging.DEBUG):
+            self.logger.debug(f"display_results called with result.measurements keys: {list(getattr(result, 'measurements', {}).keys())}")
         self.update_from_test_result(result)
         
         # Update programming results if available
@@ -848,7 +885,8 @@ def _test_index_mapping():
     assert _index_to_pos(11, 4, 3) == (3, 1)
     assert _index_to_pos(12, 4, 3) == (3, 0)
 
-    print("Index mapping tests passed.")
+    logger = logging.getLogger("smt_widget_test")
+    logger.info("Index mapping tests passed.")
 
 
 def _test_function_formatting():
@@ -857,10 +895,14 @@ def _test_function_formatting():
     assert "backlight_1".replace("_", " ").title() == "Backlight 1"
     assert "rgbw_backlight".replace("_", " ").title() == "Rgbw Backlight"
     assert "custom_function_x".replace("_", " ").title() == "Custom Function X"
-    print("Function name formatting tests passed.")
+    logger = logging.getLogger("smt_widget_test")
+    logger.info("Function name formatting tests passed.")
 
 
 if __name__ == "__main__":
+    # Setup logging for self-tests
+    logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
     _test_index_mapping()
     _test_function_formatting()
-    print("All self-tests passed.")
+    logger = logging.getLogger("smt_widget_test")
+    logger.info("All self-tests passed.")

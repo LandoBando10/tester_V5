@@ -101,7 +101,7 @@ class SMTTest(BaseTest):
     def setup_hardware(self) -> bool:
         """Initialize SMT Arduino - simplified setup"""
         try:
-            self.update_progress("Setting up SMT test...", 10)
+            self.update_progress("Setting up SMT test...", 0)
             
             # Set up error callback to handle sensor failures
             if hasattr(self.arduino, 'set_error_callback'):
@@ -109,13 +109,13 @@ class SMTTest(BaseTest):
 
             # Only connect if we own the Arduino instance
             if self.owns_arduino and not self.arduino.is_connected():
-                self.update_progress("Connecting to SMT Arduino...", 15)
+                self.update_progress("Connecting to SMT Arduino...", 0)
                 if not self.arduino.connect(self.port):
                     self.logger.error(f"Failed to connect to SMT Arduino on port {self.port}")
                     return False
 
             # Get SMT configuration
-            self.update_progress("Initializing SMT controller...", 30)
+            self.update_progress("Initializing SMT controller...", 0)
             smt_config = self.parameters
             if not smt_config:
                 self.logger.error("No SMT configuration found in parameters")
@@ -135,7 +135,7 @@ class SMTTest(BaseTest):
                 self.logger.error("Failed to initialize SMT controller")
                 return False
 
-            self.update_progress("Ready to test", 40)
+            self.update_progress("Ready to test", 0)
             return True
 
         except Exception as e:
@@ -147,14 +147,14 @@ class SMTTest(BaseTest):
         try:
             # Programming phase if enabled
             if self.programming_enabled and self.programmers:
-                self.update_progress("Programming boards...", 45)
+                self.update_progress("Programming boards...", 0)
                 success = self._execute_programming_phase(30.0, 45)
                 if not success:
                     self.result.failures.append("Programming phase failed")
             
             
             # Single panel measurement
-            self.update_progress("Measuring panel...", 60)
+            self.update_progress("Measuring panel...", 0)
             
             # Get list of all configured relays from relay_mapping
             configured_relays = [int(relay_str) for relay_str in self.relay_mapping.keys() if self.relay_mapping[relay_str]]
@@ -183,7 +183,7 @@ class SMTTest(BaseTest):
                 raise ValueError("No test_sequence defined in SKU configuration")
             
             # Analyze each function against its limits
-            self.update_progress("Analyzing results...", 80)
+            self.update_progress("Analyzing results...", 0)
             for test_config in test_sequence:
                 function = test_config["function"]
                 limits = test_config["limits"]
@@ -240,7 +240,7 @@ class SMTTest(BaseTest):
 
                     # Update progress
                     board_progress = base_progress + (board_index * 25 // total_boards)
-                    self.update_progress(f"Programming {board_name}...", board_progress)
+                    self.update_progress(f"Programming {board_name}...", 0)
 
                     # Get hex file for this board
                     hex_file = hex_files.get(board_name)
@@ -384,7 +384,7 @@ class SMTTest(BaseTest):
     def _analyze_results(self):
         """Analyze results based on configuration limits"""
         try:
-            self.update_progress("Analyzing results...", 85)
+            self.update_progress("Analyzing results...", 0)
             
             # Create a list of keys to avoid dictionary modification during iteration
             measurement_keys = list(self.result.measurements.keys())
@@ -462,12 +462,9 @@ class SMTTest(BaseTest):
     def cleanup_hardware(self):
         """Clean up SMT Arduino and fixture"""
         try:
-            self.update_progress("Cleaning up hardware...", 95)
+            self.update_progress("Cleaning up hardware...", 0)
 
-            # Turn off all outputs using SMT controller
-            self.smt_controller.all_lights_off()
-            
-            # Turn off all relays
+            # Turn off all relays (only need to call once)
             self.arduino.all_relays_off()
 
             # Only disconnect if we own the Arduino instance

@@ -55,10 +55,8 @@ class BaseTest(ABC):
         self.logger.warning(failure_msg)
 
     def update_progress(self, message: str, percentage: int):
-        """Update progress if callback is set"""
-        if self.progress_callback:
-            self.progress_callback(message, percentage)
-        self.logger.info(f"Progress: {message} ({percentage}%)")
+        """Just log the message, ignore percentage"""
+        self.logger.info(f"{message}")
 
     @abstractmethod
     def setup_hardware(self) -> bool:
@@ -78,17 +76,17 @@ class BaseTest(ABC):
 
         try:
             self.logger.info(f"Starting {self.__class__.__name__} for SKU {self.sku}")
-            self.update_progress("Initializing hardware...", 10)
+            self.update_progress("Initializing hardware...", 0)
 
             if not self.setup_hardware():
                 self.result.failures.append("Hardware initialization failed")
                 self.result.calculate_overall_result()
                 return self.result
 
-            self.update_progress("Running test sequence...", 30)
+            self.update_progress("Running test sequence...", 0)
             self.result = self.run_test_sequence()
 
-            self.update_progress("Evaluating results...", 90)
+            self.update_progress("Evaluating results...", 0)
             self.result.calculate_overall_result()
 
         except Exception as e:
@@ -99,7 +97,7 @@ class BaseTest(ABC):
             self.cleanup_hardware()
             end_time = datetime.now()
             self.result.test_duration = (end_time - start_time).total_seconds()
-            self.update_progress("Test complete", 100)
+            self.update_progress("Test complete", 0)
 
         self.logger.info(f"Test completed. Result: {'PASS' if self.result.passed else 'FAIL'}")
         return self.result

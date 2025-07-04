@@ -155,6 +155,14 @@ LOGGING = {
     'sensor_data_logging': False  # Set to True to log all sensor readings (large files!)
 }
 
+# Debug Settings
+DEBUG_SETTINGS = {
+    'smt_debug': False,  # Enable SMT widget debug logging
+    'detailed_measurements': False,  # Log detailed measurement info
+    'ui_updates': False,  # Log UI state changes
+    'performance_timing': False  # Log performance timing information
+}
+
 # Configuration validation functions
 def validate_serial_settings() -> bool:
     """Validate serial communication settings"""

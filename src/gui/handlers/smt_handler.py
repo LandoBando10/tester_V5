@@ -65,9 +65,7 @@ class SMTHandler(QObject, ThreadCleanupMixin):
                 # Clear buffers before test
                 self.logger.info("Clearing serial buffers before test")
                 
-                # Pause reading thread to prevent interference
-                if hasattr(arduino, 'pause_reading_for_test'):
-                    arduino.pause_reading_for_test()
+                # Note: Reading thread remains active during tests in SMT architecture
                 
                 if hasattr(arduino, '_flush_buffers'):
                     arduino._flush_buffers()
@@ -338,11 +336,7 @@ class SMTHandler(QObject, ThreadCleanupMixin):
                 if hasattr(arduino, 'all_relays_off'):
                     arduino.all_relays_off()
                 
-                # Resume reading thread after test completion
-                if hasattr(arduino, 'resume_reading_after_test'):
-                    arduino.resume_reading_after_test()
-                    # Give the reading thread time to stabilize
-                    time.sleep(0.2)
+                # Note: Reading thread was never paused, no need to resume
                 else:
                     # Standard ArduinoController - send individual commands
                     for relay in range(1, 9):  # Turn off relays 1-8
