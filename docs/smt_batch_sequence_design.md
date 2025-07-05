@@ -1,20 +1,21 @@
 # SMT Batch Sequence Design - Full Test in One Command
 
 ## Core Concept
-Send the ENTIRE test sequence to Arduino in one command, get ALL results back in one response. This leverages the Arduino R4 Minima's capabilities for efficient, atomic test operations.
+Send the ENTIRE test sequence to Arduino in one command, get ALL results back in one response. Simple, efficient, and leverages the Arduino R4 Minima's capabilities. Supports up to 16 relays with simultaneous activation.
 
 ## Command Format
 
 ### Python Sends Complete Test Sequence
 ```
-TESTSEQ:1,2,3,500;OFF,100;7,8,9,500;OFF,100;1,2,3,7,8,9,1000;OFF,200;4,10,300
+TESTSEQ:1,2,3:500;OFF:100;7,8,9:500;OFF:100;1,2,3,7,8,9:1000;OFF:200;4,10:300
 ```
 
 Breaking it down:
-- `1,2,3,500` = Activate relays 1,2,3 for 500ms and measure
-- `OFF,100` = All relays off, wait 100ms
-- `7,8,9,500` = Activate relays 7,8,9 for 500ms and measure
-- `1,2,3,7,8,9,1000` = Activate all these relays for 1000ms and measure
+- `1,2,3:500` = Activate relays 1,2,3 for 500ms and measure
+- `OFF:100` = All relays off, wait 100ms
+- `7,8,9:500` = Activate relays 7,8,9 for 500ms and measure
+- `1,2,3,7,8,9:1000` = Activate all these relays for 1000ms and measure
+- `:` = Delimiter between relay list and duration
 - `;` = Step separator
 
 ### Arduino Returns Complete Results
@@ -58,13 +59,16 @@ class SMTArduinoController:
         
         for test_config in test_sequence:
             function = test_config['function']
+            duration = test_config.get('duration_ms', 500)
+            delay = test_config.get('delay_after_ms', 100)
             
             # Find all relay groups for this function
             for key, group in relay_groups.items():
                 if group['function'] == function:
                     relays = ','.join(map(str, group['relays']))
-                    arduino_commands.append(f"{relays},500")  # 500ms default
-                    arduino_commands.append("OFF,100")  # 100ms between
+                    arduino_commands.append(f"{relays}:{duration}")
+                    if delay > 0:
+                        arduino_commands.append(f"OFF:{delay}")
                     
                     measurement_mapping.append({
                         'board': group['board'],
@@ -151,15 +155,20 @@ class SMTArduinoController:
         return results
 ```
 
-## Arduino Implementation
+## Arduino Implementation (16 Relay Support with PCF8575)
 
 ```cpp
+#include <Wire.h>
+#include <PCF8575.h>
+
 #define MAX_SEQUENCE_STEPS 50
-#define MAX_RELAYS_PER_STEP 48
+#define MAX_RELAYS 16
+#define PCF8575_ADDRESS 0x20
+
+PCF8575 pcf8575(PCF8575_ADDRESS);
 
 struct TestStep {
-    uint8_t relays[MAX_RELAYS_PER_STEP];
-    uint8_t relay_count;
+    uint16_t relayMask;     // Internal bitmask for 16 relays
     uint16_t duration_ms;
     bool is_delay;
 };
@@ -175,22 +184,23 @@ void executeTestSequence(const char* sequence) {
     while (step_str != NULL && step_count < MAX_SEQUENCE_STEPS) {
         TestStep* step = &steps[step_count];
         
-        if (strncmp(step_str, "OFF,", 4) == 0) {
+        if (strncmp(step_str, "OFF:", 4) == 0) {
             // Delay step
             step->is_delay = true;
             step->duration_ms = atoi(step_str + 4);
+            step->relayMask = 0;
         } else {
-            // Relay activation step
+            // Relay activation step: "1,2,3:500"
             step->is_delay = false;
             
             // Parse relays and duration
-            char* last_comma = strrchr(step_str, ',');
-            if (last_comma != NULL) {
-                *last_comma = '\0';
-                step->duration_ms = atoi(last_comma + 1);
+            char* colon = strchr(step_str, ':');
+            if (colon != NULL) {
+                *colon = '\0';
+                step->duration_ms = atoi(colon + 1);
                 
-                // Parse relay numbers
-                step->relay_count = parseRelayList(step_str, step->relays);
+                // Parse relay numbers into bitmask
+                step->relayMask = parseRelaysToBitmask(step_str);
             }
         }
         
@@ -208,11 +218,11 @@ void executeTestSequence(const char* sequence) {
         
         if (step->is_delay) {
             // Just delay, no measurement
-            allRelaysOff();
+            setAllRelays(0);  // All off
             delay(step->duration_ms);
         } else {
-            // Activate relays
-            activateRelays(step->relays, step->relay_count);
+            // Activate relays using bitmask (all switch simultaneously)
+            setAllRelays(step->relayMask);
             
             // Wait for stabilization (10% of duration, max 100ms)
             delay(min(step->duration_ms / 10, 100));
@@ -226,7 +236,8 @@ void executeTestSequence(const char* sequence) {
                 Serial.print(";");
             }
             
-            printRelayList(step->relays, step->relay_count);
+            // Convert bitmask back to relay list for response
+            printRelayListFromMask(step->relayMask);
             Serial.print(":");
             Serial.print(voltage, 1);
             Serial.print("V,");
@@ -237,11 +248,49 @@ void executeTestSequence(const char* sequence) {
             delay(step->duration_ms - min(step->duration_ms / 10, 100));
             
             // Turn off relays
-            allRelaysOff();
+            setAllRelays(0);
         }
     }
     
     Serial.println(";END");
+}
+
+// Fast 16-relay control using PCF8575 I2C expander
+void setAllRelays(uint16_t mask) {
+    // PCF8575 updates all 16 outputs simultaneously with a single I2C write
+    pcf8575.write16(mask);
+    // Note: Relay board may use active LOW, so invert if needed:
+    // pcf8575.write16(~mask);
+}
+
+// Helper functions
+uint16_t parseRelaysToBitmask(const char* relayList) {
+    // Convert "1,2,3" to bitmask 0x0007
+    uint16_t mask = 0;
+    char* str = strdup(relayList);
+    char* token = strtok(str, ",");
+    
+    while (token != NULL) {
+        int relay = atoi(token);
+        if (relay >= 1 && relay <= 16) {
+            mask |= (1 << (relay - 1));
+        }
+        token = strtok(NULL, ",");
+    }
+    free(str);
+    return mask;
+}
+
+void printRelayListFromMask(uint16_t mask) {
+    // Convert bitmask back to "1,2,3" format
+    bool first = true;
+    for (int i = 0; i < 16; i++) {
+        if (mask & (1 << i)) {
+            if (!first) Serial.print(",");
+            Serial.print(i + 1);
+            first = false;
+        }
+    }
 }
 ```
 
@@ -262,6 +311,8 @@ void executeTestSequence(const char* sequence) {
     "test_sequence": [
         {
             "function": "mainbeam",
+            "duration_ms": 500,
+            "delay_after_ms": 100,
             "limits": {
                 "current_a": {"min": 5.4, "max": 6.9},
                 "voltage_v": {"min": 11.5, "max": 12.5}
@@ -269,6 +320,8 @@ void executeTestSequence(const char* sequence) {
         },
         {
             "function": "position",
+            "duration_ms": 300,
+            "delay_after_ms": 0,
             "limits": {
                 "current_a": {"min": 0.8, "max": 1.2},
                 "voltage_v": {"min": 11.5, "max": 12.5}
@@ -294,13 +347,15 @@ for measurement in results['measurements']:
 
 ### What Gets Sent to Arduino
 ```
-TESTSEQ:1,2,3,500;OFF,100;7,8,9,500;OFF,100;1,2,3,7,8,9,1000;OFF,200;4,10,16,22,300
+TESTSEQ:1,2,3:500;OFF:100;7,8,9:500;OFF:100;13,14,15,16:500
 ```
+Simple relay lists up to 16 relays, human-readable format.
 
 ### What Arduino Returns
 ```
-TESTRESULTS:1,2,3:12.5V,6.8A;7,8,9:12.4V,6.7A;1,2,3,7,8,9:12.3V,13.5A;4,10,16,22:12.5V,4.2A;END
+TESTRESULTS:1,2,3:12.5V,6.8A;7,8,9:12.4V,6.7A;13,14,15,16:12.3V,8.2A;END
 ```
+Same format - relay lists with measurements. Bitmask is internal only.
 
 ## Benefits
 
@@ -309,7 +364,8 @@ TESTRESULTS:1,2,3:12.5V,6.8A;7,8,9:12.4V,6.7A;1,2,3,7,8,9:12.3V,13.5A;4,10,16,22
 3. **Reduced Overhead**: No back-and-forth communication during test
 4. **Better Timing**: Arduino controls all timing without Python delays
 5. **Simpler Error Handling**: One response to parse and validate
-6. **R4 Minima Advantages**: 
+6. **16 Relay Support**: Internal bitmask enables truly simultaneous switching
+7. **R4 Minima Advantages**: 
    - 32KB RAM can buffer entire sequence
    - Fast processing ensures accurate timing
    - Large serial buffer handles long commands

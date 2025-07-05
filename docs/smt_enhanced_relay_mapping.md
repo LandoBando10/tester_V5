@@ -47,10 +47,10 @@ Keep the existing `relay_mapping` structure, but allow relay groups using comma 
 }
 ```
 
-## Real-World Example: 4-Board Panel
+## Real-World Example: 4-Board Panel (16 Relays)
 ```json
 {
-    "description": "4-board LED panel - 3 mainbeam relays per board, 1 position, 2 turn signals",
+    "description": "4-board LED panel - 16 relays total",
     
     "panel_layout": {
         "rows": 2,
@@ -61,24 +61,22 @@ Keep the existing `relay_mapping` structure, but allow relay groups using comma 
     "relay_mapping": {
         "1,2,3": {"board": 1, "function": "mainbeam"},
         "4": {"board": 1, "function": "position"},
-        "5,6": {"board": 1, "function": "turn_signal"},
         
-        "7,8,9": {"board": 2, "function": "mainbeam"},
-        "10": {"board": 2, "function": "position"},
-        "11,12": {"board": 2, "function": "turn_signal"},
+        "5,6,7": {"board": 2, "function": "mainbeam"},
+        "8": {"board": 2, "function": "position"},
         
-        "13,14,15": {"board": 3, "function": "mainbeam"},
-        "16": {"board": 3, "function": "position"},
-        "17,18": {"board": 3, "function": "turn_signal"},
+        "9,10,11": {"board": 3, "function": "mainbeam"},
+        "12": {"board": 3, "function": "position"},
         
-        "19,20,21": {"board": 4, "function": "mainbeam"},
-        "22": {"board": 4, "function": "position"},
-        "23,24": {"board": 4, "function": "turn_signal"}
+        "13,14,15": {"board": 4, "function": "mainbeam"},
+        "16": {"board": 4, "function": "position"}
     },
     
     "test_sequence": [
         {
             "function": "mainbeam",
+            "duration_ms": 500,
+            "delay_after_ms": 100,
             "limits": {
                 "current_a": {"min": 5.4, "max": 6.9},
                 "voltage_v": {"min": 11.5, "max": 12.5}
@@ -86,6 +84,8 @@ Keep the existing `relay_mapping` structure, but allow relay groups using comma 
         },
         {
             "function": "position",
+            "duration_ms": 300,
+            "delay_after_ms": 100,
             "limits": {
                 "current_a": {"min": 0.8, "max": 1.2},
                 "voltage_v": {"min": 11.5, "max": 12.5}
@@ -93,6 +93,8 @@ Keep the existing `relay_mapping` structure, but allow relay groups using comma 
         },
         {
             "function": "turn_signal",
+            "duration_ms": 400,
+            "delay_after_ms": 0,
             "limits": {
                 "current_a": {"min": 3.6, "max": 4.2},
                 "voltage_v": {"min": 11.5, "max": 12.5}
@@ -105,36 +107,31 @@ Keep the existing `relay_mapping` structure, but allow relay groups using comma 
 ## Python Implementation Changes
 
 ```python
-class SMTTest:
+class SMTArduinoController:
     def _parse_relay_mapping(self, relay_mapping: Dict) -> Dict:
-        """Parse relay mapping, handling grouped relays"""
+        """Parse relay mapping, handling grouped relays (up to 16 relays)"""
         self.relay_groups = {}
-        self.relay_to_group = {}
         
         for relay_key, mapping in relay_mapping.items():
             if mapping is None:
                 continue
                 
-            # Parse relay key - could be "1" or "1,2,3"
+            # Parse relay key - could be "1" or "1,2,3" up to "13,14,15,16"
             if ',' in relay_key:
                 relays = [int(r) for r in relay_key.split(',')]
             else:
                 relays = [int(relay_key)]
             
-            # Create a group name
-            group_name = f"board_{mapping['board']}_{mapping['function']}"
+            # Validate relay numbers (1-16)
+            if any(r < 1 or r > 16 for r in relays):
+                raise ValueError(f"Invalid relay number in '{relay_key}' - must be 1-16")
             
-            # Store the group
+            # Store the group info
             self.relay_groups[relay_key] = {
                 'relays': relays,
                 'board': mapping['board'],
-                'function': mapping['function'],
-                'group_name': group_name
+                'function': mapping['function']
             }
-            
-            # Map individual relays to their group
-            for relay in relays:
-                self.relay_to_group[relay] = relay_key
     
     def _build_test_sequence(self) -> str:
         """Build Arduino test sequence from test_sequence config"""
@@ -142,13 +139,17 @@ class SMTTest:
         
         for test_config in self.parameters.get("test_sequence", []):
             function = test_config["function"]
+            duration = test_config.get("duration_ms", 500)
+            delay = test_config.get("delay_after_ms", 100)
             
             # Find all relay groups for this function
             for relay_key, group in self.relay_groups.items():
                 if group['function'] == function:
                     relays = ','.join(map(str, group['relays']))
-                    arduino_steps.append(f"{relays},500")  # 500ms default
-                    arduino_steps.append("OFF,100")  # 100ms between tests
+                    arduino_steps.append(f"{relays}:{duration}")
+                    
+            if delay > 0:
+                arduino_steps.append(f"OFF:{delay}")
         
         # Remove last OFF if present
         if arduino_steps and arduino_steps[-1].startswith("OFF"):
@@ -164,6 +165,8 @@ class SMTTest:
 3. **Intuitive** - "1,2,3" clearly means relays 1, 2, and 3 work together
 4. **Flexible** - Can mix single relays and groups in same config
 5. **Natural Limits** - Limits in test_sequence apply to the combined measurement
+6. **16 Relay Support** - Handles up to 16 simultaneous relays
+7. **Simple Protocol** - Commands stay human-readable, no binary formats
 
 ## How It Works
 
@@ -178,7 +181,7 @@ class SMTTest:
 ### Python Processing
 1. Parses "1,2,3" into relays [1,2,3]
 2. When testing "mainbeam" function, finds all entries with that function
-3. Sends to Arduino: `TESTSEQ:1,2,3,500;OFF,100;7,8,9,500`
+3. Sends to Arduino: `TESTSEQ:1,2,3:500;OFF:100;7,8,9:500`
 
 ### Arduino Response
 ```
