@@ -110,7 +110,8 @@ Keep the existing `relay_mapping` structure, but allow relay groups using comma 
 class SMTArduinoController:
     def _parse_relay_mapping(self, relay_mapping: Dict) -> Dict:
         """Parse relay mapping, handling grouped relays (up to 16 relays)"""
-        self.relay_groups = {}
+        relay_groups = {}
+        used_relays = set()
         
         for relay_key, mapping in relay_mapping.items():
             if mapping is None:
@@ -118,42 +119,73 @@ class SMTArduinoController:
                 
             # Parse relay key - could be "1" or "1,2,3" up to "13,14,15,16"
             if ',' in relay_key:
-                relays = [int(r) for r in relay_key.split(',')]
+                relays = [int(r.strip()) for r in relay_key.split(',')]
             else:
-                relays = [int(relay_key)]
+                relays = [int(relay_key.strip())]
             
             # Validate relay numbers (1-16)
-            if any(r < 1 or r > 16 for r in relays):
-                raise ValueError(f"Invalid relay number in '{relay_key}' - must be 1-16")
+            for relay in relays:
+                if relay < 1 or relay > 16:
+                    raise ValueError(f"Invalid relay number {relay} in '{relay_key}' - must be 1-16")
+                if relay in used_relays:
+                    raise ValueError(f"Relay {relay} appears in multiple groups")
+                used_relays.add(relay)
             
             # Store the group info
-            self.relay_groups[relay_key] = {
+            board = mapping.get('board')
+            function = mapping.get('function')
+            
+            if not board or not function:
+                raise ValueError(f"Missing board or function for relay group '{relay_key}'")
+            
+            relay_groups[relay_key] = {
                 'relays': relays,
-                'board': mapping['board'],
-                'function': mapping['function']
+                'board': board,
+                'function': function
             }
+        
+        return relay_groups
     
-    def _build_test_sequence(self) -> str:
+    def _build_test_sequence(self, relay_groups: Dict, test_sequence: List) -> str:
         """Build Arduino test sequence from test_sequence config"""
         arduino_steps = []
+        total_duration = 0
         
-        for test_config in self.parameters.get("test_sequence", []):
-            function = test_config["function"]
+        for test_config in test_sequence:
+            function = test_config.get("function")
             duration = test_config.get("duration_ms", 500)
             delay = test_config.get("delay_after_ms", 100)
             
+            # Validate timing
+            if duration < 100:
+                raise ValueError(f"Duration {duration}ms too short for function {function} (min 100ms)")
+            
             # Find all relay groups for this function
-            for relay_key, group in self.relay_groups.items():
+            found_any = False
+            for relay_key, group in relay_groups.items():
                 if group['function'] == function:
                     relays = ','.join(map(str, group['relays']))
                     arduino_steps.append(f"{relays}:{duration}")
+                    total_duration += duration
+                    found_any = True
                     
+            if not found_any:
+                # Warning, but don't fail - function might not be mapped
+                print(f"Warning: No relay mapping found for function '{function}'")
+                
             if delay > 0:
                 arduino_steps.append(f"OFF:{delay}")
+                total_duration += delay
         
         # Remove last OFF if present
         if arduino_steps and arduino_steps[-1].startswith("OFF"):
+            last_delay = int(arduino_steps[-1].split(':')[1])
+            total_duration -= last_delay
             arduino_steps.pop()
+        
+        # Check total duration
+        if total_duration > 30000:
+            raise ValueError(f"Total sequence duration {total_duration}ms exceeds 30 second limit")
         
         return ';'.join(arduino_steps)
 ```
@@ -217,11 +249,48 @@ TESTRESULTS:1,2,3:12.5V,6.8A;7,8,9:12.4V,6.7A;END
 3. **Large Groups** - "1,2,3,4,5,6" for high-power functions
 4. **Null Mappings** - Unused relays can still be null
 
+## Validation Examples
+
+### Good Configuration
+```json
+{
+    "relay_mapping": {
+        "1,2,3": {"board": 1, "function": "mainbeam"},
+        "4": {"board": 1, "function": "position"},
+        "5,6": {"board": 2, "function": "mainbeam"}
+    }
+}
+```
+✅ No duplicate relays
+✅ All relays in valid range (1-16)
+✅ All have board and function
+
+### Bad Configuration - Duplicate Relay
+```json
+{
+    "relay_mapping": {
+        "1,2,3": {"board": 1, "function": "mainbeam"},
+        "3,4": {"board": 2, "function": "position"}  // ERROR: Relay 3 used twice
+    }
+}
+```
+❌ ValueError: Relay 3 appears in multiple groups
+
+### Bad Configuration - Invalid Relay Number
+```json
+{
+    "relay_mapping": {
+        "15,16,17": {"board": 1, "function": "mainbeam"}  // ERROR: Relay 17 > 16
+    }
+}
+```
+❌ ValueError: Invalid relay number 17 - must be 1-16
+
 ## Implementation Priority
 
-1. **Phase 1**: Update relay mapping parser to handle "," separator
-2. **Phase 2**: Modify test sequence builder to use grouped relays
-3. **Phase 3**: Update result parser to map measurements back to groups
-4. **Phase 4**: Add validation for grouped relay configurations
+1. **Validation First**: Ensure relay mapping is valid before use
+2. **Clear Error Messages**: Help users fix configuration issues
+3. **Timing Validation**: Prevent too-short durations
+4. **Total Duration Check**: Prevent tests exceeding 30 seconds
 
-This design maintains the familiar structure while adding powerful grouping capabilities!
+This design provides safety and clear feedback while maintaining flexibility!

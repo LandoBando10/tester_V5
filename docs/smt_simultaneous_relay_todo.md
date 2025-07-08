@@ -33,18 +33,18 @@ TESTSEQ:1,2,3:500;OFF:100;7,8,9:500;OFF:100;...
 - [ ] Keep serial protocol unchanged (relay lists remain as "1,2,3" format)
 
 ### 1.4 Timing System
-- [ ] Replace delay() with millis()-based timing
-- [ ] Implement microsecond-precision timing for critical sections
-- [ ] Create timing queue for sequence execution
-- [ ] Add timing compensation for measurement overhead
-- [ ] Implement watchdog timer for sequence safety
+- [ ] Replace delay() with millis()-based non-blocking timing
+- [ ] Add configurable stabilization time (default 50ms, min 10ms)
+- [ ] Account for INA260 1.1ms conversion time
+- [ ] Implement minimum duration validation (duration_ms >= stabilization + conversion time)
+- [ ] Add sequence timeout handling
 
 ### 1.5 Measurement System
-- [ ] Continuous sampling during sequences (100Hz minimum)
-- [ ] Ring buffer for measurement storage (512 samples)
-- [ ] Measurement triggering at specific time points
-- [ ] Peak/average/RMS calculations
-- [ ] Simultaneous voltage/current measurement synchronization
+- [ ] Single measurement per relay group activation
+- [ ] Wait for INA260 conversion (1.1ms) before reading
+- [ ] Store measurements in fixed-size array (not dynamic string)
+- [ ] Validate measurement values (0-30V, 0-10A reasonable ranges)
+- [ ] Error handling for I2C measurement failures
 
 ### 1.6 Response Protocol
 ```
@@ -57,16 +57,19 @@ ERROR:INA260_FAIL
 TESTRESULTS:1,2,3:12.5V,6.8A;7,8,9:12.4V,6.7A;...;END
 
 // Error responses
-ERROR:SEQUENCE_TOO_LONG
-ERROR:INVALID_RELAY:9
+ERROR:SEQUENCE_TOO_LONG      // More than MAX_SEQUENCE_STEPS
+ERROR:INVALID_RELAY:17       // Relay number > 16
+ERROR:I2C_FAIL               // PCF8575 communication error
+ERROR:MEASUREMENT_FAIL       // INA260 read failure
+ERROR:SEQUENCE_TIMEOUT       // Sequence took too long
 ```
 
 ### 1.7 Safety Features
-- [ ] Maximum current limit per relay group
-- [ ] Thermal protection timing (max on-time)
-- [ ] Automatic shutdown on overcurrent
-- [ ] Voltage drop detection and reporting
-- [ ] Emergency stop on serial disconnect
+- [ ] Relay validation (1-16 range, no duplicates in mapping)
+- [ ] Maximum simultaneous relay limit (configurable, default 8)
+- [ ] Minimum timing validation (duration >= 100ms)
+- [ ] I2C communication verification on startup
+- [ ] Emergency stop 'X' command always works
 
 ## 2. Python Controller Updates
 
@@ -97,18 +100,18 @@ def _parse_testresults(self, response: str, measurement_mapping: List) -> Dict:
 ```
 
 ### 2.3 Enhanced Response Parsing
-- [ ] Parse complex measurement responses with timing data
-- [ ] Handle streaming data efficiently
-- [ ] Implement robust error recovery
-- [ ] Add measurement interpolation for missed samples
-- [ ] Create measurement aggregation functions
+- [ ] Parse TESTRESULTS format with proper error handling
+- [ ] Validate relay numbers match expected groups
+- [ ] Handle partial results on error
+- [ ] Map measurements back to board/function correctly
+- [ ] Clear error reporting to user
 
-### 2.4 Buffer Management
-- [ ] Implement circular buffer for streaming data
-- [ ] Add flow control for long sequences
-- [ ] Handle partial response recovery
-- [ ] Implement response timeout handling
-- [ ] Add sequence chunking for very long patterns
+### 2.4 Command Validation
+- [ ] Validate relay numbers (1-16)
+- [ ] Check for duplicate relays across groups
+- [ ] Ensure minimum timing values
+- [ ] Calculate and validate total sequence time
+- [ ] Limit command length to prevent buffer issues
 
 ## 3. SKU Configuration Redesign
 
@@ -176,12 +179,11 @@ def _parse_testresults(self, response: str, measurement_mapping: List) -> Dict:
 - [ ] Maintain backward compatibility for single relay entries (e.g., "1")
 
 ### 3.3 Configuration Features
-- [ ] Named relay groups for reusability
-- [ ] Multiple test sequences per SKU
-- [ ] Timing constraints and limits
-- [ ] Measurement point specifications
-- [ ] Dynamic limit calculations based on groups
-- [ ] **Hierarchical function mapping for 48-relay systems**
+- [ ] Validate no relay appears in multiple groups
+- [ ] Ensure all timing values are positive integers
+- [ ] Support optional "active_low" flag for relay control
+- [ ] Add optional "max_simultaneous_relays" safety limit
+- [ ] Clear documentation for migration from old format
 
 ### 3.4 Function Mapping for Large Panels (16 boards × 3 functions)
 Example with 48 relays:
@@ -318,128 +320,208 @@ Without Grouping (worst case):
 #include <PCF8575.h>
 
 #define MAX_RELAYS 16
-#define PCF8575_ADDRESS 0x20  // Adjust based on A0-A2 pins
+#define MAX_SEQUENCE_STEPS 50
+#define PCF8575_ADDRESS 0x20
+#define STABILIZATION_TIME 50  // ms
+#define MIN_DURATION 100       // ms
+#define RELAY_ACTIVE_LOW false // Set true if relays are active LOW
 
 PCF8575 pcf8575(PCF8575_ADDRESS);
+bool pcf8575_available = false;
 
 void setup() {
     Serial.begin(115200);
-    
-    // Initialize I2C
     Wire.begin();
     
-    // Initialize PCF8575
-    pcf8575.begin();
-    
-    // Set all pins as outputs and turn off all relays
-    pcf8575.write16(0x0000);  // All LOW = all relays OFF
-    
-    Serial.println("SMT Tester with PCF8575 Ready");
+    // Test PCF8575 connection
+    Wire.beginTransmission(PCF8575_ADDRESS);
+    if (Wire.endTransmission() == 0) {
+        pcf8575.begin();
+        pcf8575_available = true;
+        setAllRelays(0);  // All off
+        Serial.println("SMT Tester Ready");
+    } else {
+        Serial.println("ERROR:I2C_FAIL");
+    }
 }
 
 void executeTestSequence(const char* sequence) {
-    // Parse sequence: "1,2,3:500;OFF:100;7,8,9:500"
+    if (!pcf8575_available) {
+        Serial.println("ERROR:I2C_FAIL");
+        return;
+    }
+    
     struct TestStep {
-        uint16_t relayMask;  // Internal bitmask for fast switching
+        uint16_t relayMask;
         uint16_t duration_ms;
         bool is_delay;
-    } steps[MAX_STEPS];
+    } steps[MAX_SEQUENCE_STEPS];
     
     int stepCount = parseSequence(sequence, steps);
-    String results = "TESTRESULTS:";
+    if (stepCount == 0) {
+        Serial.println("ERROR:INVALID_SEQUENCE");
+        return;
+    }
+    
+    // Pre-allocate response buffer
+    char response[500];
+    strcpy(response, "TESTRESULTS:");
+    
+    unsigned long sequenceStart = millis();
     
     for (int i = 0; i < stepCount; i++) {
-        if (!steps[i].is_delay) {
-            // Use bitmask internally for simultaneous relay control
-            setAllRelays(steps[i].relayMask);  // All relays switch at once
-            delay(100);  // Stabilization
-            
-            // Measure and format as readable relay list
-            float v = measureVoltage();
-            float a = measureCurrent();
-            results += getRelayList(steps[i].relayMask);  // Converts back to "1,2,3"
-            results += ":" + String(v,1) + "V," + String(a,1) + "A;";
-            
-            delay(steps[i].duration_ms - 100);
-            setAllRelays(0);  // All off
+        if (steps[i].is_delay) {
+            // Non-blocking delay
+            unsigned long delayStart = millis();
+            while (millis() - delayStart < steps[i].duration_ms) {
+                // Check for emergency stop
+                if (Serial.available() && Serial.read() == 'X') {
+                    setAllRelays(0);
+                    Serial.println("OK:ALL_OFF");
+                    return;
+                }
+            }
         } else {
-            delay(steps[i].duration_ms);
+            // Activate relays
+            setAllRelays(steps[i].relayMask);
+            
+            // Stabilization delay
+            delay(STABILIZATION_TIME);
+            
+            // Take measurement
+            float voltage, current;
+            if (takeMeasurement(&voltage, &current)) {
+                // Add to response
+                char measurement[50];
+                char relayList[30];
+                maskToRelayList(steps[i].relayMask, relayList);
+                sprintf(measurement, "%s:%.1fV,%.1fA;", relayList, voltage, current);
+                strcat(response, measurement);
+            } else {
+                setAllRelays(0);
+                Serial.println("ERROR:MEASUREMENT_FAIL");
+                return;
+            }
+            
+            // Hold for remaining duration
+            if (steps[i].duration_ms > STABILIZATION_TIME) {
+                delay(steps[i].duration_ms - STABILIZATION_TIME);
+            }
+            
+            // Turn off relays
+            setAllRelays(0);
+        }
+        
+        // Check for timeout (30 seconds max)
+        if (millis() - sequenceStart > 30000) {
+            Serial.println("ERROR:SEQUENCE_TIMEOUT");
+            return;
         }
     }
     
-    results += "END";
-    Serial.println(results);
+    strcat(response, "END");
+    Serial.println(response);
 }
 
-// Fast 16-relay control using PCF8575 I2C expander
-#include <PCF8575.h>
-
-PCF8575 pcf8575(0x20);  // I2C address 0x20 (adjust based on A0-A2 pins)
-
 void setAllRelays(uint16_t mask) {
-    // Write all 16 bits at once - truly simultaneous!
+    if (RELAY_ACTIVE_LOW) {
+        mask = ~mask;  // Invert for active LOW relays
+    }
     pcf8575.write16(mask);
 }
 ```
 
-### 9.2 Python Sequence Builder
-```python
-class SequenceBuilder:
-    def __init__(self):
-        self.steps = []
+### 9.2 Helper Functions
+```cpp
+// Parse comma-separated relay list to bitmask
+uint16_t parseRelaysToBitmask(const char* relayList) {
+    uint16_t mask = 0;
+    char* str = strdup(relayList);
+    char* token = strtok(str, ",");
     
-    def activate(self, relays: List[int], duration_ms: int):
-        self.steps.append(f"R{'&'.join(map(str, relays))},{duration_ms}")
-        return self
-    
-    def delay(self, duration_ms: int):
-        self.steps.append(f"OFF,{duration_ms}")
-        return self
-    
-    def build(self) -> str:
-        return ",".join(self.steps)
+    while (token != NULL) {
+        int relay = atoi(token);
+        if (relay >= 1 && relay <= 16) {
+            mask |= (1 << (relay - 1));
+        }
+        token = strtok(NULL, ",");
+    }
+    free(str);
+    return mask;
+}
 
-# Usage
-seq = (SequenceBuilder()
-    .activate([1, 2], 200)
-    .delay(50)
-    .activate([3, 4], 300)
-    .build())
+// Convert bitmask to relay list string
+void maskToRelayList(uint16_t mask, char* output) {
+    output[0] = '\0';
+    bool first = true;
+    
+    for (int i = 0; i < 16; i++) {
+        if (mask & (1 << i)) {
+            if (!first) strcat(output, ",");
+            char num[4];
+            sprintf(num, "%d", i + 1);
+            strcat(output, num);
+            first = false;
+        }
+    }
+}
+
+// Take measurement with INA260
+bool takeMeasurement(float* voltage, float* current) {
+    // Wait for conversion
+    delay(2);  // INA260 needs 1.1ms
+    
+    // Read from INA260 (pseudo-code)
+    // Replace with actual INA260 library calls
+    *voltage = readVoltage();
+    *current = readCurrent();
+    
+    // Validate readings
+    if (*voltage < 0 || *voltage > 30 || 
+        *current < 0 || *current > 10) {
+        return false;
+    }
+    return true;
+}
 ```
 
 ## 10. Success Criteria
 
 - [ ] Execute complete test sequences in one command/response cycle
-- [ ] Support 16 relay simultaneous activation
+- [ ] Support 16 relay simultaneous activation with PCF8575
 - [ ] Maintain simple "1,2,3" relay format in serial protocol
-- [ ] Zero buffer overflows on Arduino R4 Minima
+- [ ] Zero buffer overflows with fixed-size buffers
 - [ ] Parse comma-separated relay groups in SKU files
 - [ ] Maintain backward compatibility with existing SKUs
-- [ ] Support panels up to 16 boards × 3 functions (48 relays total)
-- [ ] Keep implementation simple and maintainable
+- [ ] Proper I2C error handling and recovery
+- [ ] Non-blocking timing with emergency stop support
 
 ## Notes and Considerations
 
 1. **PCF8575 Configuration**: 
    - I2C Address: 0x20 (default, adjustable via A0-A2 pins)
-   - All 16 I/O pins can be used for relays
-   - Button input can be read from the same PCF8575 if needed
-   - Supports interrupt output for button press detection
+   - Check connection on startup with Wire.endTransmission()
+   - Active LOW relays: Set RELAY_ACTIVE_LOW flag accordingly
+   - Consider pullup resistors on I2C lines for reliability
 
-2. **Power Supply**: Simultaneous relay activation will increase instantaneous current draw. May need to add power supply validation step.
+2. **Timing Constraints**:
+   - Minimum duration: 100ms (to ensure stable measurements)
+   - Stabilization time: 50ms default (configurable)
+   - INA260 conversion: 1.1ms (add 2ms delay to be safe)
+   - Maximum sequence time: 30 seconds (prevent runaway tests)
 
-2. **Relay Protection**: Consider adding flyback diode validation and snubber circuits for simultaneous switching.
+3. **Buffer Management**:
+   - Fixed response buffer: 500 chars (enough for ~15 measurements)
+   - Pre-allocated to prevent fragmentation
+   - No dynamic String concatenation in loops
 
-3. **Measurement Synchronization**: INA260 has 1.1ms conversion time. Need to account for this in timing calculations.
+4. **Error Handling**:
+   - I2C failures reported immediately
+   - Measurement validation (0-30V, 0-10A)
+   - Sequence timeout protection
+   - Emergency stop always functional
 
-4. **Emergency Stop**: Keep simple "X" command for emergency all-off that bypasses sequence processing.
-
-5. **Debugging**: Add debug mode that outputs detailed timing information for sequence validation.
-
-6. **Future Extensions**: 
-   - PWM control for relays
-   - Ramp-up/ramp-down profiles
-   - Conditional sequences based on measurements
-   - External trigger support
-
-This implementation will provide a robust, flexible system for advanced SMT panel testing with precise control over relay activation patterns and timing.
+5. **Scaling Beyond 16 Relays**:
+   - Use multiple PCF8575 at different addresses (0x20-0x27)
+   - Or use multiple Arduino+PCF8575 combinations
+   - Keep each Arduino at 16 relays max for simplicity

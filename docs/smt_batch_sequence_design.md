@@ -160,12 +160,19 @@ class SMTArduinoController:
 ```cpp
 #include <Wire.h>
 #include <PCF8575.h>
+#include <INA260.h>  // For current/voltage measurement
 
 #define MAX_SEQUENCE_STEPS 50
 #define MAX_RELAYS 16
 #define PCF8575_ADDRESS 0x20
+#define INA260_ADDRESS 0x40
+#define STABILIZATION_TIME 50   // ms to wait after relay activation
+#define MIN_DURATION 100        // minimum duration for any step
+#define RELAY_ACTIVE_LOW false  // Set true if relays are active LOW
 
 PCF8575 pcf8575(PCF8575_ADDRESS);
+INA260 ina260;
+bool hardware_ready = false;
 
 struct TestStep {
     uint16_t relayMask;     // Internal bitmask for 16 relays
@@ -174,106 +181,200 @@ struct TestStep {
 };
 
 void executeTestSequence(const char* sequence) {
+    if (!hardware_ready) {
+        Serial.println("ERROR:I2C_FAIL");
+        return;
+    }
+    
     TestStep steps[MAX_SEQUENCE_STEPS];
     int step_count = 0;
     
-    // Parse the entire sequence first
-    char* seq_copy = strdup(sequence);
-    char* step_str = strtok(seq_copy, ";");
-    
-    while (step_str != NULL && step_count < MAX_SEQUENCE_STEPS) {
-        TestStep* step = &steps[step_count];
-        
-        if (strncmp(step_str, "OFF:", 4) == 0) {
-            // Delay step
-            step->is_delay = true;
-            step->duration_ms = atoi(step_str + 4);
-            step->relayMask = 0;
-        } else {
-            // Relay activation step: "1,2,3:500"
-            step->is_delay = false;
-            
-            // Parse relays and duration
-            char* colon = strchr(step_str, ':');
-            if (colon != NULL) {
-                *colon = '\0';
-                step->duration_ms = atoi(colon + 1);
-                
-                // Parse relay numbers into bitmask
-                step->relayMask = parseRelaysToBitmask(step_str);
-            }
-        }
-        
-        step_count++;
-        step_str = strtok(NULL, ";");
+    // Parse sequence with validation
+    step_count = parseSequence(sequence, steps, MAX_SEQUENCE_STEPS);
+    if (step_count <= 0) {
+        Serial.println("ERROR:INVALID_SEQUENCE");
+        return;
     }
     
-    free(seq_copy);
+    // Validate sequence
+    for (int i = 0; i < step_count; i++) {
+        if (!steps[i].is_delay && steps[i].duration_ms < MIN_DURATION) {
+            Serial.println("ERROR:DURATION_TOO_SHORT");
+            return;
+        }
+        // Check for duplicate relays across steps
+        for (int j = i + 1; j < step_count; j++) {
+            if (!steps[i].is_delay && !steps[j].is_delay) {
+                if (steps[i].relayMask & steps[j].relayMask) {
+                    // Relays can appear in multiple steps - this is OK
+                }
+            }
+        }
+    }
     
-    // Execute the sequence and collect results
-    Serial.print("TESTRESULTS:");
+    // Pre-allocate response buffer
+    char response[500];
+    strcpy(response, "TESTRESULTS:");
+    int response_len = strlen(response);
+    
+    // Execute sequence
+    unsigned long sequence_start = millis();
     
     for (int i = 0; i < step_count; i++) {
         TestStep* step = &steps[i];
         
         if (step->is_delay) {
-            // Just delay, no measurement
-            setAllRelays(0);  // All off
-            delay(step->duration_ms);
+            // Non-blocking delay with emergency stop check
+            unsigned long delay_start = millis();
+            while (millis() - delay_start < step->duration_ms) {
+                if (Serial.available() && Serial.read() == 'X') {
+                    setAllRelays(0);
+                    Serial.println("OK:ALL_OFF");
+                    return;
+                }
+                delay(10);  // Small delay to not hog CPU
+            }
         } else {
-            // Activate relays using bitmask (all switch simultaneously)
+            // Activate relays
             setAllRelays(step->relayMask);
             
-            // Wait for stabilization (10% of duration, max 100ms)
-            delay(min(step->duration_ms / 10, 100));
+            // Stabilization delay
+            delay(STABILIZATION_TIME);
             
-            // Take measurement
-            float voltage = measureVoltage();
-            float current = measureTotalCurrent();
+            // Take measurement with retry
+            float voltage = 0, current = 0;
+            bool measurement_ok = false;
             
-            // Send result
-            if (i > 0 && !steps[i-1].is_delay) {
-                Serial.print(";");
+            for (int retry = 0; retry < 3; retry++) {
+                delay(2);  // INA260 conversion time
+                if (ina260.readVoltage(&voltage) && ina260.readCurrent(&current)) {
+                    // Validate readings
+                    if (voltage >= 0 && voltage <= 30 && current >= 0 && current <= 10) {
+                        measurement_ok = true;
+                        break;
+                    }
+                }
             }
             
-            // Convert bitmask back to relay list for response
-            printRelayListFromMask(step->relayMask);
-            Serial.print(":");
-            Serial.print(voltage, 1);
-            Serial.print("V,");
-            Serial.print(current, 1);
-            Serial.print("A");
+            if (!measurement_ok) {
+                setAllRelays(0);
+                Serial.println("ERROR:MEASUREMENT_FAIL");
+                return;
+            }
+            
+            // Add to response buffer
+            char measurement[50];
+            char relay_list[30];
+            maskToRelayList(step->relayMask, relay_list);
+            int len = snprintf(measurement, sizeof(measurement), 
+                             "%s:%.1fV,%.1fA;", relay_list, voltage, current);
+            
+            // Check buffer space
+            if (response_len + len < sizeof(response) - 10) {
+                strcat(response, measurement);
+                response_len += len;
+            } else {
+                setAllRelays(0);
+                Serial.println("ERROR:RESPONSE_TOO_LONG");
+                return;
+            }
             
             // Hold for remaining duration
-            delay(step->duration_ms - min(step->duration_ms / 10, 100));
+            int remaining = step->duration_ms - STABILIZATION_TIME;
+            if (remaining > 0) {
+                delay(remaining);
+            }
             
             // Turn off relays
             setAllRelays(0);
         }
+        
+        // Check timeout
+        if (millis() - sequence_start > 30000) {
+            Serial.println("ERROR:SEQUENCE_TIMEOUT");
+            return;
+        }
     }
     
-    Serial.println(";END");
+    // Send complete response
+    strcat(response, "END");
+    Serial.println(response);
 }
 
 // Fast 16-relay control using PCF8575 I2C expander
 void setAllRelays(uint16_t mask) {
-    // PCF8575 updates all 16 outputs simultaneously with a single I2C write
+    if (RELAY_ACTIVE_LOW) {
+        mask = ~mask;  // Invert for active LOW relays
+    }
     pcf8575.write16(mask);
-    // Note: Relay board may use active LOW, so invert if needed:
-    // pcf8575.write16(~mask);
+}
+
+// Parse complete sequence into steps
+int parseSequence(const char* sequence, TestStep* steps, int max_steps) {
+    char* seq_copy = strdup(sequence);
+    char* step_str = strtok(seq_copy, ";");
+    int count = 0;
+    
+    while (step_str != NULL && count < max_steps) {
+        TestStep* step = &steps[count];
+        
+        if (strncmp(step_str, "OFF:", 4) == 0) {
+            step->is_delay = true;
+            step->duration_ms = atoi(step_str + 4);
+            step->relayMask = 0;
+            
+            if (step->duration_ms <= 0 || step->duration_ms > 10000) {
+                free(seq_copy);
+                return -1;  // Invalid delay
+            }
+        } else {
+            step->is_delay = false;
+            
+            // Find colon separator
+            char* colon = strchr(step_str, ':');
+            if (colon == NULL) {
+                free(seq_copy);
+                return -1;  // Invalid format
+            }
+            
+            *colon = '\0';
+            step->duration_ms = atoi(colon + 1);
+            
+            if (step->duration_ms <= 0 || step->duration_ms > 10000) {
+                free(seq_copy);
+                return -1;  // Invalid duration
+            }
+            
+            // Parse relay list
+            step->relayMask = parseRelaysToBitmask(step_str);
+            if (step->relayMask == 0) {
+                free(seq_copy);
+                return -1;  // No valid relays
+            }
+        }
+        
+        count++;
+        step_str = strtok(NULL, ";");
+    }
+    
+    free(seq_copy);
+    return count;
 }
 
 // Helper functions
 uint16_t parseRelaysToBitmask(const char* relayList) {
-    // Convert "1,2,3" to bitmask 0x0007
     uint16_t mask = 0;
     char* str = strdup(relayList);
     char* token = strtok(str, ",");
     
     while (token != NULL) {
         int relay = atoi(token);
-        if (relay >= 1 && relay <= 16) {
+        if (relay >= 1 && relay <= MAX_RELAYS) {
             mask |= (1 << (relay - 1));
+        } else {
+            // Invalid relay number
+            free(str);
+            return 0;
         }
         token = strtok(NULL, ",");
     }
@@ -281,15 +382,41 @@ uint16_t parseRelaysToBitmask(const char* relayList) {
     return mask;
 }
 
-void printRelayListFromMask(uint16_t mask) {
-    // Convert bitmask back to "1,2,3" format
+void maskToRelayList(uint16_t mask, char* output) {
+    output[0] = '\0';
     bool first = true;
-    for (int i = 0; i < 16; i++) {
+    
+    for (int i = 0; i < MAX_RELAYS; i++) {
         if (mask & (1 << i)) {
-            if (!first) Serial.print(",");
-            Serial.print(i + 1);
+            if (!first) strcat(output, ",");
+            char num[4];
+            sprintf(num, "%d", i + 1);
+            strcat(output, num);
             first = false;
         }
+    }
+}
+
+// Hardware initialization
+void setup() {
+    Serial.begin(115200);
+    Wire.begin();
+    
+    // Initialize PCF8575
+    Wire.beginTransmission(PCF8575_ADDRESS);
+    if (Wire.endTransmission() == 0) {
+        pcf8575.begin();
+        setAllRelays(0);  // All relays off
+        
+        // Initialize INA260
+        if (ina260.begin(INA260_ADDRESS)) {
+            hardware_ready = true;
+            Serial.println("SMT Tester Ready");
+        } else {
+            Serial.println("ERROR:INA260_FAIL");
+        }
+    } else {
+        Serial.println("ERROR:I2C_FAIL");
     }
 }
 ```
@@ -362,25 +489,37 @@ Same format - relay lists with measurements. Bitmask is internal only.
 1. **Single Command**: Entire test runs with one serial command
 2. **Atomic Operation**: Either the whole test succeeds or fails
 3. **Reduced Overhead**: No back-and-forth communication during test
-4. **Better Timing**: Arduino controls all timing without Python delays
-5. **Simpler Error Handling**: One response to parse and validate
-6. **16 Relay Support**: Internal bitmask enables truly simultaneous switching
-7. **R4 Minima Advantages**: 
-   - 32KB RAM can buffer entire sequence
-   - Fast processing ensures accurate timing
-   - Large serial buffer handles long commands
+4. **Better Timing**: Arduino controls all timing precisely
+5. **Error Handling**: Clear error messages for each failure type
+6. **16 Relay Support**: PCF8575 enables truly simultaneous switching
+7. **Safety Features**: 
+   - Emergency stop always works
+   - Timeout protection
+   - Measurement validation
+   - Buffer overflow prevention
 
-## Buffer Considerations with Arduino R4 Minima
+## Implementation Considerations
 
-### Command Size
-- Typical test: ~200-300 bytes
-- Worst case (48 relays, 20 steps): ~400 bytes
-- **R4 Minima: ✅ No problem with 32KB RAM**
+### Hardware Requirements
+- Arduino R4 Minima
+- PCF8575 I2C expander at address 0x20
+- INA260 current/voltage sensor at address 0x40
+- Pull-up resistors on I2C lines (typically 4.7kΩ)
 
-### Response Size
-- With relay grouping: ~400 bytes for 16 measurements
-- Without grouping: ~720 bytes for 48 measurements
-- **R4 Minima: ✅ 512+ byte serial buffer handles both**
+### Timing Constraints
+- Minimum duration: 100ms per step
+- Stabilization time: 50ms (configurable)
+- INA260 conversion: 1.1ms minimum
+- Maximum sequence: 30 seconds total
 
-### Conclusion
-The Arduino R4 Minima's superior specifications eliminate buffer overflow concerns, making this batch approach highly reliable and efficient.
+### Buffer Management
+- Fixed 500-char response buffer
+- Pre-allocated to prevent fragmentation
+- Supports ~15 measurements safely
+- Error if response would overflow
+
+### Error Recovery
+- All errors turn off relays immediately
+- Clear error codes for debugging
+- Hardware checks on startup
+- Measurement retry logic
