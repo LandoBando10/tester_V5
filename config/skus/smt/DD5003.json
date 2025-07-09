@@ -36,6 +36,8 @@
   "test_sequence": [
     {
       "function": "mainbeam",
+      "duration_ms": 500,
+      "delay_after_ms": 100,
       "limits": {
         "current_a": {
           "min": 2.6,
@@ -49,6 +51,8 @@
     },
     {
       "function": "backlight",
+      "duration_ms": 300,
+      "delay_after_ms": 100,
       "limits": {
         "current_a": {
           "min": 0.015,
@@ -62,6 +66,8 @@
     },
     {
       "function": "indicator_left",
+      "duration_ms": 200,
+      "delay_after_ms": 100,
       "limits": {
         "current_a": {
           "min": 0.01,
@@ -75,6 +81,8 @@
     },
     {
       "function": "indicator_right",
+      "duration_ms": 200,
+      "delay_after_ms": 0,
       "limits": {
         "current_a": {
           "min": 0.01,

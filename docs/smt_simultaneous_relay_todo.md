@@ -1,57 +1,69 @@
 # SMT Simultaneous Relay Activation - Implementation Todo List
 
 ## Overview
-Incremental upgrade to SMT testing to support simultaneous relay activation with precise timing control. Maintains backward compatibility with existing SKU files and minimal code changes.
+Upgrade to SMT testing to support simultaneous relay activation with precise timing control. Maximum of 16 relays supported by hardware (PCF8575 I2C expander). Arduino R4 Minima provides 32KB RAM and 256KB Flash. No backward compatibility required - this is a clean implementation for the new system.
 
 ## 1. Arduino Firmware Updates
 
 ### 1.1 Core Command Parser
-- [ ] Keep existing commands for compatibility
-- [ ] Add support for TESTSEQ batch command
+- [ ] Keep startup communication sequence unchanged (board type query, initialization)
+- [ ] Replace old commands with TESTSEQ batch command
 - [ ] Parse relay lists and timing parameters
-- [ ] Maintain existing error response format
+- [ ] Implement new response format for batch results
 
-### 1.2 Enhanced Command Set
+### 1.2 Command Set
 ```
-// Existing commands (keep for compatibility)
-TX:ALL                  // Test all relays
-TX:1,2,3,4             // Test specific relays
-X                      // All relays off (emergency stop)
+// Startup commands (unchanged)
+GET_BOARD_TYPE         // Returns board identifier
+// Other initialization commands as before
+
+// Primary test command
+X                      // All relays off (emergency stop) - keep this for safety
 
 // New batch command
 TESTSEQ:1,2,3:500;OFF:100;7,8,9:500;OFF:100;...
+// OFF command turns all relays off, not just a delay
+// Duration includes 50ms stabilization + 2ms measurement + remaining hold time
 // Response: TESTRESULTS:1,2,3:12.5V,6.8A;7,8,9:12.4V,6.7A;END
 ```
 
-### 1.3 Relay Control System (16 Relay Support)
+### 1.3 Relay Control System (16 Relay Maximum)
 - [ ] Implement relay state bitmask (uint16_t for 16 relays - internal use only)
 - [ ] Create relay activation functions for simultaneous switching
 - [ ] Add hardware control via PCF8575 I2C expander (16-bit I/O)
 - [ ] Initialize I2C communication in setup()
 - [ ] Configure PCF8575 pins as outputs
-- [ ] Implement simple relay state validation (max current limits)
+- [ ] Implement relay state validation:
+  - [ ] Validate relay numbers are 1-16
+  - [ ] Prevent relays from being in multiple groups simultaneously
+  - [ ] Check maximum simultaneous relay limit (configurable)
 - [ ] Keep serial protocol unchanged (relay lists remain as "1,2,3" format)
 
 ### 1.4 Timing System
-- [ ] Replace delay() with millis()-based non-blocking timing
-- [ ] Add configurable stabilization time (default 50ms, min 10ms)
-- [ ] Account for INA260 1.1ms conversion time
-- [ ] Implement minimum duration validation (duration_ms >= stabilization + conversion time)
-- [ ] Add sequence timeout handling
+- [ ] Replace delay() with millis()-based non-blocking timing where needed
+- [ ] Add configurable stabilization time (default 50ms)
+- [ ] Account for INA260 measurement time (2ms with safety margin)
+- [ ] Implement timing calculation:
+  - [ ] Total duration = user-specified duration_ms
+  - [ ] Actual hold time = duration_ms - STABILIZATION_TIME(50ms) - MEASUREMENT_TIME(2ms)
+  - [ ] Minimum duration validation (duration_ms >= 100ms)
+- [ ] Add sequence timeout handling (30 seconds max)
 
 ### 1.5 Measurement System
 - [ ] Single measurement per relay group activation
-- [ ] Wait for INA260 conversion (1.1ms) before reading
-- [ ] Store measurements in fixed-size array (not dynamic string)
+- [ ] Wait for INA260 conversion (2ms including safety margin)
+- [ ] Store measurements in fixed-size buffer (500 chars, safe for R4 Minima's 32KB RAM)
 - [ ] Validate measurement values (0-30V, 0-10A reasonable ranges)
-- [ ] Error handling for I2C measurement failures
+- [ ] Error handling for I2C measurement failures with retry logic (up to 3 attempts)
 
 ### 1.6 Response Protocol
 ```
-// Existing responses (maintain compatibility)
-PANELX:1=12.5,3.2;2=12.4,3.1;...
+// Startup responses (unchanged)
+BOARD_TYPE:SMT_TESTER
+// Other initialization responses as before
+
+// Emergency stop response
 OK:ALL_OFF
-ERROR:INA260_FAIL
 
 // New batch response
 TESTRESULTS:1,2,3:12.5V,6.8A;7,8,9:12.4V,6.7A;...;END
@@ -65,18 +77,22 @@ ERROR:SEQUENCE_TIMEOUT       // Sequence took too long
 ```
 
 ### 1.7 Safety Features
-- [ ] Relay validation (1-16 range, no duplicates in mapping)
+- [ ] Relay validation:
+  - [ ] Range check (1-16 only)
+  - [ ] No duplicates in relay mapping (each relay in one group only)
+  - [ ] Validate against bitmask overflow
 - [ ] Maximum simultaneous relay limit (configurable, default 8)
 - [ ] Minimum timing validation (duration >= 100ms)
 - [ ] I2C communication verification on startup
 - [ ] Emergency stop 'X' command always works
+- [ ] Buffer overflow prevention (though R4 Minima has ample RAM)
 
 ## 2. Python Controller Updates
 
-### 2.1 Maintain Existing Methods
-- [ ] Keep test_panel() for backward compatibility
-- [ ] Keep all_relays_off() method
-- [ ] Maintain existing response parsing
+### 2.1 Core Methods
+- [ ] Keep startup/initialization methods unchanged
+- [ ] Keep all_relays_off() method for emergency stop
+- [ ] Remove old test methods, use only new batch approach
 
 ### 2.2 New SMTArduinoController Methods
 ```python
@@ -107,15 +123,15 @@ def _parse_testresults(self, response: str, measurement_mapping: List) -> Dict:
 - [ ] Clear error reporting to user
 
 ### 2.4 Command Validation
-- [ ] Validate relay numbers (1-16)
-- [ ] Check for duplicate relays across groups
-- [ ] Ensure minimum timing values
-- [ ] Calculate and validate total sequence time
-- [ ] Limit command length to prevent buffer issues
+- [ ] Validate relay numbers (1-16 hardware limit)
+- [ ] Check for duplicate relays across groups (each relay in one group only)
+- [ ] Ensure minimum timing values (>= 100ms)
+- [ ] Calculate and validate total sequence time (<= 30 seconds)
+- [ ] Estimate response size and warn if approaching buffer limit (though unlikely with R4 Minima)
 
 ## 3. SKU Configuration Redesign
 
-### 3.1 Enhanced SKU File Structure (Minimal Change - Using Commas for Groups)
+### 3.1 SKU File Structure (New Format - Using Commas for Groups)
 ```json
 {
     "description": "Product description",
@@ -172,11 +188,14 @@ def _parse_testresults(self, response: str, measurement_mapping: List) -> Dict:
 
 ### 3.2 SKU Parser Updates
 - [ ] Update relay mapping parser to handle "," separator (e.g., "1,2,3")
-- [ ] Add validation for relay groups (no duplicates, valid numbers)
+- [ ] Add validation for relay groups:
+  - [ ] No duplicate relays across groups
+  - [ ] Valid relay numbers (1-16 only)
+  - [ ] Each relay assigned to exactly one group
 - [ ] Parse timing fields from test_sequence (duration_ms, delay_after_ms)
 - [ ] Modify test sequence builder to use grouped relays and timing
 - [ ] Update result parser to map measurements back to groups
-- [ ] Maintain backward compatibility for single relay entries (e.g., "1")
+- [ ] All entries use consistent format (single relays still written as "1" without commas)
 
 ### 3.3 Configuration Features
 - [ ] Validate no relay appears in multiple groups
@@ -185,8 +204,9 @@ def _parse_testresults(self, response: str, measurement_mapping: List) -> Dict:
 - [ ] Add optional "max_simultaneous_relays" safety limit
 - [ ] Clear documentation for migration from old format
 
-### 3.4 Function Mapping for Large Panels (16 boards × 3 functions)
-Example with 48 relays:
+### 3.4 Hardware Limitation - 16 Relays Maximum
+The system is hardware-limited to 16 relays due to PCF8575 having 16 I/O pins.
+Example configuration for maximum capacity:
 ```json
 "relay_mapping": {
     // Board 1
@@ -199,36 +219,33 @@ Example with 48 relays:
     "10": {"board": 2, "function": "position"},
     "11,12": {"board": 2, "function": "turn_signal"},
     
-    // ... continues for all 16 boards
-    
-    // Board 16
-    "43,44,45": {"board": 16, "function": "mainbeam"},
-    "46": {"board": 16, "function": "position"},
-    "47,48": {"board": 16, "function": "turn_signal"}
+    // Board 3 (partial due to 16 relay limit)
+    "13,14,15": {"board": 3, "function": "mainbeam"},
+    "16": {"board": 3, "function": "position"}
+    // Cannot add more relays - hardware limit reached
 }
 
 ## 4. Serial Communication Optimization
 
 ### 4.1 Protocol Efficiency
-- [ ] Optimize existing text protocol
+- [ ] Use optimized text protocol for batch commands
 - [ ] Consider binary protocol for future enhancement
 - [ ] Batch response mode (TESTRESULTS format)
-- [ ] Maintain backward compatibility
+- [ ] No backward compatibility needed
 
-### 4.2 Buffer Management (Arduino R4 Minima - No Overflow Risk)
+### 4.2 Buffer Management (Arduino R4 Minima)
 ```
 Arduino R4 Minima Specifications:
-- RAM: 32KB
-- Serial Buffer: 512+ bytes (estimated)
-- Processor: 120MHz ARM Cortex-M4
+- RAM: 32KB (16x more than UNO R3)
+- Flash: 256KB
+- Processor: 48MHz ARM Cortex-M4
+- Response Buffer: 500 chars (pre-allocated)
 
-With Relay Grouping:
+With 16 Relay Maximum:
 - 16 measurements × 25 chars = 400 bytes ✅
-- Well within R4 Minima buffer capacity
-
-Without Grouping (worst case):
-- 48 measurements × 15 chars = 720 bytes
-- Still manageable with R4 Minima's larger buffer
+- Well within response buffer and RAM capacity
+- No risk of buffer overflow
+- Pre-allocated buffers prevent fragmentation
 ```
 
 ### 4.3 Communication Protocol
@@ -280,8 +297,8 @@ Without Grouping (worst case):
 
 ### Phase 1: SKU Parser Update (Week 1)
 - Parse comma-separated relay groups
-- Maintain backward compatibility
-- Test with existing SKUs
+- Convert all SKUs to new format
+- Test with new SKU format
 
 ### Phase 2: Arduino Firmware (Week 1-2)
 - Add TESTSEQ command handler
@@ -290,8 +307,8 @@ Without Grouping (worst case):
 
 ### Phase 3: Python Controller (Week 2)
 - Add execute_test_sequence() method
-- Integrate with existing SMT test flow
-- Maintain compatibility with test_panel()
+- Replace old SMT test flow with new batch approach
+- Remove old test_panel() method
 
 ### Phase 4: Testing & Integration (Week 3)
 - End-to-end testing
@@ -307,8 +324,8 @@ Without Grouping (worst case):
 - **Communication Errors**: Add retry logic and checksums
 
 ### 8.2 Implementation Risks
-- **Scope Creep**: Focus on incremental improvements
-- **Compatibility**: Test thoroughly with existing SKUs
+- **Scope Creep**: Focus on clean implementation
+- **Migration**: Convert all SKUs to new format before deployment
 - **Testing Coverage**: Automated tests from day 1
 - **Performance**: Validate R4 Minima performance early
 
@@ -319,11 +336,13 @@ Without Grouping (worst case):
 #include <Wire.h>
 #include <PCF8575.h>
 
-#define MAX_RELAYS 16
+#define MAX_RELAYS 16          // Hardware limit - PCF8575 has 16 I/O pins
 #define MAX_SEQUENCE_STEPS 50
 #define PCF8575_ADDRESS 0x20
-#define STABILIZATION_TIME 50  // ms
-#define MIN_DURATION 100       // ms
+#define STABILIZATION_TIME 50  // ms to wait after relay activation
+#define MEASUREMENT_TIME 2     // ms for INA260 conversion
+#define MIN_DURATION 100       // ms minimum total duration
+#define MAX_RESPONSE_SIZE 500  // Safe for R4 Minima's 32KB RAM
 #define RELAY_ACTIVE_LOW false // Set true if relays are active LOW
 
 PCF8575 pcf8575(PCF8575_ADDRESS);
@@ -403,9 +422,10 @@ void executeTestSequence(const char* sequence) {
                 return;
             }
             
-            // Hold for remaining duration
-            if (steps[i].duration_ms > STABILIZATION_TIME) {
-                delay(steps[i].duration_ms - STABILIZATION_TIME);
+            // Hold for remaining duration (subtract stabilization and measurement time)
+            int remaining = steps[i].duration_ms - STABILIZATION_TIME - MEASUREMENT_TIME;
+            if (remaining > 0) {
+                delay(remaining);
             }
             
             // Turn off relays
@@ -469,7 +489,7 @@ void maskToRelayList(uint16_t mask, char* output) {
 // Take measurement with INA260
 bool takeMeasurement(float* voltage, float* current) {
     // Wait for conversion
-    delay(2);  // INA260 needs 1.1ms
+    delay(MEASUREMENT_TIME);  // INA260 needs 1.1ms, using 2ms for safety
     
     // Read from INA260 (pseudo-code)
     // Replace with actual INA260 library calls
@@ -488,13 +508,17 @@ bool takeMeasurement(float* voltage, float* current) {
 ## 10. Success Criteria
 
 - [ ] Execute complete test sequences in one command/response cycle
-- [ ] Support 16 relay simultaneous activation with PCF8575
-- [ ] Maintain simple "1,2,3" relay format in serial protocol
-- [ ] Zero buffer overflows with fixed-size buffers
+- [ ] Support exactly 16 relay simultaneous activation with PCF8575 (hardware limit)
+- [ ] Use simple "1,2,3" relay format in serial protocol
+- [ ] Zero buffer overflows (ample headroom with R4 Minima's 32KB RAM)
 - [ ] Parse comma-separated relay groups in SKU files
-- [ ] Maintain backward compatibility with existing SKUs
+- [ ] Validate no relay appears in multiple groups
+- [ ] All SKUs converted to new format
 - [ ] Proper I2C error handling and recovery
 - [ ] Non-blocking timing with emergency stop support
+- [ ] Correct timing calculations (duration - stabilization - measurement)
+- [ ] OFF command turns relays off (not just a delay)
+- [ ] Startup communication sequence unchanged
 
 ## Notes and Considerations
 
@@ -505,15 +529,18 @@ bool takeMeasurement(float* voltage, float* current) {
    - Consider pullup resistors on I2C lines for reliability
 
 2. **Timing Constraints**:
-   - Minimum duration: 100ms (to ensure stable measurements)
-   - Stabilization time: 50ms default (configurable)
-   - INA260 conversion: 1.1ms (add 2ms delay to be safe)
+   - Minimum duration: 100ms (must be >= STABILIZATION_TIME + MEASUREMENT_TIME)
+   - Stabilization time: 50ms default (time to wait after relay activation)
+   - INA260 conversion: 2ms (includes safety margin over 1.1ms spec)
+   - Actual hold time = duration_ms - STABILIZATION_TIME - MEASUREMENT_TIME
    - Maximum sequence time: 30 seconds (prevent runaway tests)
 
-3. **Buffer Management**:
-   - Fixed response buffer: 500 chars (enough for ~15 measurements)
+3. **Buffer Management (R4 Minima)**:
+   - Fixed response buffer: 500 chars (enough for ~15-20 measurements)
    - Pre-allocated to prevent fragmentation
    - No dynamic String concatenation in loops
+   - Ample headroom with 32KB RAM (16x more than UNO R3)
+   - No risk of buffer overflow with 16 relay limit
 
 4. **Error Handling**:
    - I2C failures reported immediately
@@ -521,7 +548,8 @@ bool takeMeasurement(float* voltage, float* current) {
    - Sequence timeout protection
    - Emergency stop always functional
 
-5. **Scaling Beyond 16 Relays**:
-   - Use multiple PCF8575 at different addresses (0x20-0x27)
-   - Or use multiple Arduino+PCF8575 combinations
-   - Keep each Arduino at 16 relays max for simplicity
+5. **Hardware Limits**:
+   - Single PCF8575: Exactly 16 relays maximum
+   - Each relay must be assigned to exactly one group
+   - OFF command affects all 16 relays
+   - For larger systems: Use multiple Arduino+PCF8575 units

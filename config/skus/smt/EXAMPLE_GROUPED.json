@@ -1,43 +1,51 @@
 {
-  "description": "Product Beta - SS3 Max High Output (SMT Panel Testing)",
+  "description": "Example SKU demonstrating grouped relay mapping for simultaneous activation",
 
   "panel_layout": {
-    "rows": 1,
+    "rows": 2,
     "columns": 2,
-    "total_boards": 2,
+    "total_boards": 4,
     "board_positions": {
       "1": [1, 1],
-      "2": [1, 2]
+      "2": [1, 2],
+      "3": [2, 1],
+      "4": [2, 2]
     }
   },
 
   "relay_mapping": {
-    "1": {
+    "1,2,3": {
       "board": 1,
       "function": "mainbeam"
-    },
-    "2": {
-      "board": 2,
-      "function": "mainbeam"
-    },
-    "3": {
-      "board": 1,
-      "function": "backlight_left"
     },
     "4": {
-      "board": 2,
-      "function": "backlight_left"
-    },
-    "5": {
       "board": 1,
-      "function": "backlight_right"
+      "function": "position"
     },
-    "6": {
+    "5,6": {
+      "board": 1,
+      "function": "turn_signal"
+    },
+    "7,8,9": {
       "board": 2,
-      "function": "backlight_right"
+      "function": "mainbeam"
     },
-    "7": null,
-    "8": null
+    "10": {
+      "board": 2,
+      "function": "position"
+    },
+    "11,12": {
+      "board": 2,
+      "function": "turn_signal"
+    },
+    "13,14,15": {
+      "board": 3,
+      "function": "mainbeam"
+    },
+    "16": {
+      "board": 3,
+      "function": "position"
+    }
   },
 
   "test_sequence": [
@@ -47,8 +55,8 @@
       "delay_after_ms": 100,
       "limits": {
         "current_a": {
-          "min": 1.8,
-          "max": 2.3
+          "min": 5.4,
+          "max": 6.9
         },
         "voltage_v": {
           "min": 11.5,
@@ -57,13 +65,13 @@
       }
     },
     {
-      "function": "backlight_left",
+      "function": "position",
       "duration_ms": 300,
       "delay_after_ms": 100,
       "limits": {
         "current_a": {
-          "min": 0.08,
-          "max": 0.18
+          "min": 0.8,
+          "max": 1.2
         },
         "voltage_v": {
           "min": 11.5,
@@ -72,13 +80,13 @@
       }
     },
     {
-      "function": "backlight_right",
-      "duration_ms": 300,
+      "function": "turn_signal",
+      "duration_ms": 400,
       "delay_after_ms": 0,
       "limits": {
         "current_a": {
-          "min": 0.08,
-          "max": 0.18
+          "min": 3.6,
+          "max": 4.2
         },
         "voltage_v": {
           "min": 11.5,
@@ -89,7 +97,7 @@
   ],
 
   "programming": {
-    "enabled": true,
-    "note": "Multi-component boards with STM8S003F3 main controller, STM8S105K6 LED drivers, and PIC18F47J53 thermal controller"
+    "enabled": false,
+    "note": "Example configuration for grouped relay testing"
   }
 }

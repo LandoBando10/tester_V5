@@ -1,7 +1,7 @@
 # SMT Batch Sequence Design - Full Test in One Command
 
 ## Core Concept
-Send the ENTIRE test sequence to Arduino in one command, get ALL results back in one response. Simple, efficient, and leverages the Arduino R4 Minima's capabilities. Supports up to 16 relays with simultaneous activation.
+Send the ENTIRE test sequence to Arduino in one command, get ALL results back in one response. Simple, efficient, and leverages the Arduino R4 Minima's capabilities. Supports up to 16 relays with simultaneous activation. No backward compatibility - this is a clean implementation for the new system.
 
 ## Command Format
 
@@ -202,18 +202,19 @@ void executeTestSequence(const char* sequence) {
             Serial.println("ERROR:DURATION_TOO_SHORT");
             return;
         }
-        // Check for duplicate relays across steps
-        for (int j = i + 1; j < step_count; j++) {
-            if (!steps[i].is_delay && !steps[j].is_delay) {
-                if (steps[i].relayMask & steps[j].relayMask) {
-                    // Relays can appear in multiple steps - this is OK
+        // Validate relay numbers are within range 1-16
+        if (!steps[i].is_delay) {
+            for (int bit = 16; bit < 32; bit++) {
+                if (steps[i].relayMask & (1 << bit)) {
+                    Serial.println("ERROR:INVALID_RELAY");
+                    return;
                 }
             }
         }
     }
     
-    // Pre-allocate response buffer
-    char response[500];
+    // Pre-allocate response buffer (R4 Minima has 32KB RAM)
+    char response[MAX_RESPONSE_SIZE];
     strcpy(response, "TESTRESULTS:");
     int response_len = strlen(response);
     
@@ -402,6 +403,9 @@ void setup() {
     Serial.begin(115200);
     Wire.begin();
     
+    // Startup communication remains unchanged
+    // Handle board type queries and other initialization
+    
     // Initialize PCF8575
     Wire.beginTransmission(PCF8575_ADDRESS);
     if (Wire.endTransmission() == 0) {
@@ -497,6 +501,8 @@ Same format - relay lists with measurements. Bitmask is internal only.
    - Timeout protection
    - Measurement validation
    - Buffer overflow prevention
+8. **Clean Implementation**: No legacy code or backward compatibility concerns
+9. **Consistent Format**: All SKUs use the new comma-separated relay mapping
 
 ## Implementation Considerations
 
@@ -521,5 +527,10 @@ Same format - relay lists with measurements. Bitmask is internal only.
 ### Error Recovery
 - All errors turn off relays immediately
 - Clear error codes for debugging
-- Hardware checks on startup
+- Hardware checks on startup (keeping existing startup sequence)
 - Measurement retry logic
+
+### Startup Communication
+- Board type queries remain unchanged
+- Initialization handshake preserved
+- Only the test execution commands are replaced

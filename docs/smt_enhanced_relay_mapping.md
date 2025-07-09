@@ -1,7 +1,7 @@
-# Enhanced Relay Mapping - Minimal Change Design
+# Enhanced Relay Mapping - New Design
 
 ## Core Concept
-Keep the existing `relay_mapping` structure, but allow relay groups using comma separator.
+New `relay_mapping` structure that uses comma-separated relay groups. No backward compatibility needed - all SKUs will be converted to the new format.
 
 ## Current Structure (Single Relays)
 ```json
@@ -59,17 +59,21 @@ Keep the existing `relay_mapping` structure, but allow relay groups using comma 
     },
     
     "relay_mapping": {
+        // Board 1
         "1,2,3": {"board": 1, "function": "mainbeam"},
         "4": {"board": 1, "function": "position"},
+        "5,6": {"board": 1, "function": "turn_signal"},
         
-        "5,6,7": {"board": 2, "function": "mainbeam"},
-        "8": {"board": 2, "function": "position"},
+        // Board 2
+        "7,8,9": {"board": 2, "function": "mainbeam"},
+        "10": {"board": 2, "function": "position"},
+        "11,12": {"board": 2, "function": "turn_signal"},
         
-        "9,10,11": {"board": 3, "function": "mainbeam"},
-        "12": {"board": 3, "function": "position"},
-        
-        "13,14,15": {"board": 4, "function": "mainbeam"},
-        "16": {"board": 4, "function": "position"}
+        // Board 3
+        "13,14,15": {"board": 3, "function": "mainbeam"},
+        "16": {"board": 3, "function": "position"}
+        // Note: Only 16 relays total, so board 3 has no turn_signal
+        // and board 4 is not used in this example
     },
     
     "test_sequence": [
@@ -192,8 +196,8 @@ class SMTArduinoController:
 
 ## Benefits of This Approach
 
-1. **Minimal Change** - Existing code barely needs modification
-2. **Backward Compatible** - Old SKUs with single relays still work
+1. **Clean Implementation** - No legacy code to maintain
+2. **Consistent Format** - All SKUs use the same structure
 3. **Intuitive** - "1,2,3" clearly means relays 1, 2, and 3 work together
 4. **Flexible** - Can mix single relays and groups in same config
 5. **Natural Limits** - Limits in test_sequence apply to the combined measurement
@@ -224,9 +228,9 @@ TESTRESULTS:1,2,3:12.5V,6.8A;7,8,9:12.4V,6.7A;END
 - "1,2,3" measurement → board 1, mainbeam function
 - "7,8,9" measurement → board 2, mainbeam function
 
-## Migration Examples
+## SKU Format Examples
 
-### Before (Individual Relays)
+### Old Format (No Longer Supported)
 ```json
 "relay_mapping": {
     "1": {"board": 1, "function": "mainbeam"},
@@ -235,19 +239,21 @@ TESTRESULTS:1,2,3:12.5V,6.8A;7,8,9:12.4V,6.7A;END
 }
 ```
 
-### After (Grouped)
+### New Format (Required)
 ```json
 "relay_mapping": {
     "1,2,3": {"board": 1, "function": "mainbeam"}
 }
 ```
 
+All existing SKUs must be converted to use the new grouped format before deployment.
+
 ## Edge Cases Handled
 
-1. **Single Relay Groups** - "4" works the same as before
+1. **Single Relay Groups** - Use "4" format (without comma) for single relays
 2. **Mixed Configurations** - Can have both "1,2,3" and "4" in same config
 3. **Large Groups** - "1,2,3,4,5,6" for high-power functions
-4. **Null Mappings** - Unused relays can still be null
+4. **All 16 Relays Must Be Mapped** - No unused relay slots in new format
 
 ## Validation Examples
 
@@ -288,9 +294,11 @@ TESTRESULTS:1,2,3:12.5V,6.8A;7,8,9:12.4V,6.7A;END
 
 ## Implementation Priority
 
-1. **Validation First**: Ensure relay mapping is valid before use
-2. **Clear Error Messages**: Help users fix configuration issues
-3. **Timing Validation**: Prevent too-short durations
-4. **Total Duration Check**: Prevent tests exceeding 30 seconds
+1. **SKU Conversion**: Convert all existing SKUs to new format
+2. **Validation First**: Ensure relay mapping is valid before use
+3. **Clear Error Messages**: Help users fix configuration issues
+4. **Timing Validation**: Prevent too-short durations (min 100ms)
+5. **Total Duration Check**: Prevent tests exceeding 30 seconds
+6. **Startup Communication**: Keep board initialization sequence unchanged
 
-This design provides safety and clear feedback while maintaining flexibility!
+This design provides a clean implementation focused on the new simultaneous relay activation capabilities!
