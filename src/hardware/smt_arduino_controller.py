@@ -1,16 +1,16 @@
 """
-SMT Arduino Controller - Batch Communication Only
-Version 2.0.0 - Simplified for batch-only operation
+SMT Arduino Controller - TESTSEQ Protocol Implementation
+Version 3.0.0 - Simultaneous relay activation with timing control
 
-This version removes all individual relay measurement commands and
-only supports batch panel testing for maximum simplicity and performance.
+This version implements the TESTSEQ protocol for simultaneous relay
+activation with precise timing control using PCF8575 I2C expander.
 
-Key changes from v1.x:
-- Removed measure_relay() method
-- Removed measure_relays() method  
-- Only supports test_panel() and test_panel_stream()
-- Simplified command validation
-- Cleaner, more maintainable code
+Key changes from v2.x:
+- Added execute_test_sequence() for new TESTSEQ protocol
+- Support for comma-separated relay groups
+- Parse TESTRESULTS batch response format
+- Command validation for relay numbers and timing
+- Backward compatible with existing methods
 """
 
 import time
@@ -18,7 +18,7 @@ import logging
 import serial
 import threading
 import queue
-from typing import Dict, Optional, Callable, List
+from typing import Dict, Optional, Callable, List, Any
 from src.services.port_registry import port_registry
 
 class SMTArduinoController:
@@ -760,6 +760,220 @@ class SMTArduinoController:
         """Set callback for error events (error_type, message)"""
         self.error_callback = callback
     
+    # New TESTSEQ protocol methods
+    def execute_test_sequence(self, relay_mapping: Dict, test_sequence: List[Dict]) -> Dict[str, Any]:
+        """Execute complete test sequence based on SKU configuration
+        
+        Args:
+            relay_mapping: SKU relay mapping with comma-separated groups
+                          e.g., {"1,2,3": {"board": 1, "function": "mainbeam"}}
+            test_sequence: List of test configurations by function
+                          e.g., [{"function": "mainbeam", "duration_ms": 500, "delay_after_ms": 100}]
+        
+        Returns:
+            Complete test results with board/function context:
+            {
+                "success": True/False,
+                "results": {
+                    "1": {  # board number
+                        "mainbeam": {"voltage": 12.5, "current": 6.8, "power": 85.0},
+                        "position": {"voltage": 12.4, "current": 1.0, "power": 12.4}
+                    }
+                },
+                "errors": []
+            }
+        """
+        if not self.is_connected():
+            return {"success": False, "results": {}, "errors": ["Not connected"]}
+        
+        try:
+            # Parse relay mapping to extract groups
+            relay_groups = self._parse_relay_mapping(relay_mapping)
+            
+            # Build TESTSEQ command
+            command = self._build_testseq_command(relay_groups, test_sequence)
+            
+            # Validate command before sending
+            validation_errors = self._validate_testseq_command(relay_groups, test_sequence)
+            if validation_errors:
+                return {"success": False, "results": {}, "errors": validation_errors}
+            
+            # Send command with extended timeout for long sequences
+            timeout = self._calculate_sequence_timeout(test_sequence)
+            response = self._send_command(command, timeout=timeout)
+            
+            if not response:
+                return {"success": False, "results": {}, "errors": ["No response from Arduino"]}
+            
+            # Parse response
+            if response.startswith("ERROR:"):
+                error_msg = response[6:]
+                return {"success": False, "results": {}, "errors": [f"Arduino error: {error_msg}"]}
+            
+            if not response.startswith("TESTRESULTS:"):
+                return {"success": False, "results": {}, "errors": [f"Invalid response format: {response}"]}
+            
+            # Parse TESTRESULTS and map back to boards/functions
+            results = self._parse_testresults(response, relay_groups, test_sequence)
+            
+            return {"success": True, "results": results, "errors": []}
+            
+        except Exception as e:
+            self.logger.error(f"Test sequence execution error: {e}")
+            return {"success": False, "results": {}, "errors": [str(e)]}
+    
+    def _parse_relay_mapping(self, relay_mapping: Dict) -> Dict[str, Dict]:
+        """Parse relay mapping, handling comma-separated groups
+        
+        Returns:
+            Dict mapping relay group string to metadata
+            e.g., {"1,2,3": {"board": 1, "function": "mainbeam"}}
+        """
+        relay_groups = {}
+        
+        for relay_str, metadata in relay_mapping.items():
+            if metadata:  # Skip null/empty mappings
+                # Normalize relay string (remove spaces)
+                normalized = relay_str.replace(" ", "")
+                relay_groups[normalized] = metadata
+        
+        return relay_groups
+    
+    def _build_testseq_command(self, relay_groups: Dict, test_sequence: List[Dict]) -> str:
+        """Build TESTSEQ command from parsed groups and test sequence
+        
+        Example output: "TESTSEQ:1,2,3:500;OFF:100;7,8,9:500;OFF:100"
+        """
+        command_parts = []
+        
+        for test_step in test_sequence:
+            function = test_step["function"]
+            duration = test_step["duration_ms"]
+            delay_after = test_step.get("delay_after_ms", 0)
+            
+            # Find all relay groups for this function
+            for relay_str, metadata in relay_groups.items():
+                if metadata.get("function") == function:
+                    # Add relay activation step
+                    command_parts.append(f"{relay_str}:{duration}")
+            
+            # Add OFF delay if specified
+            if delay_after > 0:
+                command_parts.append(f"OFF:{delay_after}")
+        
+        return "TESTSEQ:" + ";".join(command_parts)
+    
+    def _parse_testresults(self, response: str, relay_groups: Dict, test_sequence: List[Dict]) -> Dict:
+        """Parse TESTRESULTS response and map back to boards/functions
+        
+        Response format: "TESTRESULTS:1,2,3:12.5V,6.8A;7,8,9:12.4V,6.7A;END"
+        
+        Returns:
+            Dict organized by board number and function
+        """
+        results = {}
+        
+        # Remove prefix and suffix
+        if not response.startswith("TESTRESULTS:") or not response.endswith(";END"):
+            self.logger.error(f"Invalid TESTRESULTS format: {response}")
+            return results
+        
+        data = response[12:-4]  # Remove "TESTRESULTS:" and ";END"
+        
+        # Parse each measurement
+        measurements = data.split(";")
+        
+        for measurement in measurements:
+            if ":" not in measurement:
+                continue
+                
+            parts = measurement.split(":", 1)
+            if len(parts) != 2:
+                continue
+                
+            relay_str = parts[0]
+            values_str = parts[1]
+            
+            # Parse voltage and current
+            if "V," in values_str and values_str.endswith("A"):
+                try:
+                    voltage_str = values_str.split("V,")[0]
+                    current_str = values_str.split("V,")[1][:-1]  # Remove 'A'
+                    
+                    voltage = float(voltage_str)
+                    current = float(current_str)
+                    
+                    # Find which board and function this relay group belongs to
+                    if relay_str in relay_groups:
+                        metadata = relay_groups[relay_str]
+                        board = metadata.get("board", 1)
+                        function = metadata.get("function", "unknown")
+                        
+                        # Initialize board results if needed
+                        if board not in results:
+                            results[board] = {}
+                        
+                        # Store measurement
+                        results[board][function] = {
+                            "voltage": voltage,
+                            "current": current,
+                            "power": voltage * current
+                        }
+                        
+                except (ValueError, IndexError) as e:
+                    self.logger.error(f"Failed to parse measurement '{measurement}': {e}")
+        
+        return results
+    
+    def _validate_testseq_command(self, relay_groups: Dict, test_sequence: List[Dict]) -> List[str]:
+        """Validate relay numbers and timing parameters
+        
+        Returns:
+            List of validation error messages (empty if valid)
+        """
+        errors = []
+        all_relays = set()
+        
+        # Check relay numbers
+        for relay_str in relay_groups.keys():
+            relays = [int(r) for r in relay_str.split(",")]
+            
+            for relay in relays:
+                if relay < 1 or relay > 16:
+                    errors.append(f"Invalid relay number: {relay} (must be 1-16)")
+                
+                if relay in all_relays:
+                    errors.append(f"Relay {relay} appears in multiple groups")
+                
+                all_relays.add(relay)
+        
+        # Check timing
+        total_time = 0
+        for test_step in test_sequence:
+            duration = test_step.get("duration_ms", 0)
+            delay_after = test_step.get("delay_after_ms", 0)
+            
+            if duration < 100:
+                errors.append(f"Duration {duration}ms too short (minimum 100ms)")
+            
+            total_time += duration + delay_after
+        
+        if total_time > 30000:
+            errors.append(f"Total sequence time {total_time}ms exceeds 30 second limit")
+        
+        return errors
+    
+    def _calculate_sequence_timeout(self, test_sequence: List[Dict]) -> float:
+        """Calculate appropriate timeout for test sequence"""
+        total_ms = 0
+        
+        for test_step in test_sequence:
+            total_ms += test_step.get("duration_ms", 0)
+            total_ms += test_step.get("delay_after_ms", 0)
+        
+        # Add 2 seconds buffer for communication overhead
+        return (total_ms / 1000.0) + 2.0
+    
     # Legacy method stubs for backward compatibility
     def measure_relay(self, relay_num: int):
         """DEPRECATED: Use test_panel() instead"""
@@ -783,21 +997,52 @@ if __name__ == "__main__":
     controller = SMTArduinoController()
     
     if controller.connect("COM7"):
-        # Test panel
-        print("\nTesting panel (batch mode)...")
+        # Example SKU configuration
+        relay_mapping = {
+            "1,2,3": {"board": 1, "function": "mainbeam"},
+            "4": {"board": 1, "function": "position"},
+            "5,6": {"board": 1, "function": "turn_signal"},
+            "7,8,9": {"board": 2, "function": "mainbeam"},
+            "10": {"board": 2, "function": "position"},
+            "11,12": {"board": 2, "function": "turn_signal"}
+        }
+        
+        test_sequence = [
+            {
+                "function": "mainbeam",
+                "duration_ms": 500,
+                "delay_after_ms": 100,
+                "limits": {
+                    "current_a": {"min": 5.4, "max": 6.9},
+                    "voltage_v": {"min": 11.5, "max": 12.5}
+                }
+            },
+            {
+                "function": "position",
+                "duration_ms": 300,
+                "delay_after_ms": 100,
+                "limits": {
+                    "current_a": {"min": 0.8, "max": 1.2},
+                    "voltage_v": {"min": 11.5, "max": 12.5}
+                }
+            }
+        ]
+        
+        # Test new TESTSEQ protocol
+        print("\nTesting with TESTSEQ protocol...")
+        result = controller.execute_test_sequence(relay_mapping, test_sequence)
+        
+        if result["success"]:
+            print("Test successful!")
+            for board, functions in result["results"].items():
+                print(f"\nBoard {board}:")
+                for function, data in functions.items():
+                    print(f"  {function}: {data['voltage']:.1f}V, {data['current']:.1f}A")
+        else:
+            print(f"Test failed: {result['errors']}")
+        
+        # Legacy test panel method still works
+        print("\nLegacy test panel method...")
         results = controller.test_panel()
-        
-        for relay, data in results.items():
-            if data:
-                print(f"Relay {relay}: {data['voltage']:.3f}V, {data['current']:.3f}A")
-            else:
-                print(f"Relay {relay}: FAILED")
-        
-        # Test with progress
-        print("\nTesting panel with progress...")
-        def progress(relay, measurement):
-            print(f"  Relay {relay}: {measurement['voltage']:.3f}V")
-        
-        results = controller.test_panel_stream(progress)
         
         controller.disconnect()

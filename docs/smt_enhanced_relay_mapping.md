@@ -3,6 +3,11 @@
 ## Core Concept
 New `relay_mapping` structure that uses comma-separated relay groups. No backward compatibility needed - all SKUs will be converted to the new format.
 
+## Maximum Relay Support
+- **Hard limit**: 16 relays maximum (hardware constraint from PCF8575)
+- **Valid relay numbers**: 1-16 only
+- **No support for relay numbers > 16**
+
 ## Current Structure (Single Relays)
 ```json
 "relay_mapping": {
@@ -135,6 +140,10 @@ class SMTArduinoController:
                     raise ValueError(f"Relay {relay} appears in multiple groups")
                 used_relays.add(relay)
             
+            # Validate no more than 16 total relays
+            if len(used_relays) > 16:
+                raise ValueError(f"Total relay count {len(used_relays)} exceeds maximum of 16")
+            
             # Store the group info
             board = mapping.get('board')
             function = mapping.get('function')
@@ -154,6 +163,7 @@ class SMTArduinoController:
         """Build Arduino test sequence from test_sequence config"""
         arduino_steps = []
         total_duration = 0
+        active_relays = set()
         
         for test_config in test_sequence:
             function = test_config.get("function")
@@ -166,12 +176,23 @@ class SMTArduinoController:
             
             # Find all relay groups for this function
             found_any = False
+            new_active_relays = set()
+            
             for relay_key, group in relay_groups.items():
                 if group['function'] == function:
+                    # Check for relay overlap
+                    relay_set = set(group['relays'])
+                    if active_relays and relay_set & active_relays:
+                        overlapping = relay_set & active_relays
+                        raise ValueError(f"Relay overlap detected: relays {overlapping} are already active")
+                    
+                    new_active_relays.update(relay_set)
                     relays = ','.join(map(str, group['relays']))
                     arduino_steps.append(f"{relays}:{duration}")
                     total_duration += duration
                     found_any = True
+            
+            active_relays = new_active_relays
                     
             if not found_any:
                 # Warning, but don't fail - function might not be mapped
@@ -180,6 +201,7 @@ class SMTArduinoController:
             if delay > 0:
                 arduino_steps.append(f"OFF:{delay}")
                 total_duration += delay
+                active_relays.clear()  # OFF command turns all relays off
         
         # Remove last OFF if present
         if arduino_steps and arduino_steps[-1].startswith("OFF"):

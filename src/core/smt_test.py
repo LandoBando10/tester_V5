@@ -153,34 +153,71 @@ class SMTTest(BaseTest):
                     self.result.failures.append("Programming phase failed")
             
             
-            # Single panel measurement
-            self.update_progress("Measuring panel...", 0)
+            # Execute test sequence using new TESTSEQ protocol
+            self.update_progress("Executing test sequence...", 0)
             
-            # Get list of all configured relays from relay_mapping
-            configured_relays = [int(relay_str) for relay_str in self.relay_mapping.keys() if self.relay_mapping[relay_str]]
-            if configured_relays:
-                self.logger.info(f"Testing configured relays: {sorted(configured_relays)}")
-                panel_measurements = self.arduino.test_panel(relay_list=configured_relays)
-            else:
-                # No relay mapping, test all
-                self.logger.info("No relay mapping configured, testing all relays")
-                panel_measurements = self.arduino.test_panel()
-            
-            if not panel_measurements:
-                self.logger.error("Panel test failed - no measurements received")
-                self.result.failures.append("Failed to get panel measurements from Arduino")
-                return self.result
-            
-            # Log raw measurements
-            self.logger.info(f"Received measurements for {len(panel_measurements)} relays")
-            
-            # Distribute results by function
-            function_results = self._distribute_panel_results(panel_measurements, self.relay_mapping)
-            
-            # Read test sequence from configuration
+            # Get test sequence from configuration
             test_sequence = self.parameters.get("test_sequence", [])
             if not test_sequence:
                 raise ValueError("No test_sequence defined in SKU configuration")
+            
+            # Check if we should use new TESTSEQ protocol
+            use_testseq = hasattr(self.arduino, 'execute_test_sequence')
+            
+            if use_testseq:
+                # Use new TESTSEQ protocol for simultaneous relay activation
+                self.logger.info("Using TESTSEQ protocol for simultaneous relay activation")
+                result = self.arduino.execute_test_sequence(self.relay_mapping, test_sequence)
+                
+                if not result["success"]:
+                    self.logger.error(f"Test sequence failed: {result['errors']}")
+                    self.result.failures.extend(result["errors"])
+                    return self.result
+                
+                # Convert new format to legacy function_results format
+                function_results = {}
+                for board_num, functions in result["results"].items():
+                    for function, measurements in functions.items():
+                        if function not in function_results:
+                            function_results[function] = {}
+                        function_results[function][int(board_num)] = measurements
+                
+                self.logger.info(f"Test sequence completed successfully for {len(result['results'])} boards")
+                
+            else:
+                # Fall back to legacy test_panel method
+                self.logger.info("Using legacy test_panel method (upgrade firmware for TESTSEQ support)")
+                
+                # Get list of all configured relays from relay_mapping
+                configured_relays = []
+                for relay_str, mapping in self.relay_mapping.items():
+                    if mapping:
+                        # Handle both single relays and comma-separated groups
+                        if ',' in relay_str:
+                            relays = [int(r.strip()) for r in relay_str.split(',')]
+                            configured_relays.extend(relays)
+                        else:
+                            configured_relays.append(int(relay_str))
+                
+                if configured_relays:
+                    self.logger.info(f"Testing configured relays: {sorted(set(configured_relays))}")
+                    panel_measurements = self.arduino.test_panel(relay_list=sorted(set(configured_relays)))
+                else:
+                    # No relay mapping, test all
+                    self.logger.info("No relay mapping configured, testing all relays")
+                    panel_measurements = self.arduino.test_panel()
+                
+                if not panel_measurements:
+                    self.logger.error("Panel test failed - no measurements received")
+                    self.result.failures.append("Failed to get panel measurements from Arduino")
+                    return self.result
+                
+                # Log raw measurements
+                self.logger.info(f"Received measurements for {len(panel_measurements)} relays")
+                
+                # Distribute results by function
+                function_results = self._distribute_panel_results(panel_measurements, self.relay_mapping)
+            
             
             # Analyze each function against its limits
             self.update_progress("Analyzing results...", 0)
@@ -318,7 +355,7 @@ class SMTTest(BaseTest):
         
         Args:
             panel_measurements: Raw measurements from test_panel() {relay_num: {voltage, current, power}}
-            relay_mapping: Relay configuration from SKU
+            relay_mapping: Relay configuration from SKU (supports comma-separated groups)
             
         Returns:
             Dictionary organized by function -> board -> measurements
@@ -329,7 +366,6 @@ class SMTTest(BaseTest):
             if mapping is None:
                 continue
                 
-            relay_num = int(relay_str)
             board_num = mapping.get("board")
             function = mapping.get("function")
             
@@ -340,9 +376,36 @@ class SMTTest(BaseTest):
             if function not in function_results:
                 function_results[function] = {}
                 
-            # Add measurements for this board if relay was measured
-            if relay_num in panel_measurements and panel_measurements[relay_num]:
-                function_results[function][board_num] = panel_measurements[relay_num]
+            # Handle comma-separated relay groups
+            if ',' in relay_str:
+                # Multiple relays in a group - aggregate measurements
+                relays = [int(r.strip()) for r in relay_str.split(',')]
+                
+                # Calculate aggregate values for the group
+                total_voltage = 0
+                total_current = 0
+                valid_measurements = 0
+                
+                for relay_num in relays:
+                    if relay_num in panel_measurements and panel_measurements[relay_num]:
+                        measurement = panel_measurements[relay_num]
+                        # For parallel circuits, voltage is same, current adds up
+                        total_voltage = measurement.get('voltage', 0)  # Use last valid voltage
+                        total_current += measurement.get('current', 0)
+                        valid_measurements += 1
+                
+                if valid_measurements > 0:
+                    # Store aggregated measurement
+                    function_results[function][board_num] = {
+                        'voltage': total_voltage,
+                        'current': total_current,
+                        'power': total_voltage * total_current
+                    }
+            else:
+                # Single relay
+                relay_num = int(relay_str)
+                if relay_num in panel_measurements and panel_measurements[relay_num]:
+                    function_results[function][board_num] = panel_measurements[relay_num]
                 
         return function_results
     
@@ -362,17 +425,18 @@ class SMTTest(BaseTest):
         for board_num, measurements in board_measurements.items():
             board_key = f"Board {board_num}"
             
-            # Find relay number for this board/function combination
-            relay_num = None
+            # Find relay number(s) for this board/function combination
+            relay_info = None
             for relay_str, mapping in self.relay_mapping.items():
                 if (mapping and 
                     mapping.get("board") == board_num and 
                     mapping.get("function") == function):
-                    relay_num = int(relay_str)
+                    # Keep the original string format (might be comma-separated)
+                    relay_info = relay_str
                     break
             
             formatted[board_key] = {
-                "relay": relay_num,
+                "relay": relay_info,  # Can be "1" or "1,2,3" format
                 "voltage": measurements.get("voltage", 0),
                 "current": measurements.get("current", 0),
                 "power": measurements.get("power", 0)

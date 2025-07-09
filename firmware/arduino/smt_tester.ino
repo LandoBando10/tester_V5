@@ -1,17 +1,19 @@
 /*
  * SMT Tester - Arduino firmware for Surface Mount Technology (SMT) board testing
- * Version: 1.1.0
+ * Version: 2.0.0
  * 
  * Description:
  * This firmware controls a 16-relay test fixture for SMT board validation.
  * It measures voltage and current through each relay circuit using an INA260
  * power monitor to verify proper board assembly and component functionality.
+ * Supports simultaneous relay activation with precise timing control.
  * 
  * Hardware Requirements:
- * - Arduino R4 Minima with 16 digital outputs for relay control
- * - INA260 I2C power monitor for voltage/current measurements (SDA/SCL pins)
+ * - Arduino R4 Minima (32KB RAM, 256KB Flash)
+ * - PCF8575 I2C I/O expander for 16 relay control (address 0x20)
+ * - INA260 I2C power monitor for voltage/current measurements (address 0x40)
  * - Button input on pin A0 for manual test triggering
- * - 16 relay modules (active-LOW configuration)
+ * - 16 relay modules (configurable active-HIGH/LOW)
  * 
  * Communication Protocol:
  * - Serial: 115200 baud
@@ -19,39 +21,56 @@
  * - Responses echo command sequence for synchronization
  * 
  * Main Commands:
- * - TX:1,2,5,6  Test specific relays (comma-separated or ranges)
- * - TX:ALL      Test all 16 relays in sequence
- * - X           Turn all relays off
+ * - TESTSEQ:1,2,3:500;OFF:100;7,8,9:500;OFF:100;...  Batch test sequence
+ * - X           Turn all relays off (emergency stop)
  * - I           Get firmware identification
  * - B           Get button status (PRESSED/RELEASED)
  * - V           Get supply voltage without relay activation
  * - RESET_SEQ   Reset sequence numbers for synchronization
+ * - GET_BOARD_TYPE  Returns board identifier
  */
 
 #include <Wire.h>
 #include <Adafruit_INA260.h>
+#include <PCF8575.h>
 
-// Relay logic configuration
-// For active-LOW relay modules (most common):
-const bool RELAY_ON = LOW;   // Change to HIGH if using active-HIGH relays
-const bool RELAY_OFF = HIGH;  // Change to LOW if using active-HIGH relays
+// Hardware configuration
+#define MAX_RELAYS 16          // Hardware limit - PCF8575 has 16 I/O pins
+#define MAX_SEQUENCE_STEPS 50  // Maximum steps in a test sequence
+#define PCF8575_ADDRESS 0x20   // I2C address of PCF8575
+#define INA260_ADDRESS 0x40    // I2C address of INA260
+#define STABILIZATION_TIME 50  // ms to wait after relay activation
+#define MEASUREMENT_TIME 2     // ms for INA260 conversion
+#define MIN_DURATION 100       // ms minimum total duration
+#define MAX_RESPONSE_SIZE 1024 // Response buffer size
+#define MAX_SIMULTANEOUS_RELAYS 8  // Safety limit for simultaneous relays
+#define SEQUENCE_TIMEOUT 30000     // Maximum sequence duration (30 seconds)
 
-// Pin definitions
-const int RELAY_PINS[] = {
-  2, 3, 4, 5, 6, 7, 8, 9,        // Relays 1-8 (original pins)
-  10, 11, 12, 13, 14, 15, 16, 17 // Relays 9-16 (using digital pins available on R4 Minima)
-};
-const int NUM_RELAYS = 16;
-const int BUTTON_PIN = A0; // Using A0 on R4 Minima since A6 doesn't exist (A4/A5 are I2C)
+// Relay configuration
+const bool RELAY_ACTIVE_LOW = true;  // Set false if relays are active HIGH
+const bool RELAY_ON = RELAY_ACTIVE_LOW ? LOW : HIGH;
+const bool RELAY_OFF = RELAY_ACTIVE_LOW ? HIGH : LOW;
+
+// Pin definitions (button only - relays now controlled via PCF8575)
+const int BUTTON_PIN = A0;
 const int LED_PIN = LED_BUILTIN;
 
-// INA260 sensor
+// I2C devices
+PCF8575 pcf8575(PCF8575_ADDRESS);
 Adafruit_INA260 ina260 = Adafruit_INA260();
-bool INA_OK = false;  // Global flag to track if sensor is available
+bool pcf8575_available = false;
+bool INA_OK = false;
+
+// Test sequence structure
+struct TestStep {
+    uint16_t relayMask;     // Bitmask of relays to activate
+    uint16_t duration_ms;   // Total duration including stabilization
+    bool is_off;            // True for OFF command (all relays off)
+};
 
 // Button state tracking
 bool lastButtonState = HIGH;
-bool currentButtonPressed = false;  // Current debounced state
+bool currentButtonPressed = false;
 unsigned long lastButtonTime = 0;
 const unsigned long DEBOUNCE_DELAY = 50;
 
@@ -60,13 +79,9 @@ uint16_t lastReceivedSeq = 0;      // Last sequence number received from host
 uint16_t responseSeq = 0;          // Sequence to echo back in CMDSEQ
 uint16_t globalSequenceNumber = 0;  // Auto-incrementing sequence for all responses
 
-// Timing constants
-const int RELAY_STABILIZATION_MS = 50;  // Increased from 15ms for better stability
-const int MEASUREMENT_SAMPLES = 6;
-const int SAMPLE_INTERVAL_MS = 17;
-const int INTER_RELAY_DELAY_MS = 20;  // Increased from 10ms for better stability
-const int I2C_RETRY_DELAY_MS = 5;  // Delay between I2C retry attempts
-const int MAX_I2C_RETRIES = 3;  // Maximum I2C retry attempts
+// I2C retry configuration
+const int I2C_RETRY_DELAY_MS = 5;
+const int MAX_I2C_RETRIES = 3;
 
 // Parse command with reliability format (unified with Offroad)
 struct ParsedCommand {
@@ -77,31 +92,46 @@ struct ParsedCommand {
 };
 
 // Function prototypes
-void testPanelSelective(String relayList, unsigned int seq = 0);
+void executeTestSequence(const char* sequence, unsigned int seq = 0);
+int parseTestSequence(const char* sequence, TestStep steps[]);
+uint16_t parseRelaysToBitmask(const char* relayList);
+void maskToRelayList(uint16_t mask, char* output);
+bool takeMeasurement(float* voltage, float* current);
+void setRelayMask(uint16_t mask);
 void getSupplyVoltage(unsigned int seq = 0);
-void measureRelayValues(int relayIndex, float &voltage, float &current);
 void allRelaysOff();
 void checkButton();
-bool parseRelayList(String relayList, bool relaysToTest[], int &count);
 byte calculateChecksum(String data);
 String formatChecksum(byte checksum);
 void sendReliableResponse(const String& data, uint16_t seq = 0);
 ParsedCommand parseReliableCommand(const String& cmdStr);
 void processCommand(String command);
 bool recoverI2C();
+bool validateRelayMask(uint16_t mask);
+int countSetBits(uint16_t mask);
 
 void setup() {
   Serial.begin(115200);
-  Serial.setTimeout(25);  // Reduce blocking time to 25ms
+  Serial.setTimeout(25);
   
-  // Wait for USB serial port to connect (needed for native USB boards)
+  // Wait for USB serial port to connect
   unsigned long t0 = millis();
   while (!Serial && (millis() - t0 < 5000)) { }
   
-  // Initialize relay pins
-  for (int i = 0; i < NUM_RELAYS; i++) {
-    pinMode(RELAY_PINS[i], OUTPUT);
-    digitalWrite(RELAY_PINS[i], RELAY_OFF);
+  // Initialize I2C
+  Wire.begin();
+  
+  // Initialize PCF8575 (required for relay control)
+  Wire.beginTransmission(PCF8575_ADDRESS);
+  if (Wire.endTransmission() == 0) {
+    pcf8575.begin();
+    pcf8575_available = true;
+    // Set all pins as outputs and turn off all relays
+    pcf8575.write16(RELAY_ACTIVE_LOW ? 0xFFFF : 0x0000);
+    Serial.println("PCF8575:OK");
+  } else {
+    Serial.println("ERROR:I2C_FAIL");
+    pcf8575_available = false;
   }
   
   // Initialize button pin
@@ -116,14 +146,16 @@ void setup() {
   if (!INA_OK) {
     Serial.println("WARN:INA260_MISSING");
   } else {
-    // Set INA260 to fastest conversion time for better performance
+    // Set INA260 for fast conversion
     ina260.setMode(INA260_MODE_CONTINUOUS);
     ina260.setCurrentConversionTime(INA260_TIME_140_us);
     ina260.setVoltageConversionTime(INA260_TIME_140_us);
     ina260.setAveragingCount(INA260_COUNT_1);
   }
   
-  Serial.println("SMT_BATCH_TESTER_V3_READY");
+  if (pcf8575_available) {
+    Serial.println("SMT_TESTER_V2_READY");
+  }
 }
 
 // Calculate XOR checksum for a string
@@ -245,21 +277,29 @@ void processCommand(String command) {
   // Extract base command
   String baseCommand = parsed.command;
   
-  if (baseCommand.startsWith("TX:")) {
-    // Test specific relays (the only test command)
-    testPanelSelective(baseCommand.substring(3), responseSeq);
+  if (baseCommand.startsWith("TESTSEQ:")) {
+    // New batch test sequence command
+    if (!pcf8575_available) {
+      sendReliableResponse("ERROR:I2C_FAIL", responseSeq);
+    } else {
+      executeTestSequence(baseCommand.substring(8).c_str(), responseSeq);
+    }
   }
   else if (baseCommand == "X") {
-    // Turn all relays off
+    // Emergency stop - turn all relays off
     allRelaysOff();
     sendReliableResponse("OK:ALL_OFF", responseSeq);
   }
+  else if (baseCommand == "GET_BOARD_TYPE") {
+    // Return board identifier for compatibility
+    sendReliableResponse("BOARD_TYPE:SMT_TESTER", responseSeq);
+  }
   else if (baseCommand == "I") {
     // Get board info
-    sendReliableResponse("ID:SMT_BATCH_TESTER_V3.0_16RELAY", responseSeq);
+    sendReliableResponse("ID:SMT_TESTER_V2.0_16RELAY_PCF8575", responseSeq);
   }
   else if (baseCommand == "B") {
-    // Get current button status (use debounced state)
+    // Get current button status
     if (currentButtonPressed) {
       sendReliableResponse("BUTTON:PRESSED", responseSeq);
     } else {
@@ -271,10 +311,10 @@ void processCommand(String command) {
     getSupplyVoltage(responseSeq);
   }
   else if (baseCommand == "RESET_SEQ") {
-    // Reset sequence numbers (unified protocol enhancement)
+    // Reset sequence numbers
     globalSequenceNumber = 0;
     lastReceivedSeq = 0;
-    responseSeq = parsed.hasReliability ? parsed.sequence : 0;  // Use received seq for response
+    responseSeq = parsed.hasReliability ? parsed.sequence : 0;
     sendReliableResponse("OK:SEQ_RESET", responseSeq);
   }
   else {
@@ -308,103 +348,113 @@ bool recoverI2C() {
   return false;
 }
 
-// Measure relay and return values (for internal use)
-void measureRelayValues(int relayIndex, float &voltage, float &current) {
-  // Turn on the specific relay
-  digitalWrite(RELAY_PINS[relayIndex], RELAY_ON);
+// Set relay state using bitmask
+void setRelayMask(uint16_t mask) {
+  if (!pcf8575_available) return;
   
-  // Wait for relay to stabilize (increased delay)
-  delay(RELAY_STABILIZATION_MS);
-  
-  // Take multiple samples for accuracy
-  float totalVoltage = 0;
-  float totalCurrent = 0;
-  bool sensorFailed = false;
-  int validSamples = 0;
-  
-  // If sensor was marked as failed, try to recover it first
+  // Apply active-low logic if needed
+  uint16_t output = RELAY_ACTIVE_LOW ? ~mask : mask;
+  pcf8575.write16(output);
+}
+
+// Validate relay mask for safety
+bool validateRelayMask(uint16_t mask) {
+  // Check maximum simultaneous relays
+  if (countSetBits(mask) > MAX_SIMULTANEOUS_RELAYS) {
+    return false;
+  }
+  return true;
+}
+
+// Count number of set bits in mask
+int countSetBits(uint16_t mask) {
+  int count = 0;
+  while (mask) {
+    count += mask & 1;
+    mask >>= 1;
+  }
+  return count;
+}
+
+// Take measurement with INA260
+bool takeMeasurement(float* voltage, float* current) {
   if (!INA_OK) {
-    if (recoverI2C()) {
-      INA_OK = true;
+    if (!recoverI2C()) {
+      return false;
     }
   }
   
-  for (int i = 0; i < MEASUREMENT_SAMPLES; i++) {
-    if (INA_OK) {
-      // Try to read with retry logic
-      bool readSuccess = false;
-      for (int retry = 0; retry < MAX_I2C_RETRIES; retry++) {
-        // Check I2C FIRST before attempting to read
-        Wire.beginTransmission(0x40);  // INA260 default address
-        byte i2cError = Wire.endTransmission();
-        
-        if (i2cError == 0) {
-          // I2C is working, now safe to read
-          float v = ina260.readBusVoltage();
-          float c = ina260.readCurrent();
-          
-          // Validate readings
-          if (!isnan(v) && !isnan(c) && v >= 0) {
-            // Success - add to totals
-            totalVoltage += v;
-            totalCurrent += c;
-            validSamples++;
-            readSuccess = true;
-            
-            break;
-          }
-        }
-        
-        // If we're here, either I2C failed or readings were invalid
-        if (retry < MAX_I2C_RETRIES - 1) {
-          // Failed - try to recover
-          delay(I2C_RETRY_DELAY_MS);
-          if (recoverI2C()) {
-            continue;
-          }
-        }
-      }
+  // Wait for measurement to stabilize
+  delay(MEASUREMENT_TIME);
+  
+  // Try to read with retry logic
+  for (int retry = 0; retry < MAX_I2C_RETRIES; retry++) {
+    Wire.beginTransmission(INA260_ADDRESS);
+    if (Wire.endTransmission() == 0) {
+      float v = ina260.readBusVoltage();
+      float c = ina260.readCurrent();
       
-      if (!readSuccess) {
-        // All retries failed
-        sensorFailed = true;
-        INA_OK = false;
-        break;
+      if (!isnan(v) && !isnan(c) && v >= 0) {
+        *voltage = v / 1000.0;  // Convert mV to V
+        *current = c / 1000.0;  // Convert mA to A
+        
+        // Validate ranges
+        if (*voltage >= 0 && *voltage <= 30 && 
+            *current >= 0 && *current <= 10) {
+          return true;
+        }
       }
-    } else {
-      // INA260 not available
-      sensorFailed = true;
-      break;
     }
     
-    if (i < MEASUREMENT_SAMPLES - 1) {
-      delay(SAMPLE_INTERVAL_MS);
+    if (retry < MAX_I2C_RETRIES - 1) {
+      delay(I2C_RETRY_DELAY_MS);
+      recoverI2C();
     }
   }
   
-  // Turn off the relay
-  digitalWrite(RELAY_PINS[relayIndex], RELAY_OFF);
+  return false;
+}
+
+// Parse comma-separated relay list to bitmask
+uint16_t parseRelaysToBitmask(const char* relayList) {
+  uint16_t mask = 0;
+  char buffer[50];
+  strncpy(buffer, relayList, sizeof(buffer) - 1);
+  buffer[sizeof(buffer) - 1] = '\0';
   
-  // Small delay after turning off relay
-  delay(5);
+  char* token = strtok(buffer, ",");
+  while (token != NULL) {
+    int relay = atoi(token);
+    if (relay >= 1 && relay <= MAX_RELAYS) {
+      mask |= (1 << (relay - 1));
+    }
+    token = strtok(NULL, ",");
+  }
   
-  // Calculate averages (convert mV to V and mA to A)
-  if (validSamples > 0) {
-    // We got at least some valid readings
-    voltage = totalVoltage / validSamples / 1000.0;
-    current = totalCurrent / validSamples / 1000.0;
-  } else {
-    // No valid readings at all
-    voltage = -1.0;  // Indicate sensor failure
-    current = -1.0;
+  return mask;
+}
+
+// Convert bitmask to relay list string
+void maskToRelayList(uint16_t mask, char* output) {
+  output[0] = '\0';
+  bool first = true;
+  
+  for (int i = 0; i < MAX_RELAYS; i++) {
+    if (mask & (1 << i)) {
+      if (!first) strcat(output, ",");
+      char num[4];
+      sprintf(num, "%d", i + 1);
+      strcat(output, num);
+      first = false;
+    }
   }
 }
 
 
 
 void allRelaysOff() {
-  for (int i = 0; i < NUM_RELAYS; i++) {
-    digitalWrite(RELAY_PINS[i], RELAY_OFF);
+  if (pcf8575_available) {
+    setRelayMask(0x0000);  // All relays off
   }
 }
 
@@ -460,119 +510,155 @@ void checkButton() {
 }
 
 
-// Parse relay list and test specific relays
-void testPanelSelective(String relayList, unsigned int seq) {
-  // Array to store which relays to test
-  bool relaysToTest[NUM_RELAYS] = {false};
-  int relayCount = 0;
+// Execute test sequence from TESTSEQ command
+void executeTestSequence(const char* sequence, unsigned int seq) {
+  if (!pcf8575_available) {
+    sendReliableResponse("ERROR:I2C_FAIL", seq);
+    return;
+  }
   
-  // Special case: TX:ALL tests all 16 relays
-  if (relayList == "ALL") {
-    for (int i = 0; i < NUM_RELAYS; i++) {
-      relaysToTest[i] = true;
-    }
-    relayCount = NUM_RELAYS;
-  } else {
-    // Parse the relay list
-    if (!parseRelayList(relayList, relaysToTest, relayCount)) {
-      sendReliableResponse("ERROR:INVALID_RELAY_LIST", seq);
+  TestStep steps[MAX_SEQUENCE_STEPS];
+  int stepCount = parseTestSequence(sequence, steps);
+  
+  if (stepCount == 0) {
+    sendReliableResponse("ERROR:INVALID_SEQUENCE", seq);
+    return;
+  }
+  
+  if (stepCount > MAX_SEQUENCE_STEPS) {
+    sendReliableResponse("ERROR:SEQUENCE_TOO_LONG", seq);
+    return;
+  }
+  
+  // Pre-allocate response buffer
+  char response[500];
+  strcpy(response, "TESTRESULTS:");
+  
+  unsigned long sequenceStart = millis();
+  
+  for (int i = 0; i < stepCount; i++) {
+    // Check for timeout
+    if (millis() - sequenceStart > SEQUENCE_TIMEOUT) {
+      setRelayMask(0);  // Safety: turn off all relays
+      sendReliableResponse("ERROR:SEQUENCE_TIMEOUT", seq);
       return;
     }
     
-    if (relayCount == 0) {
-      sendReliableResponse("ERROR:EMPTY_RELAY_LIST", seq);
+    // Check for emergency stop
+    if (Serial.available() && Serial.peek() == 'X') {
+      setRelayMask(0);
+      Serial.read();  // Consume the 'X'
+      sendReliableResponse("OK:ALL_OFF", seq);
       return;
     }
-  }
-  
-  // Test selected relays
-  char result[200];  // Buffer for response (16 relays * ~12 chars each)
-  strcpy(result, "PANELX:");
-  bool firstRelay = true;
-  
-  for (int i = 0; i < NUM_RELAYS; i++) {
-    if (relaysToTest[i]) {
-      float voltage, current;
-      measureRelayValues(i, voltage, current);
-      
-      // Check for sensor failure
-      if (voltage < 0 || current < 0) {
-        sendReliableResponse("ERROR:INA260_FAIL", seq);
-        allRelaysOff();  // Ensure all relays are off
+    
+    if (steps[i].is_off) {
+      // OFF command - turn all relays off and delay
+      setRelayMask(0);
+      delay(steps[i].duration_ms);
+    } else {
+      // Validate relay mask
+      if (!validateRelayMask(steps[i].relayMask)) {
+        setRelayMask(0);
+        sendReliableResponse("ERROR:TOO_MANY_RELAYS", seq);
         return;
       }
       
-      // Append to result buffer with relay number
-      char relayData[20];
-      if (!firstRelay) strcat(result, ";");
-      snprintf(relayData, sizeof(relayData), "%d=%.3f,%.3f", i + 1, voltage, current);
-      strcat(result, relayData);
-      firstRelay = false;
+      // Activate relays
+      setRelayMask(steps[i].relayMask);
       
-      // Small delay between relays
-      if (relayCount > 1) delay(INTER_RELAY_DELAY_MS);
-      relayCount--;
+      // Wait for stabilization
+      delay(STABILIZATION_TIME);
+      
+      // Take measurement
+      float voltage, current;
+      if (takeMeasurement(&voltage, &current)) {
+        // Add to response
+        char measurement[50];
+        char relayList[30];
+        maskToRelayList(steps[i].relayMask, relayList);
+        sprintf(measurement, "%s:%.1fV,%.1fA;", relayList, voltage, current);
+        
+        // Check buffer space
+        if (strlen(response) + strlen(measurement) < sizeof(response) - 10) {
+          strcat(response, measurement);
+        }
+      } else {
+        setRelayMask(0);
+        sendReliableResponse("ERROR:MEASUREMENT_FAIL", seq);
+        return;
+      }
+      
+      // Hold for remaining duration
+      int remaining = steps[i].duration_ms - STABILIZATION_TIME - MEASUREMENT_TIME;
+      if (remaining > 0) {
+        delay(remaining);
+      }
+      
+      // Turn off relays
+      setRelayMask(0);
     }
   }
   
-  sendReliableResponse(String(result), seq);
+  strcat(response, "END");
+  sendReliableResponse(response, seq);
 }
 
-
-// Parse relay list (supports individual numbers and ranges)
-// Examples: "1,2,5,6" or "1-4,9-12" or "1,2,5-8,12"
-bool parseRelayList(String relayList, bool relaysToTest[], int &count) {
-  count = 0;
-  int startPos = 0;
+// Parse test sequence string into steps
+// Format: "1,2,3:500;OFF:100;7,8,9:500;OFF:100"
+int parseTestSequence(const char* sequence, TestStep steps[]) {
+  int stepCount = 0;
+  char buffer[500];
+  strncpy(buffer, sequence, sizeof(buffer) - 1);
+  buffer[sizeof(buffer) - 1] = '\0';
   
-  // Clear the array
-  for (int i = 0; i < NUM_RELAYS; i++) {
-    relaysToTest[i] = false;
-  }
+  uint16_t lastActiveMask = 0;  // Track last active relay mask
   
-  // Parse comma-separated tokens
-  while (startPos < relayList.length()) {
-    int commaPos = relayList.indexOf(',', startPos);
-    if (commaPos == -1) commaPos = relayList.length();
-    
-    String token = relayList.substring(startPos, commaPos);
-    token.trim();
-    
-    // Check for range (contains dash)
-    int dashPos = token.indexOf('-');
-    if (dashPos > 0) {
-      // Parse range
-      int rangeStart = token.substring(0, dashPos).toInt();
-      int rangeEnd = token.substring(dashPos + 1).toInt();
-      
-      if (rangeStart < 1 || rangeStart > NUM_RELAYS || 
-          rangeEnd < 1 || rangeEnd > NUM_RELAYS || 
-          rangeStart > rangeEnd) {
-        return false; // Invalid range
-      }
-      
-      // Mark relays in range
-      for (int i = rangeStart; i <= rangeEnd; i++) {
-        if (!relaysToTest[i - 1]) {
-          relaysToTest[i - 1] = true;
-          count++;
-        }
-      }
-    } else {
-      // Parse single number
-      int relayNum = token.toInt();
-      if (relayNum < 1 || relayNum > NUM_RELAYS) {
-        return false; // Invalid relay number
-      }
-      
-      if (!relaysToTest[relayNum - 1]) {
-        relaysToTest[relayNum - 1] = true;
-        count++;
-      }
+  char* stepToken = strtok(buffer, ";");
+  while (stepToken != NULL && stepCount < MAX_SEQUENCE_STEPS) {
+    // Find the colon separator
+    char* colonPos = strchr(stepToken, ':');
+    if (colonPos == NULL) {
+      return 0;  // Invalid format
     }
     
-    startPos = commaPos + 1;
+    *colonPos = '\0';  // Split at colon
+    char* relayPart = stepToken;
+    char* durationPart = colonPos + 1;
+    
+    // Parse duration
+    int duration = atoi(durationPart);
+    if (duration < MIN_DURATION) {
+      return 0;  // Duration too short
+    }
+    
+    // Check if this is an OFF command
+    if (strcmp(relayPart, "OFF") == 0) {
+      steps[stepCount].relayMask = 0;
+      steps[stepCount].duration_ms = duration;
+      steps[stepCount].is_off = true;
+      lastActiveMask = 0;  // OFF clears active relays
+    } else {
+      // Parse relay list
+      uint16_t mask = parseRelaysToBitmask(relayPart);
+      if (mask == 0) {
+        return 0;  // No valid relays
+      }
+      
+      // Check for relay overlap without OFF between
+      if (lastActiveMask != 0 && (mask & lastActiveMask) != 0) {
+        return 0;  // Relay overlap detected
+      }
+      
+      steps[stepCount].relayMask = mask;
+      steps[stepCount].duration_ms = duration;
+      steps[stepCount].is_off = false;
+      lastActiveMask = mask;  // Update last active mask
+    }
+    
+    stepCount++;
+    stepToken = strtok(NULL, ";");
   }
   
-  return true;
+  return stepCount;
 }

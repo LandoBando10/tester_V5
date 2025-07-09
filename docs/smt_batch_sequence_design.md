@@ -157,6 +157,17 @@ class SMTArduinoController:
 
 ## Arduino Implementation (16 Relay Support with PCF8575)
 
+### Arduino R4 Minima Specifications
+- **RAM**: 32KB (vs 2KB on Arduino UNO)
+- **Flash**: 256KB (vs 32KB on Arduino UNO)
+- **Serial Buffer**: Significantly larger than Arduino UNO's 64 bytes
+- **Buffer Overflow Risk**: Minimal with R4 Minima's 32KB RAM
+
+### Maximum Relay Support
+- **Hard limit**: 16 relays (due to PCF8575's 16-bit I/O)
+- **Relay numbering**: 1-16 only
+- **No support for relay numbers > 16**
+
 ```cpp
 #include <Wire.h>
 #include <PCF8575.h>
@@ -281,7 +292,8 @@ void executeTestSequence(const char* sequence) {
             }
             
             // Hold for remaining duration
-            int remaining = step->duration_ms - STABILIZATION_TIME;
+            // Account for stabilization time (50ms) and measurement time (2ms)
+            int remaining = step->duration_ms - STABILIZATION_TIME - 2;
             if (remaining > 0) {
                 delay(remaining);
             }
@@ -513,16 +525,19 @@ Same format - relay lists with measurements. Bitmask is internal only.
 - Pull-up resistors on I2C lines (typically 4.7kΩ)
 
 ### Timing Constraints
-- Minimum duration: 100ms per step
+- Minimum duration: 100ms per step (must be > stabilization + measurement time)
 - Stabilization time: 50ms (configurable)
-- INA260 conversion: 1.1ms minimum
+- INA260 measurement time: 2ms (includes conversion and safety margin)
+- Actual relay hold time: duration_ms - 50ms - 2ms
 - Maximum sequence: 30 seconds total
+- Example: 100ms duration = 48ms actual hold time after stabilization and measurement
 
-### Buffer Management
-- Fixed 500-char response buffer
+### Buffer Management (Arduino R4 Minima)
+- Fixed 1024-char response buffer (R4 Minima has 32KB RAM vs 2KB on UNO)
 - Pre-allocated to prevent fragmentation
-- Supports ~15 measurements safely
-- Error if response would overflow
+- Supports all 16 relay measurements safely with margin
+- Buffer overflow risk minimal due to R4 Minima's large memory
+- Error checking still implemented for safety
 
 ### Error Recovery
 - All errors turn off relays immediately
