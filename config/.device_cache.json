@@ -1,6 +1,9 @@
 {
-  "timestamp": 1752101073.8735733,
+  "timestamp": 1752268141.5571585,
   "devices": {
-    "COM3": "Unknown"
+    "COM7": {
+      "device_type": "SMT Arduino",
+      "description": "Preloaded SMT Arduino"
+    }
   }
 }

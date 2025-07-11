@@ -46,7 +46,9 @@
 #define MAX_SIMULTANEOUS_RELAYS 8  // Safety limit for simultaneous relays
 #define SEQUENCE_TIMEOUT 30000     // Maximum sequence duration (30 seconds)
 
-// Relay configuration
+// Relay configuration - IMPORTANT: Check your relay module documentation!
+// Most relay modules are active LOW (relay turns ON when signal is LOW)
+// Some solid-state relays are active HIGH (relay turns ON when signal is HIGH)
 const bool RELAY_ACTIVE_LOW = true;  // Set false if relays are active HIGH
 const bool RELAY_ON = RELAY_ACTIVE_LOW ? LOW : HIGH;
 const bool RELAY_OFF = RELAY_ACTIVE_LOW ? HIGH : LOW;
@@ -120,17 +122,23 @@ void setup() {
   
   // Initialize I2C
   Wire.begin();
+  delay(50);  // Allow I2C bus to stabilize
+  
+  // Report I2C initialization starting
+  Serial.println("I2C:INIT:START");
   
   // Initialize PCF8575 (required for relay control)
   Wire.beginTransmission(PCF8575_ADDRESS);
-  if (Wire.endTransmission() == 0) {
+  uint8_t pcf_error = Wire.endTransmission();
+  if (pcf_error == 0) {
     pcf8575.begin();
     pcf8575_available = true;
     // Set all pins as outputs and turn off all relays
     pcf8575.write16(RELAY_ACTIVE_LOW ? 0xFFFF : 0x0000);
-    Serial.println("PCF8575:OK");
+    Serial.println("I2C:PCF8575:OK:0x20");
   } else {
-    Serial.println("ERROR:I2C_FAIL");
+    Serial.print("I2C:PCF8575:FAIL:0x20:ERROR_");
+    Serial.println(pcf_error);
     pcf8575_available = false;
   }
   
@@ -142,19 +150,36 @@ void setup() {
   digitalWrite(LED_PIN, LOW);
   
   // Initialize INA260 (optional - don't block if missing)
-  INA_OK = ina260.begin();
-  if (!INA_OK) {
-    Serial.println("WARN:INA260_MISSING");
+  Wire.beginTransmission(INA260_ADDRESS);
+  uint8_t ina_error = Wire.endTransmission();
+  if (ina_error == 0) {
+    INA_OK = ina260.begin();
+    if (INA_OK) {
+      // Set INA260 for fast conversion
+      ina260.setMode(INA260_MODE_CONTINUOUS);
+      ina260.setCurrentConversionTime(INA260_TIME_140_us);
+      ina260.setVoltageConversionTime(INA260_TIME_140_us);
+      ina260.setAveragingCount(INA260_COUNT_1);
+      Serial.println("I2C:INA260:OK:0x40");
+    } else {
+      Serial.println("I2C:INA260:FAIL:0x40:INIT_ERROR");
+    }
   } else {
-    // Set INA260 for fast conversion
-    ina260.setMode(INA260_MODE_CONTINUOUS);
-    ina260.setCurrentConversionTime(INA260_TIME_140_us);
-    ina260.setVoltageConversionTime(INA260_TIME_140_us);
-    ina260.setAveragingCount(INA260_COUNT_1);
+    INA_OK = false;
+    Serial.print("I2C:INA260:FAIL:0x40:ERROR_");
+    Serial.println(ina_error);
   }
+  
+  // Report I2C initialization complete with summary
+  Serial.print("I2C:INIT:COMPLETE:");
+  Serial.print(pcf8575_available ? "PCF8575_OK" : "PCF8575_FAIL");
+  Serial.print(",");
+  Serial.println(INA_OK ? "INA260_OK" : "INA260_FAIL");
   
   if (pcf8575_available) {
     Serial.println("SMT_TESTER_V2_READY");
+  } else {
+    Serial.println("SMT_TESTER_V2_ERROR:NO_RELAY_CONTROL");
   }
 }
 
@@ -317,6 +342,40 @@ void processCommand(String command) {
     responseSeq = parsed.hasReliability ? parsed.sequence : 0;
     sendReliableResponse("OK:SEQ_RESET", responseSeq);
   }
+  else if (baseCommand == "I2C_STATUS") {
+    // Report I2C device status
+    String status = "I2C_STATUS:";
+    status += "PCF8575@0x20=";
+    status += pcf8575_available ? "OK" : "FAIL";
+    status += ",INA260@0x40=";
+    status += INA_OK ? "OK" : "FAIL";
+    sendReliableResponse(status, responseSeq);
+  }
+  else if (baseCommand.startsWith("RELAY:")) {
+    // Manual relay control for debugging: RELAY:1:ON or RELAY:1:OFF
+    String params = baseCommand.substring(6);
+    int colonPos = params.indexOf(':');
+    if (colonPos > 0) {
+      int relayNum = params.substring(0, colonPos).toInt();
+      String state = params.substring(colonPos + 1);
+      
+      if (relayNum >= 1 && relayNum <= MAX_RELAYS) {
+        if (state == "ON") {
+          setRelayMask(1 << (relayNum - 1));
+          sendReliableResponse("OK:RELAY_" + String(relayNum) + "_ON", responseSeq);
+        } else if (state == "OFF") {
+          setRelayMask(0);
+          sendReliableResponse("OK:RELAY_" + String(relayNum) + "_OFF", responseSeq);
+        } else {
+          sendReliableResponse("ERROR:INVALID_STATE", responseSeq);
+        }
+      } else {
+        sendReliableResponse("ERROR:INVALID_RELAY", responseSeq);
+      }
+    } else {
+      sendReliableResponse("ERROR:INVALID_FORMAT", responseSeq);
+    }
+  }
   else {
     sendReliableResponse("ERROR:UNKNOWN_COMMAND", responseSeq);
   }
@@ -350,10 +409,23 @@ bool recoverI2C() {
 
 // Set relay state using bitmask
 void setRelayMask(uint16_t mask) {
-  if (!pcf8575_available) return;
+  if (!pcf8575_available) {
+    // Don't print debug message during normal operation
+    // Serial.println("DEBUG:PCF8575_NOT_AVAILABLE");
+    return;
+  }
   
   // Apply active-low logic if needed
   uint16_t output = RELAY_ACTIVE_LOW ? ~mask : mask;
+  
+  // Debug output - commented out to prevent interference with TESTSEQ
+  // Serial.print("DEBUG:RELAY_MASK:0x");
+  // Serial.print(mask, HEX);
+  // Serial.print(",OUTPUT:0x");
+  // Serial.print(output, HEX);
+  // Serial.print(",ACTIVE_LOW:");
+  // Serial.println(RELAY_ACTIVE_LOW ? "YES" : "NO");
+  
   pcf8575.write16(output);
 }
 
@@ -422,13 +494,14 @@ uint16_t parseRelaysToBitmask(const char* relayList) {
   strncpy(buffer, relayList, sizeof(buffer) - 1);
   buffer[sizeof(buffer) - 1] = '\0';
   
-  char* token = strtok(buffer, ",");
+  char* saveptr2;
+  char* token = strtok_r(buffer, ",", &saveptr2);
   while (token != NULL) {
     int relay = atoi(token);
     if (relay >= 1 && relay <= MAX_RELAYS) {
       mask |= (1 << (relay - 1));
     }
-    token = strtok(NULL, ",");
+    token = strtok_r(NULL, ",", &saveptr2);
   }
   
   return mask;
@@ -530,8 +603,11 @@ void executeTestSequence(const char* sequence, unsigned int seq) {
     return;
   }
   
+  // Send immediate ACK to let host know we're processing
+  sendReliableResponse("ACK", seq);
+  
   // Pre-allocate response buffer
-  char response[500];
+  char response[1024];
   strcpy(response, "TESTRESULTS:");
   
   unsigned long sequenceStart = millis();
@@ -577,7 +653,7 @@ void executeTestSequence(const char* sequence, unsigned int seq) {
         char measurement[50];
         char relayList[30];
         maskToRelayList(steps[i].relayMask, relayList);
-        sprintf(measurement, "%s:%.1fV,%.1fA;", relayList, voltage, current);
+        sprintf(measurement, "%s:%.3fV,%.3fA;", relayList, voltage, current);
         
         // Check buffer space
         if (strlen(response) + strlen(measurement) < sizeof(response) - 10) {
@@ -614,7 +690,8 @@ int parseTestSequence(const char* sequence, TestStep steps[]) {
   
   uint16_t lastActiveMask = 0;  // Track last active relay mask
   
-  char* stepToken = strtok(buffer, ";");
+  char* saveptr1;
+  char* stepToken = strtok_r(buffer, ";", &saveptr1);
   while (stepToken != NULL && stepCount < MAX_SEQUENCE_STEPS) {
     // Find the colon separator
     char* colonPos = strchr(stepToken, ':');
@@ -628,12 +705,17 @@ int parseTestSequence(const char* sequence, TestStep steps[]) {
     
     // Parse duration
     int duration = atoi(durationPart);
-    if (duration < MIN_DURATION) {
-      return 0;  // Duration too short
-    }
     
     // Check if this is an OFF command
-    if (strcmp(relayPart, "OFF") == 0) {
+    bool isOffCmd = (strcmp(relayPart, "OFF") == 0);
+    
+    // Only enforce MIN_DURATION for relay-ON steps, not OFF steps
+    if (!isOffCmd && duration < MIN_DURATION) {
+      return 0;  // Duration too short for relay activation
+    }
+    
+    if (isOffCmd) {
+      // OFF command - allow any duration including 0
       steps[stepCount].relayMask = 0;
       steps[stepCount].duration_ms = duration;
       steps[stepCount].is_off = true;
@@ -645,10 +727,8 @@ int parseTestSequence(const char* sequence, TestStep steps[]) {
         return 0;  // No valid relays
       }
       
-      // Check for relay overlap without OFF between
-      if (lastActiveMask != 0 && (mask & lastActiveMask) != 0) {
-        return 0;  // Relay overlap detected
-      }
+      // Note: Relay overlap check removed - different relay groups can be activated
+      // sequentially as long as they don't conflict electrically
       
       steps[stepCount].relayMask = mask;
       steps[stepCount].duration_ms = duration;
@@ -657,7 +737,7 @@ int parseTestSequence(const char* sequence, TestStep steps[]) {
     }
     
     stepCount++;
-    stepToken = strtok(NULL, ";");
+    stepToken = strtok_r(NULL, ";", &saveptr1);
   }
   
   return stepCount;

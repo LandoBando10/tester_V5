@@ -54,6 +54,9 @@ class SMTArduinoController:
         # Protocol reliability
         self._sequence_number = 0
         self._enable_checksums = True  # Can be disabled for backward compatibility
+        
+        # I2C device status tracking
+        self._i2c_status = {"PCF8575": None, "INA260": None}
 
     def connect(self, port: str) -> bool:
         """Connect to Arduino on specified port"""
@@ -196,9 +199,11 @@ class SMTArduinoController:
                 self.logger.debug(f"Buffer flush error: {e}")
 
     def _read_startup_messages(self):
-        """Read and log any startup messages"""
-        deadline = time.time() + 0.2  # Reduced from 0.5s
+        """Read and log any startup messages including I2C status"""
+        deadline = time.time() + 0.5  # Extended to capture I2C messages
         messages = []
+        i2c_status = {"PCF8575": None, "INA260": None}
+        i2c_errors = []
         
         while time.time() < deadline:
             if self.connection.in_waiting > 0:
@@ -208,24 +213,84 @@ class SMTArduinoController:
                         msg = data.decode('utf-8', errors='ignore').strip()
                         if msg:
                             messages.append(msg)
-                            self.logger.info(f"Arduino: {msg}")
+                            
+                            # Parse I2C status messages
+                            if msg.startswith("I2C:"):
+                                self._parse_i2c_message(msg, i2c_status, i2c_errors)
+                                self.logger.info(f"Arduino I2C: {msg}")
+                            else:
+                                self.logger.debug(f"Arduino: {msg}")
                 except:
                     pass
             else:
                 time.sleep(0.05)
         
+        # Report I2C status summary
+        if i2c_errors:
+            self.logger.error("I2C initialization errors detected:")
+            for error in i2c_errors:
+                self.logger.error(f"  - {error}")
+        
+        # Store I2C status for later queries
+        self._i2c_status = i2c_status
+        
         if not messages:
             self.logger.debug("No startup messages received")
+    
+    def _parse_i2c_message(self, msg: str, status: dict, errors: list):
+        """Parse I2C status messages from Arduino"""
+        try:
+            if "PCF8575:OK" in msg:
+                status["PCF8575"] = "OK"
+            elif "PCF8575:FAIL" in msg:
+                status["PCF8575"] = "FAIL"
+                errors.append("PCF8575 (relay controller) at 0x20 failed to initialize")
+            elif "INA260:OK" in msg:
+                status["INA260"] = "OK"
+            elif "INA260:FAIL" in msg:
+                status["INA260"] = "FAIL"
+                errors.append("INA260 (power monitor) at 0x40 failed to initialize")
+            elif "INIT:COMPLETE" in msg:
+                # Parse summary line
+                if "PCF8575_FAIL" in msg:
+                    status["PCF8575"] = "FAIL"
+                    if "PCF8575 (relay controller) at 0x20 failed to initialize" not in errors:
+                        errors.append("PCF8575 (relay controller) at 0x20 failed - no relay control available")
+                if "INA260_FAIL" in msg:
+                    status["INA260"] = "FAIL"
+                    if "INA260 (power monitor) at 0x40 failed to initialize" not in errors:
+                        errors.append("INA260 (power monitor) at 0x40 failed - no power measurements available")
+        except Exception as e:
+            self.logger.debug(f"Error parsing I2C message '{msg}': {e}")
 
     def _test_communication(self) -> bool:
         """Test basic communication with Arduino"""
         response = self._send_command("I")
-        return response and "SMT_BATCH_TESTER" in response
+        return response and "SMT_TESTER" in response
     
     def test_communication(self) -> bool:
         """Public method to test communication - just checks if connected"""
         # Connection already tested during connect(), so just return connection status
         return self.is_connected()
+    
+    def get_i2c_status(self) -> dict:
+        """Get current I2C device status"""
+        # Try to get fresh status if connected
+        if self.is_connected():
+            response = self._send_command("I2C_STATUS", timeout=0.5)
+            if response and response.startswith("I2C_STATUS:"):
+                # Parse response like "I2C_STATUS:PCF8575@0x20=OK,INA260@0x40=OK"
+                try:
+                    parts = response[11:].split(",")  # Remove "I2C_STATUS:"
+                    for part in parts:
+                        if "PCF8575" in part:
+                            self._i2c_status["PCF8575"] = "OK" if "=OK" in part else "FAIL"
+                        elif "INA260" in part:
+                            self._i2c_status["INA260"] = "OK" if "=OK" in part else "FAIL"
+                except:
+                    pass
+        
+        return self._i2c_status.copy()
     
     def _calculate_checksum(self, data: str) -> int:
         """Calculate XOR checksum for a string"""
@@ -793,6 +858,9 @@ class SMTArduinoController:
             # Build TESTSEQ command
             command = self._build_testseq_command(relay_groups, test_sequence)
             
+            # Log the exact command being sent for debugging
+            self.logger.info(f"Sending TESTSEQ command: {command}")
+            
             # Validate command before sending
             validation_errors = self._validate_testseq_command(relay_groups, test_sequence)
             if validation_errors:
@@ -804,6 +872,30 @@ class SMTArduinoController:
             
             if not response:
                 return {"success": False, "results": {}, "errors": ["No response from Arduino"]}
+            
+            # Check for immediate ACK response
+            if response == "ACK":
+                self.logger.debug("Received ACK, waiting for TESTRESULTS...")
+                # Re-enable expecting response for TESTRESULTS
+                self._expecting_response = True
+                try:
+                    # Wait for the actual TESTRESULTS response
+                    raw_response = self._response_queue.get(timeout=timeout)
+                    self.logger.debug(f"Received raw: {raw_response}")
+                    
+                    # Validate response
+                    is_valid, clean_response, seq_num = self._validate_response(raw_response)
+                    
+                    if is_valid:
+                        response = clean_response
+                    else:
+                        return {"success": False, "results": {}, "errors": ["Invalid TESTRESULTS response after ACK"]}
+                except Exception as e:
+                    self.logger.error(f"Error waiting for TESTRESULTS: {e}")
+                    return {"success": False, "results": {}, "errors": ["No TESTRESULTS after ACK"]}
+                finally:
+                    # Ensure flag is cleared even if there's an error
+                    self._expecting_response = False
             
             # Parse response
             if response.startswith("ERROR:"):
@@ -840,26 +932,52 @@ class SMTArduinoController:
         return relay_groups
     
     def _build_testseq_command(self, relay_groups: Dict, test_sequence: List[Dict]) -> str:
-        """Build TESTSEQ command from parsed groups and test sequence
+        """Build TESTSEQ command by walking through relay mapping in order
         
-        Example output: "TESTSEQ:1,2,3:500;OFF:100;7,8,9:500;OFF:100"
+        Example output: "TESTSEQ:1:500;OFF:100;2:500;OFF:100;7,8,9:500"
         """
         command_parts = []
         
+        # Build a map of functions to their timing parameters
+        function_timing = {}
         for test_step in test_sequence:
             function = test_step["function"]
-            duration = test_step["duration_ms"]
-            delay_after = test_step.get("delay_after_ms", 0)
+            function_timing[function] = {
+                "duration_ms": test_step["duration_ms"],
+                "delay_after_ms": test_step.get("delay_after_ms", 0)
+            }
+        
+        # Sort relay groups by their first relay number to maintain order
+        sorted_relay_groups = []
+        for relay_str, metadata in relay_groups.items():
+            # Extract first relay number for sorting
+            first_relay = int(relay_str.split(',')[0])
+            sorted_relay_groups.append((first_relay, relay_str, metadata))
+        
+        # Sort by first relay number
+        sorted_relay_groups.sort(key=lambda x: x[0])
+        
+        # Walk through relay mappings in order
+        for i, (_, relay_str, metadata) in enumerate(sorted_relay_groups):
+            function = metadata.get("function")
             
-            # Find all relay groups for this function
-            for relay_str, metadata in relay_groups.items():
-                if metadata.get("function") == function:
-                    # Add relay activation step
-                    command_parts.append(f"{relay_str}:{duration}")
-            
-            # Add OFF delay if specified
-            if delay_after > 0:
-                command_parts.append(f"OFF:{delay_after}")
+            # Get timing for this function
+            if function in function_timing:
+                timing = function_timing[function]
+                duration = timing["duration_ms"]
+                delay_after = timing["delay_after_ms"]
+                
+                # Add relay activation step
+                command_parts.append(f"{relay_str}:{duration}")
+                
+                # Always add OFF command between relays
+                # Use the specified delay, or 0 if not specified
+                if i < len(sorted_relay_groups) - 1:  # Not the last relay
+                    command_parts.append(f"OFF:{delay_after}")
+        
+        # Always add a final OFF command to ensure clean shutdown
+        if sorted_relay_groups:  # If we have any relays
+            command_parts.append("OFF:0")
         
         return "TESTSEQ:" + ";".join(command_parts)
     

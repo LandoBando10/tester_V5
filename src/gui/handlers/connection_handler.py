@@ -90,9 +90,30 @@ class ConnectionHandler(QObject, ThreadCleanupMixin):
                         else:
                             self.logger.info(f"Arduino connected on port {arduino_port}.")
                             connection_details = f"Arduino on {arduino_port}" if arduino_port else "Arduino connected"
+                            
+                            # Check I2C status for SMT mode
+                            if (self.main_window.current_mode == "SMT" and 
+                                hasattr(self.main_window.arduino_controller, 'get_i2c_status')):
+                                i2c_status = self.main_window.arduino_controller.get_i2c_status()
+                                if i2c_status.get("PCF8575") == "FAIL":
+                                    self.logger.error("I2C Error: PCF8575 (relay controller) not responding")
+                                    connection_details += " - WARNING: No relay control!"
+                                if i2c_status.get("INA260") == "FAIL":
+                                    self.logger.warning("I2C Warning: INA260 (power monitor) not responding")
+                                    connection_details += " - No power monitoring"
                     else:
                         self.logger.info(f"Arduino connected on port {arduino_port}.")
                         connection_details = f"Arduino on {arduino_port}" if arduino_port else "Arduino connected"
+                        
+                        # Check I2C status for SMT mode  
+                        if (self.main_window.current_mode == "SMT" and
+                            hasattr(self.main_window.arduino_controller, 'get_i2c_status')):
+                            i2c_status = self.main_window.arduino_controller.get_i2c_status()
+                            if i2c_status.get("PCF8575") == "FAIL":
+                                self.logger.error("I2C Error: PCF8575 (relay controller) not responding")
+                                connection_details += " - WARNING: No relay control!"
+                            if i2c_status.get("INA260") == "FAIL":
+                                self.logger.warning("I2C Warning: INA260 (power monitor) not responding")
                 else:
                     self.logger.info("Arduino is not connected.")
                     connection_details = "Disconnected"
