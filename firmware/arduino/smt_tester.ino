@@ -3,7 +3,7 @@
  * Version: 2.0.0
  * 
  * Description:
- * This firmware controls a 16-relay test fixture for SMT board validation.
+ * This firmware controls a 14-relay test fixture for SMT board validation.
  * It measures voltage and current through each relay circuit using an INA260
  * power monitor to verify proper board assembly and component functionality.
  * Supports simultaneous relay activation with precise timing control.
@@ -12,8 +12,8 @@
  * - Arduino R4 Minima (32KB RAM, 256KB Flash)
  * - PCF8575 I2C I/O expander for 16 relay control (address 0x20)
  * - INA260 I2C power monitor for voltage/current measurements (address 0x40)
- * - Button input on pin A0 for manual test triggering
- * - 16 relay modules (configurable active-HIGH/LOW)
+ * - Button input on PCF8575 pin P16 for manual test triggering
+ * - 14 relay modules on PCF8575 P0-P13 (configurable active-HIGH/LOW)
  * 
  * Communication Protocol:
  * - Serial: 115200 baud
@@ -35,7 +35,23 @@
 #include <PCF8575.h>
 
 // Hardware configuration
-#define MAX_RELAYS 16          // Hardware limit - PCF8575 has 16 I/O pins
+// ==========================================
+// PCF8575 Pin Assignment Configuration
+// ==========================================
+// Hardware mapping:
+// - P00-P07 (bits 0-7): Relays 1-8
+// - P10-P15 (bits 8-13): Relays 9-14
+// - P16 (bit 14): Button input
+// - P17 (bit 15): Unused (keep high)
+
+#define BUTTON_BIT        14                  // P16 = bit 14
+#define BUTTON_MASK       (1U << BUTTON_BIT)  // 0x4000
+
+// Relay bits: 0-13 for relays 1-14
+#define RELAY_BITS_MASK   0x3FFF              // bits 0-13
+#define UNUSED_BITS_MASK  0x8000              // bit 15 (P17)
+
+#define MAX_RELAYS 14          // Relays use P0-P13, P16 is button
 #define MAX_SEQUENCE_STEPS 50  // Maximum steps in a test sequence
 #define PCF8575_ADDRESS 0x20   // I2C address of PCF8575
 #define INA260_ADDRESS 0x40    // I2C address of INA260
@@ -53,8 +69,7 @@ const bool RELAY_ACTIVE_LOW = true;  // Set false if relays are active HIGH
 const bool RELAY_ON = RELAY_ACTIVE_LOW ? LOW : HIGH;
 const bool RELAY_OFF = RELAY_ACTIVE_LOW ? HIGH : LOW;
 
-// Pin definitions (button only - relays now controlled via PCF8575)
-const int BUTTON_PIN = A0;
+// Pin definitions (relays and button now controlled via PCF8575)
 const int LED_PIN = LED_BUILTIN;
 
 // I2C devices
@@ -122,6 +137,7 @@ void setup() {
   
   // Initialize I2C
   Wire.begin();
+  Wire.setClock(100000);  // Set I2C to 100kHz (standard mode)
   delay(50);  // Allow I2C bus to stabilize
   
   // Report I2C initialization starting
@@ -133,8 +149,18 @@ void setup() {
   if (pcf_error == 0) {
     pcf8575.begin();
     pcf8575_available = true;
-    // Set all pins as outputs and turn off all relays
-    pcf8575.write16(RELAY_ACTIVE_LOW ? 0xFFFF : 0x0000);
+    
+    // Initialize with all relays off, button and unused pins high
+    uint16_t initial_state = 0;
+    
+    if (RELAY_ACTIVE_LOW) {
+      // Active low: relay bits HIGH = off
+      initial_state |= RELAY_BITS_MASK;
+    }
+    // Always set button and unused pins HIGH
+    initial_state |= BUTTON_MASK | UNUSED_BITS_MASK;
+    
+    pcf8575.write16(initial_state);
     Serial.println("I2C:PCF8575:OK:0x20");
   } else {
     Serial.print("I2C:PCF8575:FAIL:0x20:ERROR_");
@@ -142,8 +168,7 @@ void setup() {
     pcf8575_available = false;
   }
   
-  // Initialize button pin
-  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  // Button is now read from PCF8575 P16, no Arduino pin setup needed
   
   // Initialize LED
   pinMode(LED_PIN, OUTPUT);
@@ -321,7 +346,7 @@ void processCommand(String command) {
   }
   else if (baseCommand == "I") {
     // Get board info
-    sendReliableResponse("ID:SMT_TESTER_V2.0_16RELAY_PCF8575", responseSeq);
+    sendReliableResponse("ID:SMT_TESTER_V2.0_14RELAY_PCF8575", responseSeq);
   }
   else if (baseCommand == "B") {
     // Get current button status
@@ -409,32 +434,43 @@ bool recoverI2C() {
 
 // Set relay state using bitmask
 void setRelayMask(uint16_t mask) {
-  if (!pcf8575_available) {
-    // Don't print debug message during normal operation
-    // Serial.println("DEBUG:PCF8575_NOT_AVAILABLE");
-    return;
+  if (!pcf8575_available) return;
+  
+  // Safety: only use bits designated for relays
+  mask &= RELAY_BITS_MASK;
+  
+  uint16_t output;
+  if (RELAY_ACTIVE_LOW) {
+    // Start with all relay bits HIGH (off)
+    output = RELAY_BITS_MASK;
+    // Pull selected relays LOW (on)
+    output &= ~mask;
+  } else {
+    // Active high: directly use mask
+    output = mask;
   }
   
-  // Apply active-low logic if needed
-  uint16_t output = RELAY_ACTIVE_LOW ? ~mask : mask;
+  // Critical: Always keep button bit HIGH (input mode)
+  output |= BUTTON_MASK;
   
-  // Debug output - commented out to prevent interference with TESTSEQ
-  // Serial.print("DEBUG:RELAY_MASK:0x");
-  // Serial.print(mask, HEX);
-  // Serial.print(",OUTPUT:0x");
-  // Serial.print(output, HEX);
-  // Serial.print(",ACTIVE_LOW:");
-  // Serial.println(RELAY_ACTIVE_LOW ? "YES" : "NO");
+  // Keep unused bits HIGH to avoid floating inputs
+  output |= UNUSED_BITS_MASK;
   
   pcf8575.write16(output);
 }
 
 // Validate relay mask for safety
 bool validateRelayMask(uint16_t mask) {
+  // Ensure mask only uses relay bits
+  if (mask & ~RELAY_BITS_MASK) {
+    return false;  // Mask tries to use non-relay bits
+  }
+  
   // Check maximum simultaneous relays
   if (countSetBits(mask) > MAX_SIMULTANEOUS_RELAYS) {
     return false;
   }
+  
   return true;
 }
 
@@ -559,7 +595,11 @@ void getSupplyVoltage(unsigned int seq) {
 }
 
 void checkButton() {
-  bool currentState = digitalRead(BUTTON_PIN);
+  if (!pcf8575_available) return;
+  
+  uint16_t pcfState = pcf8575.read16();
+  // Check the correct bit for P16
+  bool currentState = (pcfState & BUTTON_MASK) ? HIGH : LOW;
   
   // Check for button state change with debounce
   if (currentState != lastButtonState) {
