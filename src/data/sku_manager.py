@@ -18,10 +18,16 @@ class SKUManager:
     def __init__(self, config_path: Optional[str] = None):
         self.logger = logging.getLogger(self.__class__.__name__)
         
-        # Set up configuration paths
-        project_root = Path(__file__).parent.parent.parent
-        self.skus_dir = project_root / "config" / "skus"
-        self.programming_config_path = project_root / "config" / "programming_config.json"
+        # Set up configuration paths using PathManager
+        try:
+            from src.utils.path_manager import get_skus_dir, get_config_dir
+            self.skus_dir = get_skus_dir()
+            self.programming_config_path = get_config_dir() / "programming_config.json"
+        except ImportError:
+            # Fallback for compatibility
+            project_root = Path(__file__).parent.parent.parent
+            self.skus_dir = project_root / "config" / "skus"
+            self.programming_config_path = project_root / "config" / "programming_config.json"
         
         # Thread-safe data storage
         self._lock = threading.RLock()

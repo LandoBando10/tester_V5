@@ -271,7 +271,7 @@ class SplashScreen(QWidget):
         container_layout.addStretch(3)
         
         # Add version info at bottom
-        version_label = QLabel("Version 5.0")
+        version_label = QLabel("V1")
         version_label.setAlignment(Qt.AlignCenter)
         version_label.setStyleSheet("""
             color: #666666;

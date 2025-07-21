@@ -30,7 +30,10 @@ class MainWindow(QMainWindow):
 
     def __init__(self, preloaded_components=None):
         super().__init__()
-        self.setWindowTitle("Diode Dynamics Tester V5")
+        # Set window title with version
+        app = QApplication.instance()
+        version = app.applicationVersion() if app else "1.0.0"
+        self.setWindowTitle(f"Diode Dynamics Tester V{version}")
         self.setMinimumSize(1200, 800)
         # Don't show window here - let transition manager handle it
 
@@ -161,6 +164,9 @@ class MainWindow(QMainWindow):
         if preloaded_components and hasattr(preloaded_components, 'remaining_ports_to_scan') and preloaded_components.remaining_ports_to_scan:
             self.logger.info(f"Starting background scan for {len(preloaded_components.remaining_ports_to_scan)} remaining ports")
             QTimer.singleShot(1000, lambda: self._start_background_port_scan(preloaded_components.remaining_ports_to_scan))
+        
+        # Check for updates after window is shown
+        QTimer.singleShot(2000, self.check_for_updates)
 
     @property
     def offroad_handler(self):
@@ -1035,6 +1041,14 @@ class MainWindow(QMainWindow):
         # Clear focus from any widget to prevent cursor appearing in combo box
         self.centralWidget().setFocus()
         
+    def check_for_updates(self):
+        """Check for application updates"""
+        try:
+            from src.gui.components.update_dialog import check_and_show_update_dialog
+            check_and_show_update_dialog(self)
+        except Exception as e:
+            self.logger.error(f"Error checking for updates: {e}")
+    
     def closeEvent(self, event):
         """Handle application closing with optimized cleanup"""
         try:

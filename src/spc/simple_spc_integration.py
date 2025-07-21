@@ -9,6 +9,7 @@ from pathlib import Path
 from datetime import datetime
 import json
 import shutil
+from src.utils.path_manager import get_skus_dir
 
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import QMessageBox
@@ -146,10 +147,10 @@ class SimpleSPCIntegration(QObject):
         
         try:
             # Try mode-specific path first
-            sku_file = Path("config/skus") / self.test_mode / f"{sku}.json"
+            sku_file = get_skus_dir() / self.test_mode / f"{sku}.json"
             if not sku_file.exists():
                 # Fallback to root for backward compatibility
-                sku_file = Path("config/skus") / f"{sku}.json"
+                sku_file = get_skus_dir() / f"{sku}.json"
                 
             if sku_file.exists():
                 with open(sku_file, 'r') as f:
@@ -187,9 +188,9 @@ class SimpleSPCIntegration(QObject):
             current_user = user_manager.get_current_user() or "unknown"
             
             # Find SKU file
-            sku_file = Path("config/skus") / self.test_mode / f"{sku}.json"
+            sku_file = get_skus_dir() / self.test_mode / f"{sku}.json"
             if not sku_file.exists():
-                sku_file = Path("config/skus") / f"{sku}.json"
+                sku_file = get_skus_dir() / f"{sku}.json"
                 
             if not sku_file.exists():
                 self.logger.error(f"SKU file not found for {sku}")

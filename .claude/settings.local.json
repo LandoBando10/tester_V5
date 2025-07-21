@@ -38,7 +38,8 @@
       "Bash(do echo \"Validating $file...\")",
       "Bash(for file in config/skus/*.json)",
       "Bash(cat:*)",
-      "Bash(time:*)"
+      "Bash(time:*)",
+      "Bash(cmd.exe:*)"
     ],
     "deny": []
   }

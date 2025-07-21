@@ -15,6 +15,7 @@ from typing import Dict, Optional, List, Tuple, Any
 from pathlib import Path
 from datetime import datetime
 import json
+from src.utils.path_manager import get_skus_dir
 
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import QMessageBox
@@ -283,10 +284,10 @@ class SPCIntegration(QObject):
         
         try:
             # Load SKU configuration from mode-specific subdirectory
-            sku_file = Path("config/skus") / self.test_mode / f"{sku}.json"
+            sku_file = get_skus_dir() / self.test_mode / f"{sku}.json"
             if not sku_file.exists():
                 # Try without mode subdirectory for backward compatibility
-                sku_file = Path("config/skus") / f"{sku}.json"
+                sku_file = get_skus_dir() / f"{sku}.json"
                 
             if sku_file.exists():
                 with open(sku_file, 'r') as f:
@@ -322,16 +323,16 @@ class SPCIntegration(QObject):
             current_user = user_manager.get_current_user() or "unknown"
             
             # Update SKU configuration with new limits in mode-specific subdirectory
-            sku_file = Path("config/skus") / self.test_mode / f"{sku}.json"
+            sku_file = get_skus_dir() / self.test_mode / f"{sku}.json"
             if not sku_file.exists():
                 # Try without mode subdirectory for backward compatibility
-                sku_file = Path("config/skus") / f"{sku}.json"
+                sku_file = get_skus_dir() / f"{sku}.json"
             
             # Create timestamped backup in mode-specific archive directory
             if self.test_mode in ['smt', 'offroad', 'weight']:
-                archive_dir = Path("config/skus") / self.test_mode / "archive"
+                archive_dir = get_skus_dir() / self.test_mode / "archive"
             else:
-                archive_dir = Path("config/skus/archive")
+                archive_dir = get_skus_dir() / "archive"
             archive_dir.mkdir(parents=True, exist_ok=True)
             
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')

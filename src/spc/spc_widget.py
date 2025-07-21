@@ -34,6 +34,7 @@ import numpy as np
 from datetime import datetime
 import json
 import logging
+from src.utils.path_manager import get_skus_dir
 
 from src.spc.spc_calculator import SPCCalculator, ControlLimits
 from src.spc.data_collector import SPCDataCollector
@@ -438,7 +439,7 @@ class SPCWidget(QWidget):
         
         # Update function list based on SKU configuration
         try:
-            sku_file = Path("config/skus") / f"{sku}.json"
+            sku_file = get_skus_dir() / f"{sku}.json"
             if sku_file.exists():
                 with open(sku_file, 'r') as f:
                     sku_data = json.load(f)

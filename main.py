@@ -21,7 +21,8 @@ if len(sys.argv) == 1 or (len(sys.argv) > 1 and sys.argv[1] == "gui"):
     
     # Create QApplication early
     app = QApplication(sys.argv)
-    app.setApplicationName("Diode Dynamics Tester V5")
+    app.setApplicationName("Diode Dynamics Tester")
+    app.setApplicationVersion("1.0.0")
     app.setOrganizationName("Diode Dynamics")
     
     # Import and show splash screen immediately
@@ -116,20 +117,24 @@ def run_unified_gui_mode(args=None):
     """Run the GUI application with unified splash/mode selection"""
     logger = logging.getLogger(__name__)
     
-    # Check for SKU configuration directory
-    skus_directory = Path('config/skus')
-    if not skus_directory.exists():
-        error_msg = f"SKU configuration directory not found: {skus_directory}. Please ensure it exists."
-        logger.critical(error_msg)
-        try:
-            from PySide6.QtWidgets import QApplication, QMessageBox
-            if not QApplication.instance():
-                _ = QApplication(sys.argv)
-            QMessageBox.critical(None, "Configuration Error", error_msg)
-        except Exception as e_gui:
-            logger.error(f"Could not display GUI error message for missing config: {e_gui}")
-            print(f"\\nCRITICAL ERROR: {error_msg}")
-        return False
+    # Check for SKU configuration directory using PathManager
+    try:
+        from src.utils.path_manager import get_skus_dir
+        skus_directory = get_skus_dir()
+        if not skus_directory.exists():
+            error_msg = f"SKU configuration directory not found: {skus_directory}. Please ensure it exists."
+            logger.critical(error_msg)
+            try:
+                from PySide6.QtWidgets import QApplication, QMessageBox
+                if not QApplication.instance():
+                    _ = QApplication(sys.argv)
+                QMessageBox.critical(None, "Configuration Error", error_msg)
+            except Exception as e_gui:
+                logger.error(f"Could not display GUI error message for missing config: {e_gui}")
+                print(f"\\nCRITICAL ERROR: {error_msg}")
+            return False
+    except Exception as e:
+        logger.warning(f"Could not use PathManager for SKU directory check: {e}. Skipping check.")
 
     try:
         from PySide6.QtWidgets import QApplication
@@ -146,7 +151,8 @@ def run_unified_gui_mode(args=None):
         else:
             # Fallback if not pre-initialized
             app = QApplication.instance() or QApplication(sys.argv)
-            app.setApplicationName("Diode Dynamics Tester V5")
+            app.setApplicationName("Diode Dynamics Tester")
+            app.setApplicationVersion("1.0.0")
             app.setOrganizationName("Diode Dynamics")
             splash = UnifiedSplashScreen()
             splash.show_centered()
@@ -217,20 +223,24 @@ def run_professional_gui_mode(args=None):
     """Run the GUI application with professional startup (splash screen and mode selection)"""
     logger = logging.getLogger(__name__)
     
-    # Check for SKU configuration directory
-    skus_directory = Path('config/skus')
-    if not skus_directory.exists():
-        error_msg = f"SKU configuration directory not found: {skus_directory}. Please ensure it exists."
-        logger.critical(error_msg)
-        try:
-            from PySide6.QtWidgets import QApplication, QMessageBox
-            if not QApplication.instance():
-                _ = QApplication(sys.argv)
-            QMessageBox.critical(None, "Configuration Error", error_msg)
-        except Exception as e_gui:
-            logger.error(f"Could not display GUI error message for missing config: {e_gui}")
-            print(f"\\nCRITICAL ERROR: {error_msg}")
-        return False
+    # Check for SKU configuration directory using PathManager
+    try:
+        from src.utils.path_manager import get_skus_dir
+        skus_directory = get_skus_dir()
+        if not skus_directory.exists():
+            error_msg = f"SKU configuration directory not found: {skus_directory}. Please ensure it exists."
+            logger.critical(error_msg)
+            try:
+                from PySide6.QtWidgets import QApplication, QMessageBox
+                if not QApplication.instance():
+                    _ = QApplication(sys.argv)
+                QMessageBox.critical(None, "Configuration Error", error_msg)
+            except Exception as e_gui:
+                logger.error(f"Could not display GUI error message for missing config: {e_gui}")
+                print(f"\\nCRITICAL ERROR: {error_msg}")
+            return False
+    except Exception as e:
+        logger.warning(f"Could not use PathManager for SKU directory check: {e}. Skipping check.")
 
     try:
         from PySide6.QtWidgets import QApplication
@@ -241,7 +251,8 @@ def run_professional_gui_mode(args=None):
 
         logger.info("Initializing QApplication for professional mode...")
         app = QApplication(sys.argv)
-        app.setApplicationName("Diode Dynamics Tester V5")
+        app.setApplicationName("Diode Dynamics Tester")
+        app.setApplicationVersion("1.0.0")
         app.setOrganizationName("Diode Dynamics")
         
         # Variables to hold windows
@@ -356,20 +367,24 @@ def run_gui_mode():
     """Run the GUI application in standard mode (direct to MainWindow)"""
     logger = logging.getLogger(__name__)
     
-    # Check for SKU configuration directory
-    skus_directory = Path('config/skus')
-    if not skus_directory.exists():
-        error_msg = f"SKU configuration directory not found: {skus_directory}. Please ensure it exists."
-        logger.critical(error_msg)
-        try:
-            from PySide6.QtWidgets import QApplication, QMessageBox
-            if not QApplication.instance():
-                _ = QApplication(sys.argv)
-            QMessageBox.critical(None, "Configuration Error", error_msg)
-        except Exception as e_gui:
-            logger.error(f"Could not display GUI error message for missing config: {e_gui}")
-            print(f"\\nCRITICAL ERROR: {error_msg}")
-        return False
+    # Check for SKU configuration directory using PathManager
+    try:
+        from src.utils.path_manager import get_skus_dir
+        skus_directory = get_skus_dir()
+        if not skus_directory.exists():
+            error_msg = f"SKU configuration directory not found: {skus_directory}. Please ensure it exists."
+            logger.critical(error_msg)
+            try:
+                from PySide6.QtWidgets import QApplication, QMessageBox
+                if not QApplication.instance():
+                    _ = QApplication(sys.argv)
+                QMessageBox.critical(None, "Configuration Error", error_msg)
+            except Exception as e_gui:
+                logger.error(f"Could not display GUI error message for missing config: {e_gui}")
+                print(f"\\nCRITICAL ERROR: {error_msg}")
+            return False
+    except Exception as e:
+        logger.warning(f"Could not use PathManager for SKU directory check: {e}. Skipping check.")
 
     try:
         from src.gui.main_window import MainWindow
@@ -607,6 +622,12 @@ def main():
         "port",
         nargs="?",
         help="Arduino port (e.g., COM4 or /dev/ttyUSB0)"
+    )
+    
+    parser.add_argument(
+        "--shared-drive",
+        type=str,
+        help="Override shared drive path for configuration files"
     )
     
     parser.add_argument(

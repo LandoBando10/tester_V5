@@ -13,7 +13,6 @@ class DeviceCacheService:
     """Manages caching of device information for faster reconnection."""
     
     CACHE_TIMEOUT = 86400  # 24 hours in seconds
-    CACHE_FILE = Path("config") / ".device_cache.json"
     
     def __init__(self, cache_file: Optional[Path] = None):
         """Initialize the device cache service.
@@ -21,7 +20,17 @@ class DeviceCacheService:
         Args:
             cache_file: Optional custom cache file path
         """
-        self.cache_file = cache_file or self.CACHE_FILE
+        if cache_file:
+            self.cache_file = cache_file
+        else:
+            # Use PathManager for cache file location
+            try:
+                from src.utils.path_manager import get_device_cache_path
+                self.cache_file = get_device_cache_path()
+            except ImportError:
+                # Fallback for compatibility
+                self.cache_file = Path("config") / ".device_cache.json"
+        
         self._ensure_cache_dir()
     
     def _ensure_cache_dir(self) -> None:

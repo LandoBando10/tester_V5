@@ -253,7 +253,7 @@ class UnifiedSplashScreen(QWidget):
         layout.addStretch(3)
         
         # Version
-        version_label = QLabel("Version 5.0 | Build 2025.1")
+        version_label = QLabel("V1 | Build 2025.1")
         version_label.setObjectName("VersionLabel")
         version_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(version_label)
