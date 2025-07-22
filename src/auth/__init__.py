@@ -1,5 +1,5 @@
 """
-Authentication module for SPC system
+Authentication module
 """
 
 from .user_manager import UserManager, get_user_manager

@@ -1,5 +1,5 @@
 """
-User authentication and management for SPC system
+User authentication and management
 Desktop-friendly authentication without web complexity
 """
 
@@ -16,7 +16,7 @@ class UserManager:
     
     def __init__(self, config_file: Path = None):
         self.logger = logging.getLogger(self.__class__.__name__)
-        self.config_file = config_file or Path("config/spc_users.json")
+        self.config_file = config_file or Path("config/users.json")
         self.current_user = None
         self.current_role = None
         self.permissions = []
@@ -60,16 +60,16 @@ class UserManager:
             },
             "roles": {
                 "operator": {
-                    "description": "Can run tests but not modify specs",
-                    "permissions": ["run_tests", "view_spc"]
+                    "description": "Can run tests",
+                    "permissions": ["run_tests"]
                 },
                 "qe": {
-                    "description": "Quality Engineer - can modify spec limits",
-                    "permissions": ["run_tests", "view_spc", "modify_specs", "approve_specs"]
+                    "description": "Quality Engineer",
+                    "permissions": ["run_tests"]
                 },
                 "admin": {
                     "description": "Full administrative access",
-                    "permissions": ["run_tests", "view_spc", "modify_specs", "approve_specs", "manage_users"]
+                    "permissions": ["run_tests", "manage_users"]
                 }
             }
         }
@@ -233,13 +233,13 @@ if __name__ == "__main__":
         print(f"Permissions: {manager.permissions}")
         
         # Test permission check
-        print(f"Can modify specs: {manager.has_permission('modify_specs')}")
+        print(f"Can run tests: {manager.has_permission('run_tests')}")
         print(f"Can manage users: {manager.has_permission('manage_users')}")
         
         # Log an action
-        manager.log_action("spec_approval", {
+        manager.log_action("test_run", {
             "sku": "DD5001",
-            "changes": "Updated LSL/USL"
+            "result": "Pass"
         })
     else:
         print("Authentication failed")

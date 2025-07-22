@@ -338,10 +338,7 @@ The SMT architecture consists of 5 clean components:
 
 ## 9. Future Roadmap
 
-### 9.1 Statistical Process Control (SPC)
-*Implementation in progress - see archive/implementation/ for SPC integration guides*
-
-### 9.2 Enhanced Results Management
+### 9.1 Enhanced Results Management
 *Development of comprehensive results logging and analysis capabilities*
 
 ### 9.3 Additional Features

@@ -132,19 +132,6 @@ class PathManager:
         """Get SKUs configuration directory"""
         return self.get_config_dir() / "skus"
     
-    def get_spc_data_dir(self) -> Path:
-        """Get SPC data directory"""
-        config_dir = self.get_config_dir()
-        spc_dir = config_dir / "spc_data"
-        
-        # If not in config, check parent directory
-        if not spc_dir.exists():
-            parent_spc = config_dir.parent / "spc_data"
-            if parent_spc.exists():
-                return parent_spc
-        
-        return spc_dir
-    
     def get_device_cache_path(self) -> Path:
         """Get device cache path (always local)"""
         return self.get_local_data_dir() / ".device_cache.json"

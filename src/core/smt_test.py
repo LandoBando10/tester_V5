@@ -5,12 +5,11 @@ from src.core.base_test import BaseTest, TestResult
 from src.core.programmer_controller import ProgrammerController
 from src.core.smt_controller import SMTController
 from src.hardware.smt_arduino_controller import SMTArduinoController
-from src.spc.simple_spc_integration import SimpleSPCIntegration
 
 class SMTTest(BaseTest):
     """SMT panel testing with programming and power validation using dedicated SMT Arduino"""
 
-    def __init__(self, sku: str, parameters: Dict[str, Any], port: str, programming_config: Optional[Dict] = None, smt_config_path: Optional[str] = None, arduino_controller=None, spc_config: Optional[Dict] = None):
+    def __init__(self, sku: str, parameters: Dict[str, Any], port: str, programming_config: Optional[Dict] = None, smt_config_path: Optional[str] = None, arduino_controller=None):
         super().__init__(sku, parameters)
         self.port = port
         self.programming_config = programming_config or {}
@@ -33,27 +32,7 @@ class SMTTest(BaseTest):
 
         # Initialize programmers if configured
         self._initialize_programmers()
-        
-        # Initialize SPC if configured (simplified - sampling only)
-        self.spc_config = spc_config or {}
-        self.spc = None
-        if self.spc_config.get('enabled', False):
-            self.spc = SimpleSPCIntegration(
-                enabled=True,
-                test_mode='smt',  # SMT test always uses smt mode
-                logger=self.logger
-            )
-            # Connect to spec calculation ready signal
-            self.spc.spec_calculation_ready.connect(self._on_spec_calculation_ready)
-            self.logger.info(f"SPC enabled in sampling mode")
 
-    def _on_spec_calculation_ready(self, sku: str):
-        """Handle when enough measurements collected for spec calculation"""
-        self.logger.info(f"Spec calculation ready for {sku}")
-        # This will be handled by the GUI - emit a signal or call a callback
-        if hasattr(self, 'spec_calculation_callback'):
-            self.spec_calculation_callback(sku)
-    
     def _handle_arduino_error(self, error_type: str, message: str):
         """Handle errors reported by Arduino"""
         self.logger.error(f"Arduino error - {error_type}: {message}")
@@ -497,11 +476,6 @@ class SMTTest(BaseTest):
                 f"{function}_board_{board_num}_current",
                 current, min_val, max_val, "A"
             )
-            
-            # Add to SPC if enabled
-            if self.spc and self.spc.enabled:
-                board_id = board_name.replace(' ', '_')
-                self.spc.add_measurement(self.sku, function, board_id, current, measurements.get("voltage", 0))
         
         # Check voltage
         if "voltage" in measurements and "voltage_v" in limits:

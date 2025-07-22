@@ -47,10 +47,6 @@ class TestMenuBar(QMenuBar):
             tools_menu = self.addMenu("Tools")
             self.setup_tools_menu(tools_menu)
             
-            # SPC Menu
-            spc_menu = self.addMenu("SPC")
-            self.setup_spc_menu(spc_menu)
-            
             # Help Menu
             help_menu = self.addMenu("Help")
             self.setup_help_menu(help_menu)
@@ -215,44 +211,6 @@ class TestMenuBar(QMenuBar):
             logger.info("Dark style applied successfully.") # Added
         except Exception as e: # Added
             logger.error("Failed to apply dark style: %s", e, exc_info=True) # Added
-    
-    def setup_spc_menu(self, menu: QMenu):
-        """Setup the SPC menu"""
-        logger.debug("Setting up SPC menu")
-        try:
-            # SPC Sampling Mode Toggle (password protected)
-            self.spc_sampling_action = QAction("Enable SPC Sampling Mode", self)
-            self.spc_sampling_action.setCheckable(True)
-            self.spc_sampling_action.setChecked(True)  # Default enabled
-            self.spc_sampling_action.setStatusTip("Toggle SPC data collection (requires authentication)")
-            self.spc_sampling_action.triggered.connect(self.toggle_spc_sampling)
-            menu.addAction(self.spc_sampling_action)
-            
-            menu.addSeparator()
-            
-            # SPC Status
-            spc_status_action = QAction("View SPC Status...", self)
-            spc_status_action.setStatusTip("View current SPC data collection status")
-            spc_status_action.triggered.connect(self.show_spc_status)
-            menu.addAction(spc_status_action)
-            
-            menu.addSeparator()
-            
-            # SPC Control
-            spc_action = QAction("SPC Control...", self)
-            spc_action.setStatusTip("Open Statistical Process Control panel")
-            spc_action.triggered.connect(self.show_spc_control)
-            menu.addAction(spc_action)
-            
-            # Spec Limit Calculator
-            spec_calc_action = QAction("Spec Limit Calculator...", self)
-            spec_calc_action.triggered.connect(self.show_spec_calculator)
-            menu.addAction(spec_calc_action)
-            
-            logger.info("SPC menu setup complete.")
-        except Exception as e:
-            logger.error("Failed to set up SPC menu: %s", e, exc_info=True)
-            menu.addAction(QAction("Error loading SPC items", self, enabled=False))
     
     def _on_mode_action_triggered(self, mode: str):
         """Handle mode action triggered from menu"""
@@ -619,150 +577,6 @@ class TestMenuBar(QMenuBar):
         except Exception as e:
             logger.error("Could not open documentation: %s", e, exc_info=True) # Modified
             QMessageBox.information(self, "Documentation", f"Could not open documentation: {e}")
-    
-    def show_spc_control(self):
-        """Show SPC control dialog"""
-        logger.info("SPC Control requested")
-        try:
-            # Get main window reference to call the method
-            main_window = self.parent()
-            if main_window and hasattr(main_window, 'show_spc_control'):
-                main_window.show_spc_control()
-            else:
-                logger.warning("Main window not found or does not have 'show_spc_control' method.")
-                QMessageBox.information(self, "SPC Control", 
-                                        "SPC Control feature not available.")
-        except Exception as e:
-            logger.error(f"Could not open SPC control: {e}", exc_info=True)
-            QMessageBox.critical(self, "Error", f"Could not open SPC control: {e}")
-    
-    def toggle_spc_sampling(self, checked):
-        """Toggle SPC sampling mode"""
-        logger.info(f"SPC sampling toggle requested: {checked}")
-        
-        try:
-            # Get main window reference
-            main_window = self.parent()
-            
-            # Update the state directly without authentication
-            main_window.spc_sampling_enabled = checked
-            status = "enabled" if checked else "disabled"
-            
-            # Log the change
-            try:
-                from src.auth.user_manager import get_user_manager
-                user_manager = get_user_manager()
-                current_user = user_manager.get_current_user() or "manual_toggle"
-                user_manager.log_action("spc_sampling_toggle", {
-                    'enabled': checked,
-                    'user': current_user
-                })
-            except:
-                logger.info(f"Could not log SPC toggle action, continuing anyway")
-            
-            # Show confirmation
-            QMessageBox.information(self, "SPC Sampling Mode", 
-                                  f"SPC data collection has been {status}.")
-            logger.info(f"SPC sampling {status}")
-                    
-        except Exception as e:
-            logger.error(f"Error toggling SPC sampling: {e}", exc_info=True)
-            QMessageBox.critical(self, "Error", f"Could not toggle SPC sampling: {e}")
-            # Revert on error
-            if hasattr(main_window, 'spc_sampling_enabled'):
-                self.spc_sampling_action.setChecked(main_window.spc_sampling_enabled)
-    
-    def show_spc_status(self):
-        """Show current SPC status"""
-        logger.info("SPC status requested")
-        try:
-            main_window = self.parent()
-            
-            # Get current sampling mode state
-            sampling_enabled = getattr(main_window, 'spc_sampling_enabled', True)
-            
-            # Get SPC integration status if available
-            status_text = f"SPC Sampling Mode: {'Enabled' if sampling_enabled else 'Disabled'}\n\n"
-            
-            # Check if there's an active SPC integration
-            if hasattr(main_window, 'smt_handler') and main_window.smt_handler:
-                handler = main_window.smt_handler
-                if hasattr(handler, 'spc_integration') and handler.spc_integration:
-                    spc = handler.spc_integration
-                    status = spc.get_status()
-                    
-                    total_measurements = sum(status['measurement_counts'].values())
-                    status_text += f"Active SPC Session:\n"
-                    status_text += f"- Test Mode: {status['test_mode']}\n"
-                    status_text += f"- Total Measurements: {total_measurements}\n"
-                    status_text += f"- SKUs with 30+ samples: {', '.join(status['triggered_skus']) or 'None'}\n\n"
-                    
-                    # Show measurement breakdown if any
-                    if status['measurement_counts']:
-                        status_text += "Measurement Breakdown:\n"
-                        for key, count in sorted(status['measurement_counts'].items()):
-                            status_text += f"  - {key}: {count} samples\n"
-                else:
-                    status_text += "No active SPC data collection session."
-            else:
-                status_text += "No active test handler."
-                
-            QMessageBox.information(self, "SPC Status", status_text)
-            
-        except Exception as e:
-            logger.error(f"Error showing SPC status: {e}", exc_info=True)
-            QMessageBox.critical(self, "Error", f"Could not show SPC status: {e}")
-    
-    def show_spec_calculator(self):
-        """Show spec limit calculator with authentication"""
-        logger.info("Spec Limit Calculator requested")
-        try:
-            # First authenticate
-            from src.gui.components.spec_approval_dialog import LoginDialog
-            
-            login_dialog = LoginDialog(self)
-            login_dialog.setWindowTitle("Spec Limit Calculator - Authentication")
-            
-            if login_dialog.exec_() == QDialog.Accepted:
-                username, password = login_dialog.get_credentials()
-                
-                # Verify credentials
-                from src.auth.user_manager import get_user_manager
-                user_manager = get_user_manager()
-                
-                if user_manager.authenticate(username, password):
-                    if user_manager.has_permission('modify_specs'):
-                        # Enable spec calculator mode in main window
-                        main_window = self.parent()
-                        if main_window and hasattr(main_window, 'enable_spec_calculator'):
-                            main_window.enable_spec_calculator()
-                            logger.info(f"Spec calculator enabled for user: {username}")
-                        else:
-                            # Fallback - enable it differently
-                            self._enable_spec_calculator_mode()
-                    else:
-                        QMessageBox.warning(self, "Access Denied", 
-                                          f"User '{username}' does not have permission to use the Spec Limit Calculator.")
-                        user_manager.logout()
-                else:
-                    QMessageBox.warning(self, "Authentication Failed", 
-                                      "Invalid username or password.")
-        except Exception as e:
-            logger.error(f"Error showing spec calculator: {e}", exc_info=True)
-            QMessageBox.critical(self, "Error", f"Could not open Spec Limit Calculator: {e}")
-    
-    def _enable_spec_calculator_mode(self):
-        """Fallback method to enable spec calculator"""
-        try:
-            main_window = self.parent()
-            if main_window:
-                # Set a flag that the handlers can check
-                main_window.spec_calculator_enabled = True
-                QMessageBox.information(self, "Spec Limit Calculator", 
-                                      "Spec Limit Calculator is now active.\n\n"
-                                      "Run 30 tests to calculate new specification limits.")
-        except Exception as e:
-            logger.error(f"Error enabling spec calculator mode: {e}")
     
     def show_production_log(self):
         """Show production log in a viewer dialog"""

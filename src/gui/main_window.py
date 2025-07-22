@@ -19,7 +19,6 @@ from src.gui.handlers.weight_handler import WeightHandler
 from src.gui.handlers.connection_handler import ConnectionHandler
 from src.core.base_test import TestResult
 from src.utils.thread_cleanup import GlobalCleanupManager # Added import
-from src.spc import SPCWidget
 from src.services.connection_service import ConnectionService
 from src.services.device_cache_service import DeviceCacheService
 from src.services.port_scanner_service import PortScannerService
@@ -52,13 +51,6 @@ class MainWindow(QMainWindow):
         
         # Initialize connection service
         self.connection_service = ConnectionService()
-        
-        # SPC widget (will be initialized after UI setup)
-        self.spc_widget = None
-        self.spc_dialog = None
-        
-        # SPC sampling mode flag (controlled by menu)
-        self.spc_sampling_enabled = True  # Default enabled
 
         # Preload all handlers to avoid lag on mode switch
         self._offroad_handler = OffroadHandler(self)
@@ -123,8 +115,6 @@ class MainWindow(QMainWindow):
         # Current state
         self.current_mode = None  # Will be set by launcher
         self.previous_mode = "Offroad"  # Track previous mode for configuration
-        self.spec_calculator_enabled = False  # Flag for spec calculator mode
-        self.spec_calculator_count = 0  # Counter for measurements
         
         # SKU filtering cache to improve performance
         self._sku_filter_cache = {}  # Cache: {mode: [valid_skus]}
@@ -604,85 +594,6 @@ class MainWindow(QMainWindow):
             self.logger.error(f"Fallback loading failed: {e}")
             self.show_config_error(f"Configuration loading failed: {e}")
     
-    def enable_spec_calculator(self):
-        """Enable spec calculator mode"""
-        self.spec_calculator_enabled = True
-        self.spec_calculator_count = 0
-        
-        # Add counter to test area
-        if hasattr(self.test_area, 'show_spec_counter'):
-            self.test_area.show_spec_counter()
-        
-        # Show notification
-        QMessageBox.information(self, "Spec Limit Calculator", 
-                              "Spec Limit Calculator is now active.\n\n"
-                              "Run 30 tests to calculate new specification limits.\n"
-                              "Progress will be shown on the test page.")
-        
-        # Update status bar
-        self.statusBar().showMessage("Spec Calculator Mode: 0/30 tests completed")
-    
-    def increment_spec_calculator_count(self):
-        """Increment the spec calculator counter"""
-        if self.spec_calculator_enabled:
-            self.spec_calculator_count += 1
-            
-            # Update counter display
-            if hasattr(self.test_area, 'update_spec_counter'):
-                self.test_area.update_spec_counter(self.spec_calculator_count)
-            
-            # Update status bar
-            self.statusBar().showMessage(f"Spec Calculator Mode: {self.spec_calculator_count}/30 tests completed")
-            
-            # Check if we've reached 30 tests
-            if self.spec_calculator_count >= 30:
-                self.on_spec_calculator_complete()
-    
-    def on_spec_calculator_complete(self):
-        """Handle completion of 30 tests for spec calculation"""
-        try:
-            # Get current SKU
-            current_sku = self.top_controls.get_current_sku()
-            if not current_sku or current_sku == "-- Select SKU --":
-                QMessageBox.warning(self, "No SKU Selected", 
-                                  "Please select a SKU before calculating limits.")
-                return
-            
-            # Show the spec approval dialog
-            if hasattr(self, 'current_mode') and self.current_mode == "SMT":
-                # Get the test instance if available
-                handler = getattr(self, f'{self.current_mode.lower()}_handler', None)
-                if handler and hasattr(handler, 'last_test_instance'):
-                    test_instance = handler.last_test_instance
-                    if test_instance and test_instance.spc:
-                        test_instance.spc.show_spec_approval_dialog(current_sku, self)
-                        # Reset counter
-                        self.spec_calculator_enabled = False
-                        self.spec_calculator_count = 0
-                        if hasattr(self.test_area, 'hide_spec_counter'):
-                            self.test_area.hide_spec_counter()
-                        return
-            
-            # Fallback - manual calculation
-            self._manual_spec_calculation(current_sku)
-            
-        except Exception as e:
-            self.logger.error(f"Error completing spec calculation: {e}")
-            QMessageBox.critical(self, "Error", f"Failed to complete spec calculation: {e}")
-    
-    def _manual_spec_calculation(self, sku: str):
-        """Manual spec calculation fallback"""
-        QMessageBox.information(self, "Spec Calculation Complete", 
-                              f"30 tests completed for {sku}.\n\n"
-                              f"Spec calculation would normally happen here.\n"
-                              f"This is a placeholder for the actual implementation.")
-        
-        # Reset
-        self.spec_calculator_enabled = False
-        self.spec_calculator_count = 0
-        if hasattr(self.test_area, 'hide_spec_counter'):
-            self.test_area.hide_spec_counter()
-    
     def refresh_data(self):
         """Refresh SKU data and update UI"""
         try:
@@ -965,75 +876,6 @@ class MainWindow(QMainWindow):
             from PySide6.QtWidgets import QMessageBox
             QMessageBox.critical(self, "Error", f"Could not open programming configuration: {e}")
     
-    def show_spc_control(self):
-        """Show SPC control widget as a dialog"""
-        try:
-            # Create dialog if not exists
-            if not self.spc_dialog:
-                from PySide6.QtWidgets import QDialog, QVBoxLayout
-                self.spc_dialog = QDialog(self)
-                self.spc_dialog.setWindowTitle("SPC Control - Statistical Process Control")
-                self.spc_dialog.resize(1200, 900)
-                
-                # Create layout
-                layout = QVBoxLayout(self.spc_dialog)
-                layout.setContentsMargins(0, 0, 0, 0)
-                
-                # Create SPC widget if not exists
-                if not self.spc_widget:
-                    # Get SPC integration from SMT handler if available
-                    spc_integration = None
-                    if hasattr(self, 'smt_handler') and hasattr(self.smt_handler, 'spc_integration'):
-                        spc_integration = self.smt_handler.spc_integration
-                    
-                    self.spc_widget = SPCWidget(spc_integration=spc_integration, parent=self.spc_dialog)
-                    
-                    # Connect signals
-                    self.spc_widget.mode_changed.connect(self.on_spc_mode_changed)
-                    self.spc_widget.spec_approval_requested.connect(self.on_spc_spec_approval_requested)
-                    
-                    # Update SKU list
-                    self.update_spc_sku_list()
-                
-                layout.addWidget(self.spc_widget)
-            
-            # Show the dialog
-            self.spc_dialog.show()
-            self.spc_dialog.raise_()
-            self.spc_dialog.activateWindow()
-            
-        except Exception as e:
-            self.logger.error(f"Error showing SPC control: {e}", exc_info=True)
-            QMessageBox.critical(self, "Error", f"Could not show SPC control: {e}")
-    
-    def on_spc_mode_changed(self, sku: str, config: dict):
-        """Handle SPC mode change for a SKU"""
-        self.logger.info(f"SPC mode changed for {sku}: {config}")
-        
-        # Update SPC integration if in SMT mode
-        if self.current_mode == "SMT" and hasattr(self, 'smt_handler'):
-            if hasattr(self.smt_handler, 'spc_integration') and self.smt_handler.spc_integration:
-                integration = self.smt_handler.spc_integration
-                integration.spc_enabled = config.get('enabled', True)
-                integration.sampling_mode = config.get('sampling_mode', True)
-                integration.production_mode = config.get('production_mode', False)
-    
-    def on_spc_spec_approval_requested(self, sku: str):
-        """Handle SPC spec approval request"""
-        self.logger.info(f"SPC spec approval requested for {sku}")
-        
-        # Use SPC integration to show approval dialog
-        if hasattr(self, 'smt_handler') and hasattr(self.smt_handler, 'spc_integration'):
-            if self.smt_handler.spc_integration:
-                self.smt_handler.spc_integration.show_spec_approval_dialog(sku, self.spc_dialog or self)
-    
-    def update_spc_sku_list(self):
-        """Update SPC widget with available SKUs"""
-        if self.spc_widget and self.sku_manager.is_loaded():
-            all_skus = self.sku_manager.get_all_skus()
-            # Filter for SKUs that support SMT mode
-            smt_skus = [sku for sku in all_skus if self.sku_manager.validate_sku_mode_combination(sku, "SMT")]
-            self.spc_widget.update_sku_list(smt_skus)
 
     def showEvent(self, event):
         """Handle window show event"""
